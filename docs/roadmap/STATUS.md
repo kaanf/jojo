@@ -16,7 +16,10 @@ Read this first in a new session. Updated 2026-11-16. Update it whenever a step 
 | Design system as text | Done (`docs/design/`). No screen is implemented yet |
 | Design wave 1, M2 … M6 | Not started |
 
-## Next step: the human chooses
+## Next step: design wave 1
+
+Chosen by the human on 2026-11-16. Build from `docs/design/` (system fonts): app shell, sidebar, status model, then the screens whose data exists today (Recovery Center and launch review, Agent Runs, Source Control local diff and scope, Verification, Approval Inbox for spec and plan, Specifications, Settings, Activity). Write each screen down in `docs/design/` from its canvas board before building it. The other two candidates stay open:
+
 
 1. **D3, the rest of M1.** Find the Claude Code and Codex executables automatically, record version and digest per run, warn instead of refusing when the binary changes. Needs a decision first: where discovery runs and how the version is learned without running the CLI (E5, "Not done").
 2. **Design wave 1.** App shell, sidebar, status model and the screens whose data exists today, built from `docs/design/`.
