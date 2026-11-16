@@ -101,11 +101,11 @@ The board has no diff, no changed-file list, no agent output and no accept or re
 
 ## 4. What the app shows today
 
-Built in `macos/JojoApp/Sources/JojoApp/Verification.swift` on the shared surfaces of COMPONENTS.md, sections 14 to 16. It replaces the old `CandidateView` and keeps everything that screen did: loading an attempt by its identity, Run Validation, Accept Candidate, Reject Candidate, the write scope, the changed files, the diff, the agent output and the validation report. The screen takes a plain value (`VerificationState`) and shows only what the helper reports:
+Built in `macos/JojoApp/Sources/JojoApp/Verification.swift` on the shared surfaces of COMPONENTS.md, sections 14 to 16. It replaces the old `CandidateView` and keeps what that screen did, except that the changed files and the diff moved to Source Control ([SOURCE_CONTROL.md](SOURCE_CONTROL.md)) when that screen was built: loading an attempt by its identity, Run Validation, Accept Candidate, Reject Candidate, the write scope, the agent output and the validation report. The screen takes a plain value (`VerificationState`) and shows only what the helper reports:
 
 - the result of one attempt (`Candidate` query: sealed, outcome, reason, the provider's own closing words, candidate digest, number of log records, the host validation with its state, detail, receipt, validated candidate and reasons, and the decision);
-- the changed paths of the sealed candidate with the scope the core gives each, and the core's verdict on the write scope (`CandidateChanges`);
-- the diff from the base to the sealed candidate (`CandidateDiff`), the first 64 log records (`Log`) and the text of the validation report (`ValidationReport`);
+- the number of changed paths of the sealed candidate counted by the scope the core gives each, and the core's verdict on the write scope (`CandidateChanges`);
+- the first 64 log records (`Log`) and the text of the validation report (`ValidationReport`);
 - the helper connection, the admission value and whether a command is pending.
 
 The workspace holds one loaded result at a time. Agent Runs shows the same one: its "Load Result" loads it and its "View Evidence" opens this screen. A part of the canvas without a source says so on screen; nothing is filled with an example.
@@ -119,10 +119,9 @@ The workspace holds one loaded result at a time. Agent Runs shows the same one: 
 | (not on the canvas) Load bar | The first line of the main column: an input field "Attempt identity (32 hex)" (at most 340 wide) and a compact secondary "Load". The field follows the loaded attempt, so an attempt loaded in Agent Runs is named here. Return in the field loads |
 | Verdict header | Title "Host validation passed" when the core's validation state is `PASS`, otherwise "Not verified". Pill: Passed, Failed, Unknown, Not run; Not run form "No sealed result" when nothing is sealed. Sentence: "Unknown and not-run checks never count as passed. Results apply to candidate 9f2c41ab0d17 only." (the first twelve characters of the digest), or "… This attempt has no sealed candidate." No count pills: the core records one validation, not suites |
 | Summary strip | Attempt (full identity) · Candidate (full digest, "None") · Result (evidence pill as in Agent Runs: Passed form "Succeeded", Failed form "Failed", Incomplete form "Interrupted", Not run form "Not sealed" or the core's text) · Reason (the core's text, left out when empty) · Provider said (its closing words, "Nothing") · Decision (4.3). A footnote: "What the provider said is its own statement, not a validation result. Not reported: the repository, branch and commit under test, whether the snapshot is clean, and how the validator is isolated." |
-| Suites | "Host validation", a card with two result rows (4.2) and, when the core gave reasons, one line per reason under them. Trailing: a compact primary "Run Validation", which sends `Validate` for the sealed candidate; beside it the reason when it is unavailable (4.4). A footnote: "The core records one host validation per candidate. Suites, test counts, commands, durations and a log per suite are not reported." No "Review Missing Checks", no row buttons |
-| (not on the canvas) Changed files | "Changed files · n": a card with one evidence row per path: the path in the identifier style, the kind of change as the note, and the scope pill of 4.2. Without rows: "Reading the changed paths…" until the core's scope verdict arrives, then "No changed paths." or, without a sealed candidate, "No sealed candidate." |
+| Suites | "Host validation", a card with two result rows (4.2) and, when the core gave reasons, one line per reason under them. Trailing: a compact secondary "View Changes", which opens Source Control, and a compact primary "Run Validation", which sends `Validate` for the sealed candidate; before them the reason when it is unavailable (4.4). A footnote: "The core records one host validation per candidate. Suites, test counts, commands, durations and a log per suite are not reported." No "Review Missing Checks", no row buttons |
 | Evidence manifest | "Evidence": a card with four evidence rows, each a record the app holds: Sealed candidate (digest shortened in the middle; Sealed, or Not run form "Not sealed") · Attempt log ("n records"; Passed form "Recorded", or Not run form "None") · Validation receipt ("receipt n"; "Recorded" or "None") · Validation report ("n lines"; "Recorded", or Not run form "Not loaded"). A footnote: "Document revisions, hashes checked on read, tool and runner versions and deployment receipts are not reported." No "Inspect Evidence" |
-| (not on the canvas) Diff | "Diff · base → sealed candidate": the diff of COMPONENTS.md, section 10. Lines are numbered from the hunk headers (removed lines by the old file, the others by the new one). File and hunk headers are shown without number or sign in `text3`. The first 300 lines are drawn; a compact ghost "Show All n Lines" in the heading draws the rest. Empty: "No diff loaded." |
+| Changed files, diff | Not on this screen, as on the canvas: Source Control shows them for the same loaded attempt |
 | (not on the canvas) Agent output | "Agent output": the console of Agent Runs with the loaded log records, the count in the heading ("3 of 3 records"), and the same last line in `warn` when more than 64 exist |
 | (not on the canvas) Validation report | "Validation report": the report text on the console, plain. The first 300 lines, with the same "Show All n Lines". Without text: "No validation recorded." or, with a receipt, "No report text loaded." |
 | Seal evidence | "Decision": a card with the sentence "Accepting records your decision only. Nothing is merged, pushed or published.", the facts Validation, Write scope and Decision, then "Accept Candidate" (primary) and "Reject Candidate…" (destructive), each with its reason when unavailable (4.4). No list of requirements: the rule is the core's and is not restated |
@@ -173,7 +172,7 @@ The first reason that applies is shown beside or under the button, which is disa
 - Incompatible protocol: danger banner "Jojo core speaks another protocol version" · "Read-only. No actions can be requested."
 - Recovery required (admission reported and not `Open`): danger banner "Execution admission is closed" · "No new attempt starts until you review the inspection." with "Open Recovery Center". Validation and the decision stay available; the core decides.
 - Empty (nothing loaded): the Empty form with "No attempt loaded" · "Load a finished attempt by its identity, or choose one in Agent Runs and use Load Result." and a secondary "Open Agent Runs". The load bar stays above it.
-- Loading: the workspace does not say that a read is pending. The changed files and the agent output say "Reading…" while their part has not arrived; the last loaded attempt stays until the new one answers.
+- Loading: the workspace does not say that a read is pending. The agent output says "Reading…" while its part has not arrived; the last loaded attempt stays until the new one answers.
 - Requested: the well of 4.1 and the toolbar's "Requested" pill; no action can be sent again while a command is pending.
 - Unknown outcome: a validation the core could not classify has the Unknown pill, the title "Not verified" and the sentence of 4.2; it cannot be accepted.
 - Error and Stale: a failed read or a refused command (`StaleCandidate` among them) is reported in the status line under the screen ("Candidate unavailable: …", "Accept refused (…); the candidate is unchanged"). A failed `Candidate` read unloads the attempt.
@@ -185,7 +184,7 @@ The first reason that applies is shown beside or under the button, which is disa
 | Point | Value in the app |
 |---|---|
 | Trailing panel | Background `sidebar`, edge `sidebarEdge`, 320 wide |
-| Result row, evidence row, diff, input field, requested notice | COMPONENTS.md, section 16 |
+| Result row, evidence row, input field, requested notice | COMPONENTS.md, section 16 |
 | Verdict title | 20 bold, tracking -0.02 em, `textStrong` (canvas: white) |
-| Lines drawn before "Show All" | 300, for the diff and for the validation report |
+| Lines drawn before "Show All" | 300, for the validation report |
 | Glyphs (SF Symbols) | Empty state `checkmark.shield` |

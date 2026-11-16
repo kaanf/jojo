@@ -18,7 +18,7 @@ struct VerificationState: Equatable {
     var report: String
     var commandPending: Bool
 
-    /// Lines of the diff and of the report drawn before "Show All".
+    /// Lines of a diff and of the report drawn before "Show All".
     static let lineLimit = 300
 
     var link: RecoveryCenterState.Link {
@@ -209,7 +209,7 @@ struct VerificationView: View {
     var actions = VerificationActions()
     @State private var identity: String
     @State private var rejecting = false
-    /// The long texts drawn in full: "diff", "report".
+    /// The long texts drawn in full: "report".
     @State private var expanded: Set<String>
 
     init(state: VerificationState, actions: VerificationActions = VerificationActions(), expanded: Set<String> = []) {
@@ -232,9 +232,7 @@ struct VerificationView: View {
                             header(c)
                             summary(c)
                             validation(c)
-                            files
                             evidence
-                            diff
                             output(c)
                             report
                             if !wide { decision(c) }
@@ -347,6 +345,8 @@ struct VerificationView: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeading("Host validation") {
                 if let why = state.validateBlocked { DisabledReason(why) }
+                Button("View Changes") { actions.open(.sourceControl) }.buttonStyle(.jojo(.secondary, compact: true))
+                    .help("The changed files and the diff are in Source Control.")
                 Button("Run Validation") { actions.validate() }.buttonStyle(.jojo(.primary, compact: true))
                     .disabled(state.validateBlocked != nil)
                     .help(state.validateBlocked ?? "Asks the core to validate the sealed candidate on the host.")
@@ -379,22 +379,6 @@ struct VerificationView: View {
         }
     }
 
-    private var files: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Changed files · \(state.changedFiles.count)")
-            Card(.panelList) {
-                if state.changedFiles.isEmpty {
-                    quiet(state.noFiles)
-                } else {
-                    Rows(state.changedFiles) { file in
-                        let scope = VerificationState.scope(file)
-                        EvidenceRow(file.path, note: file.kind, state: scope.state, label: scope.label, mono: true)
-                    }
-                }
-            }
-        }
-    }
-
     private var evidence: some View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeading("Evidence")
@@ -404,18 +388,6 @@ struct VerificationView: View {
                 }
             }
             Footnote("Document revisions, hashes checked on read, tool and runner versions and deployment receipts are not reported.")
-        }
-    }
-
-    private var diff: some View {
-        let lines = DiffLine.parse(state.diff)
-        return VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Diff · base → sealed candidate") { showAll("diff", lines.count) }
-            if lines.isEmpty {
-                Card(.panelList) { quiet("No diff loaded.") }
-            } else {
-                DiffView(shown("diff", lines))
-            }
         }
     }
 

@@ -119,7 +119,7 @@ The screen has no load of its own. It shows the one attempt result the workspace
 - the attempt, the candidate digest, the host validation state and the decision (`Candidate`);
 - the helper connection and the admission value.
 
-Verification & Evidence keeps its changed files, its diff and Accept and Reject; nothing was moved. A part of the canvas without a source says so on screen; nothing is filled with an example.
+The changed files and the diff were on Verification & Evidence before this screen existed and were removed there once it did; Accept and Reject stay there until the Approval Inbox is built. A part of the canvas without a source says so on screen; nothing is filled with an example.
 
 ### 5.1 Mapping
 
@@ -131,11 +131,11 @@ Verification & Evidence keeps its changed files, its diff and Accept and Reject;
 | Repository control | Not built: repositories are not reported, and one attempt is loaded at a time |
 | Facts | Branch: "Not reported" · Base: the first twelve characters of the base, "Not loaded" until the changed paths arrive · Candidate: the first twelve characters of the digest, "None" without a sealed candidate · From: "Attempt 1a2b3c4d1a2b" (the first twelve characters), a link that opens Agent Runs. The full values are the tooltips |
 | "Reveal worktree in Finder" | Not built: the worktree path is not reported |
-| Changed files | "Changed files · n" and one changed-file row per path (COMPONENTS.md, section 17). Badge from the core's word (5.2). Counts: the added and removed lines of that path's section of the loaded diff; left out when the diff has no section for the path or the section has no counted line. The scope pill is drawn for every path that is not in scope, with the labels of Verification & Evidence ([VERIFICATION.md](VERIFICATION.md), section 4.2); a path out of scope or in the protected baseline gets the tinted row. Without rows: the sentence Verification & Evidence shows ("Reading the changed paths…", "No changed paths.", "No sealed candidate.") |
+| Changed files | "Changed files · n" and one changed-file row per path (COMPONENTS.md, section 17). Badge from the core's word (5.2). Counts: the added and removed lines of that path's section of the loaded diff; left out when the diff has no section for the path or the section has no counted line. The scope pill is drawn for every path that is not in scope, with the labels of Verification & Evidence ([VERIFICATION.md](VERIFICATION.md), section 4.2); a path out of scope or in the protected baseline gets the tinted row. Without rows: one sentence ("Reading the changed paths…", "No changed paths.", "No sealed candidate.") |
 | (not on the canvas) Selection | Choosing a row shows that path's section of the diff and marks the row; choosing it again, or "Show All Files" above the diff, shows the whole diff. A new attempt clears the choice |
 | Status strip | Decision (the text of Verification & Evidence: "None recorded", or the core's word) · Write scope (5.3) · Host validation (the evidence pill of the core's state) · at the trailing edge Location: a glyph and "Local candidate". No "Local review": the core records one decision per candidate, not a review per file. Push and Pull request are in the trailing panel |
 | Scope banner | Write scope `FAIL`: danger banner "1 change is outside the approved scope" ("n changes are …") · the first three such paths, "and n more", then "The core's verdict on the write scope is Failed. There is no command to revert a path." with a compact secondary "View Scope Violations" that chooses the first such path. Without a marked path: "The write scope check failed" · "No listed path is marked. The core's verdict on the write scope is Failed." Write scope `UNKNOWN` on a sealed candidate: warning banner "The write scope is unknown" · "The core gave no verdict (reason). Unknown is never shown as in scope." No "Revert file", no pending form: the core has no command to revert a path and reports no scope request |
-| Unified / Side by side | Not built. The diff is unified, with the one number column of Verification & Evidence |
+| Unified / Side by side | Not built. The diff is unified, with the one number column of COMPONENTS.md, section 16 |
 | Diff heading | The chosen path as an identifier at 12 in `text`, or "All changed files" at 12 semibold `text2`; trailing, the two ends as an identifier in `text3` ("9c1e4b2a71f0 → c4c4c4c4c4c4", "base → sealed candidate" while either is missing), then "Show All Files" and "Show All n Lines" (compact ghost) |
 | Diff | The diff of COMPONENTS.md, sections 10 and 16. The first 300 lines are drawn; "Show All n Lines" draws the rest. Empty: "No diff loaded." A chosen path without a section: "The loaded diff has no section for this path." |
 | Scope validation | A card with one evidence row per fact (5.3) and a footnote: "The patterns of the approved scope are not reported; the core gives one verdict for the candidate and a scope for each path. There is no command to revert a path or to widen the scope." |
@@ -192,4 +192,4 @@ The three count rows are drawn only when there are changed paths. The scope of a
 | Fact that is not reported or not loaded | The words in `text3` |
 | "Location" glyph | `internaldrive` |
 | Empty state glyph | `arrow.triangle.branch` |
-| Lines drawn before "Show All" | 300, as on Verification & Evidence |
+| Lines drawn before "Show All" | 300, as for the validation report on Verification & Evidence |

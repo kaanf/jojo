@@ -320,7 +320,7 @@
           "Recovery",
           "PrepareClose"
         ],
-        "state": "state phase=idle connection=ready(epoch: 5) duplicates=0 primary-visible=true aux=false review-status=Start accepted for attempt 448e87fd7f32444194b1c46061b5b128 (launched); follow the run in Runs recovery=1 admission=Open pending=false"
+        "state": "state phase=idle connection=ready(epoch: 5) duplicates=0 primary-visible=true aux=false review-status=Start accepted for attempt 34b3adc9a4374752a54de0511cc24573 (launched); follow the run in Runs recovery=1 admission=Open pending=false"
       },
       "fake_lost_start_response_is_reconciled_not_resent": {
         "passed": true,
@@ -520,7 +520,7 @@
     "macos/JojoApp/Sources/JojoApp/Surfaces.swift": "648370be3e314761dac4e2b3cc07a2250664ea00d6579b69284dea6867730638",
     "macos/JojoApp/Sources/JojoApp/Theme.swift": "5d31cd071025b7a98b6beddb519681fbf2e068b534c5508bbdaafdab9385be49",
     "macos/JojoApp/Sources/JojoApp/UITestDriver.swift": "36f31e296954011e146ca7aa2ff8d9cbe98bf7489fe707760edbbef1cc6d4ab8",
-    "macos/JojoApp/Sources/JojoApp/Verification.swift": "caf2ae0495b8148ea81519850acafcff04e98c846ae24fed0aa63f80d35db844",
+    "macos/JojoApp/Sources/JojoApp/Verification.swift": "c02b36fe28013278fc8aed4a48f8f3d30f7b56f67c87e314c80972c26c5a0d77",
     "macos/JojoApp/Sources/JojoApp/Views.swift": "9919dc2f1f3955facc82e416416d5bf064366156190853026a4229e428d9a85b",
     "macos/JojoApp/Sources/JojoAppBoundary/JojoSceneBoundary.swift": "3cb39d8acd4459b3aed69b676f2c1ef7a594206d11ae93150256678bb6cb57c3",
     "macos/JojoApp/Sources/JojoCore/Envelope.swift": "1a36fe64de7b48d58e0d28ddb09073ff84c0b43a34d45ebf032759b3e305b62b",
