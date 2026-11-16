@@ -1033,3 +1033,91 @@ struct ValueLine: View {
         .overlay(alignment: .bottom) { if !last { Rectangle().fill(theme.hairline).frame(height: 1) } }
     }
 }
+
+// MARK: Document surfaces (COMPONENTS.md, section 19)
+
+/// One document of the Specifications list in two lines: the document with an optional
+/// document tag, and a note. An earlier revision is indented under its document; a row
+/// that cannot be opened is `quiet`. The row is a plain view; the screen wraps it in a button.
+struct DocumentRow: View {
+    @Environment(\.theme) private var theme
+    let name: String
+    /// The document is an identity and is drawn monospaced.
+    var mono = false
+    var detail: String?
+    var status: DocumentStatus?
+    var indented = false
+    var quiet = false
+    var selected = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 7)
+        VStack(alignment: .leading, spacing: quiet ? 2 : 3) {
+            HStack(spacing: 8) {
+                Text(name).font(.system(size: quiet ? 12 : 12.5, weight: quiet ? .regular : .semibold, design: mono ? .monospaced : .default))
+                    .foregroundStyle(quiet ? theme.text2 : theme.text).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                if let status { DocumentTag(status) }
+            }
+            if let detail { Text(detail).textStyle(.meta).foregroundStyle(theme.text3).lineLimit(1) }
+        }
+        .padding(.vertical, quiet ? 6 : 7)
+        .padding(.leading, indented ? 24 : 10)
+        .padding(.trailing, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(selected ? theme.accent.opacity(0.16) : .clear, in: shape)
+        .overlay(shape.strokeBorder(selected ? theme.info.opacity(0.4) : .clear, lineWidth: 1))
+        .contentShape(shape)
+    }
+}
+
+/// One section of a document: a heading at 12 semibold `text3` over its content.
+struct DocumentSection<Content: View>: View {
+    @Environment(\.theme) private var theme
+    let title: String
+    @ViewBuilder let content: () -> Content
+
+    init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(theme.text3)
+                .accessibilityAddTraits(.isHeader)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One line of a traceability card: an identifier, what it is, and an optional trailing
+/// reference to what implements it; a hairline below unless last.
+struct TraceLine: View {
+    @Environment(\.theme) private var theme
+    let id: String
+    let text: String
+    var target: String?
+    var last = false
+
+    init(_ id: String, _ text: String, target: String? = nil, last: Bool = false) {
+        self.id = id
+        self.text = text
+        self.target = target
+        self.last = last
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(id).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(theme.info)
+            Text(text).textStyle(.body).foregroundStyle(theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let target { Text(target).textStyle(.body).foregroundStyle(theme.info) }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(theme.hairline).frame(height: 1) } }
+    }
+}

@@ -137,6 +137,25 @@ struct ApprovalInboxState: Equatable {
     }
 }
 
+/// Where the loaded review stands: a decision on its way, stale, or whether the bundle
+/// names an earlier decision. What was decided is not reported. Also on Specifications.
+struct ReviewMark: View {
+    let state: ApprovalInboxState
+    let bundle: ReviewBundle
+
+    var body: some View {
+        if state.requested {
+            OperationalPill(.waiting, label: "Requested", standalone: true)
+        } else if state.stale {
+            DocumentTag(.stale)
+        } else if bundle.priorDecision == nil {
+            OperationalPill(.awaitingApproval, label: "No decision yet", standalone: true)
+        } else {
+            OperationalPill(.idle, label: "Decision recorded", standalone: true)
+        }
+    }
+}
+
 struct ApprovalInboxActions {
     var load: (String) -> Void = { _ in }
     var decide: (DecisionAction) -> Void = { _ in }
@@ -305,15 +324,7 @@ struct ApprovalInboxView: View {
             WrappingRow(spacing: 8, lineSpacing: 6) {
                 RequestTile(symbol: kind.symbol, awaiting: bundle.priorDecision == nil, size: 22)
                 Text("\(kind.name) · \(kind.approval)").textStyle(.secondary).foregroundStyle(theme.text2)
-                if state.requested {
-                    OperationalPill(.waiting, label: "Requested", standalone: true)
-                } else if state.stale {
-                    DocumentTag(.stale)
-                } else if bundle.priorDecision == nil {
-                    OperationalPill(.awaitingApproval, label: "No decision yet", standalone: true)
-                } else {
-                    OperationalPill(.idle, label: "Decision recorded", standalone: true)
-                }
+                ReviewMark(state: state, bundle: bundle)
             }
             Text(ApprovalInboxState.title(bundle)).font(.system(size: 20, weight: .bold)).tracking(-0.4)
                 .foregroundStyle(theme.textStrong).help("Document \(bundle.subject)")

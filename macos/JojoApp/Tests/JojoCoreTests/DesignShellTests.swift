@@ -161,7 +161,7 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.opaqueSidebar, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 2700)
+            .frame(width: 1120, height: 2940)
             guard let directory else { continue }
             try write(shell, to: directory, "shell-\(name).png")
         }
@@ -966,6 +966,74 @@ final class DesignShellTests: XCTestCase {
             }
         }
     }
+    // MARK: Specifications (docs/design/screens/SPECIFICATIONS.md)
+
+    func test_dw1_specifications_lists_the_inbox_documents_and_names_the_loaded_one_by_its_bundle() {
+        let ids = Self.ids
+        let state = SpecificationsState(inbox: inbox())
+        XCTAssertEqual(state.documents, inbox().documents, "one list of documents, the Approval Inbox's")
+        XCTAssertEqual(state.documents.map(state.detail),
+                       ["Specification · record ab12ab12ab12", "Architecture decision · rev 5", "Decision or plan · record ef56ef56ef56"],
+                       "only the loaded document has a revision and the kind of its bundle")
+        XCTAssertEqual(SpecificationsState(inbox: inbox(upstream: [12, 14])).detail(state.documents[1]), "Execution plan · rev 5")
+        XCTAssertEqual(state.record, String(repeating: "cd34", count: 16))
+
+        var unlisted = inbox()
+        unlisted.rows = [SnapshotRow(key: "artifact:\(ids[4])", value: "a", detailComplete: true)]
+        XCTAssertNil(SpecificationsState(inbox: unlisted).record, "a loaded document the snapshot does not list has no record")
+        var empty = inbox()
+        empty.review = nil
+        XCTAssertNil(SpecificationsState(inbox: empty).record)
+        XCTAssertEqual(SpecificationsState(inbox: empty).documents.map(SpecificationsState(inbox: empty).detail)[1],
+                       "Decision or plan · record cd34cd34cd34")
+    }
+
+    func test_dw1_specifications_traces_only_the_upstream_approvals_of_the_bundle() {
+        let ids = Self.ids
+        XCTAssertTrue(SpecificationsState.traces(bundle(ids[1], upstream: [])).isEmpty)
+        XCTAssertEqual(SpecificationsState.traces(bundle(ids[1], upstream: [12, 14])).map(\.name), ["event 12", "event 14"])
+        XCTAssertEqual(SpecificationsState.contentDigest(bundle(ids[1])), "sha256 c0dec0dec0de")
+        XCTAssertTrue(MainView.built.contains(.specifications))
+    }
+
+    /// Review aid, as above: Specifications with test rows in two and three columns and in
+    /// one, and its plan, stale, disconnected, unloaded and empty forms.
+    func test_dw1_specifications_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        var lost = inbox(prior: 41)
+        (lost.connection, lost.admission) = (.channelLost("pipe closed"), "Closed")
+        var closed = inbox(upstream: [])
+        closed.admission = "Closed"
+        var empty = inbox()
+        empty.review = nil
+        var bare = empty
+        bare.rows = []
+        let opening = CGSize(width: 1120, height: 720), tall = CGSize(width: 1120, height: 1300), wide = CGSize(width: 1440, height: 1000)
+        let cases: [(String, ApprovalInboxState, CGSize)] = [
+            ("specifications", inbox(), opening), ("specifications-tall", inbox(), tall),
+            ("specifications-wide", inbox(upstream: [12, 14], prior: 41), wide),
+            ("specifications-narrow", inbox(), CGSize(width: 900, height: 1700)),
+            ("specifications-stale", inbox(stale: true), wide),
+            ("specifications-closed", closed, wide), ("specifications-disconnected", lost, wide),
+            ("specifications-unloaded", empty, wide), ("specifications-empty", bare, opening),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, size) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.specifications), showInspector: {}) {
+                        SpecificationsView(state: SpecificationsState(inbox: state))
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
+        }
+    }
 }
 
 /// Every status component and button kind on a card, for the snapshot.
@@ -1178,6 +1246,37 @@ private struct Gallery: View {
                             HStack(spacing: 8) {
                                 EvidencePill(.passed, label: "Current")
                                 Text("checked by core 09:42").foregroundStyle(theme.text3)
+                            }
+                        }
+                    }
+                }
+            }
+            titled("Document rows, document sections and trace lines") {
+                HStack(alignment: .top, spacing: 16) {
+                    Card(.panelList) {
+                        VStack(spacing: 2) {
+                            DocumentRow(name: "ADR-031", detail: "Invite token storage · rev 5", status: .proposed, selected: true)
+                            DocumentRow(name: "ADR-031", detail: "Invite token storage · rev 4", status: .approved, indented: true)
+                            DocumentRow(name: "ADR-031", detail: "Invite token storage · rev 3", status: .superseded,
+                                        indented: true, quiet: true)
+                            DocumentRow(name: "ADR-030", detail: "Deep link provider · rev 2", status: .invalidated, quiet: true)
+                            DocumentRow(name: "5e6f7a8b5e6f", mono: true, detail: "Decision or plan · record cd34cd34cd34")
+                        }
+                        .padding(8)
+                    }
+                    .frame(width: 270)
+                    VStack(alignment: .leading, spacing: 14) {
+                        DocumentSection("Decision") {
+                            Text("Store tokens in an invite_tokens table with expires_at = issued + 7 days.")
+                                .textStyle(.body).foregroundStyle(theme.text)
+                        }
+                        DocumentSection("Traceability") {
+                            Card(.panelList) {
+                                VStack(spacing: 0) {
+                                    TraceLine("AC-7", "Expired link returns 410", target: "T6")
+                                    TraceLine("C-3", "Read-time expiry", target: "T4, T6")
+                                    TraceLine("event 12", "Bound upstream approval", last: true)
+                                }
                             }
                         }
                     }
