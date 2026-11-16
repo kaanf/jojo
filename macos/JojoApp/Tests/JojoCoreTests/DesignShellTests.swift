@@ -996,6 +996,17 @@ final class DesignShellTests: XCTestCase {
         XCTAssertTrue(MainView.built.contains(.specifications))
     }
 
+    func test_dw1_approval_history_links_open_the_event_journal_and_say_so() {
+        XCTAssertEqual(ApprovalInboxState.historyScreen, .activity)
+        XCTAssertTrue(MainView.built.contains(ApprovalInboxState.historyScreen), "the link opens a built screen")
+        for button in ["Approval History", "View all"] {
+            let note = ApprovalInboxState.historyNote(button)
+            XCTAssertTrue(note.hasPrefix("\"\(button)\" opens Activity & Audit, the core's event journal"),
+                          "the note names the button and the screen it opens")
+            XCTAssertTrue(note.contains("not one document's decisions"), "the journal is not filtered to a document")
+        }
+    }
+
     /// Review aid, as above: Specifications with test rows in two and three columns and in
     /// one, and its plan, stale, disconnected, unloaded and empty forms.
     func test_dw1_specifications_renders_in_both_appearances() throws {

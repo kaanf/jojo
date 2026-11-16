@@ -130,7 +130,7 @@ A part of the canvas without a source says so on screen; nothing is filled with 
 
 | Canvas | App today |
 |---|---|
-| Toolbar buttons, breadcrumb | Not built. The shell breadcrumb stays "Jojo › Approval Inbox". There is no filter, and Activity & Audit is not built |
+| Toolbar buttons, breadcrumb | The shell toolbar has no screen buttons and its breadcrumb stays "Jojo › Approval Inbox". "Approval History" is built in the content, in the heading of "Recently decided" (see that line). "Filter" is not built: there is no filter |
 | Sidebar counter | None. The board counts the pending requests, and the helper reports no such number: the snapshot's documents are not all pending, and the count of documents would read as work that waits. A counter comes back when the core reports pending approvals |
 | Heading and filter | "Documents · n". No segmented control: the kind of a listed document is not reported, and COMPONENTS.md has no segmented control yet |
 | (not on the canvas) Load by identity | Under the heading: an input field "Document identity (32 hex)" and a compact secondary "Load". The field follows the loaded document |
@@ -149,8 +149,8 @@ A part of the canvas without a source says so on screen; nothing is filled with 
 | Stale | The warning banner "This review is stale" · "A decision was sent or refused for this revision. Reload the document before deciding again; nothing is resent." with a compact secondary "Reload", which loads the same identity again. The core does not say which revision replaced the one shown, so there is no "Open rev 5" |
 | Approval policy | A panel card of value lines (COMPONENTS.md, section 18). These are fixed rules of the core, not settings: "Approval kinds" · "Spec, plan, push, PR"; "Approve all" · "None"; "Approvals expire" · "On content change"; "Push" and "Pull request" · "Not available yet". Footnote: "Push and pull request approvals belong to milestone M5. The core has no such command and reports no such request." |
 | (not on the canvas) Candidate decision | A panel card: "Accept and reject of a candidate are on Verification & Evidence.", the facts Attempt, Candidate, Validation and Decision of the loaded attempt result (or "No attempt result is loaded."), and a compact secondary "Open Verification & Evidence" |
-| Recently decided | Not built: the core reports the event of the latest decision on the loaded document, not a history. Named in the last footnote |
-| Last sentence | The canvas sentence, then: "Decisions already made are not listed: the core reports only the event of the latest decision on the loaded document." |
+| Recently decided | The heading "Recently decided" with a compact secondary button "Approval History" in its trailing place, the canvas's toolbar button. It opens Activity & Audit as it is (decided by the human on 2026-11-16): it sets no search and no type filter, reads nothing itself, and is always enabled, with or without a loaded document. The lines of the board are not built: the core reports the event of the latest decision on the loaded document, not a history. Two footnotes under the heading: "Decisions already made are not listed: the core reports only the event of the latest decision on the loaded document." and ""Approval History" opens Activity & Audit, the core's event journal: every loaded event, not one document's decisions. A decision is an event of type HumanDecision." The button keeps the canvas's name; the second footnote says that the journal is not a decision history (`ApprovalInboxState.historyNote`) |
+| Last sentence | The canvas sentence, after "Recently decided" |
 
 ### 5.2 Kind of a document
 
@@ -186,6 +186,7 @@ The three buttons are enabled or disabled together, as on the old screen: which 
 - Disconnected (`channelLost`, `ended`, `launchFailed`): danger banner "Jojo core isn't responding" · "Showing the last known state, read-only. No actions can be requested." There is no "Reconnect" yet.
 - Incompatible protocol: danger banner "Jojo core speaks another protocol version" · "Read-only. No actions can be requested."
 - Recovery required (admission reported and not `Open`): danger banner "Execution admission is closed" · "No new attempt starts until you review the inspection. Documents can still be decided." with "Open Recovery Center".
+- "Approval History" opens Activity & Audit through the closure that sets the shell's screen (`ApprovalInboxState.historyScreen`). Not filtered to the loaded document, and why: a decision is the event `HumanDecision`, which names no aggregate and carries the document's identity inside its payload in another notation than the one the app shows, so a search for the identity would find the document's other events and miss its decisions. Activity & Audit covers the loaded events only (the newest 64, more on "Load Older"); it says so itself.
 - Loading: the workspace does not say that a read is pending; the last loaded review stays until the new one answers.
 - Requested and Stale: 5.1. The workspace marks a review stale from the moment a decision is sent until the document is loaded again, whatever the core answered. The screen shows that as Requested while the `HumanDecision` command is outstanding and as Stale once it is answered.
 - Unknown outcome: a decision the core did not answer stays outstanding (Requested) and is reconciled by receipt, never resent; the status line under the screen says so.

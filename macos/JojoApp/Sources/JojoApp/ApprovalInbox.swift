@@ -118,6 +118,15 @@ struct ApprovalInboxState: Equatable {
         return nil
     }
 
+    /// Where the canvas's "Approval History" link goes, here and on Specifications: the event
+    /// journal as it is. Nothing filters it to a document, and the link reads nothing.
+    static let historyScreen = Screen.activity
+
+    /// What the link named `button` opens, said beside it: the journal is not a decision history.
+    static func historyNote(_ button: String) -> String {
+        "\"\(button)\" opens \(historyScreen.title), the core's event journal: every loaded event, not one document's decisions. A decision is an event of type HumanDecision."
+    }
+
     static func confirmation(_ action: DecisionAction, _ bundle: ReviewBundle)
         -> (title: String, message: String, confirm: String, keep: String)? {
         let object = "revision \(bundle.revision) of document \(short(bundle.subject))"
@@ -446,10 +455,18 @@ struct ApprovalInboxView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
-                Footnote("Approving sends a request. The core checks validity again before recording it.")
-                Footnote("Decisions already made are not listed: the core reports only the event of the latest decision on the loaded document.")
+                SectionHeading("Recently decided") {
+                    Button("Approval History") { actions.open(ApprovalInboxState.historyScreen) }
+                        .buttonStyle(.jojo(.secondary, compact: true))
+                }
+                Group {
+                    Footnote("Decisions already made are not listed: the core reports only the event of the latest decision on the loaded document.")
+                    Footnote(ApprovalInboxState.historyNote("Approval History"))
+                }
+                .padding(.horizontal, 2)
             }
-            .padding(.horizontal, 2)
+            Footnote("Approving sends a request. The core checks validity again before recording it.")
+                .padding(.horizontal, 2)
         }
     }
 

@@ -359,7 +359,7 @@ Added to `Surfaces.swift` for the Approval Inbox ([screens/APPROVAL_INBOX.md](sc
 | `FactLine` | One fact of a request: a label 130 wide in `text3` and a value in `text`, both at 12.5, baseline aligned, gap 10; padding 11 by 14; the value is any view and wraps; a `hairline` below unless it is the last line. Used inside a `.panelList` card |
 | `ValueLine` | A name at 13 in `text` and its trailing value at 13 in `text2`; padding 8 by 14; a `hairline` below unless last. The value keeps its width and the name wraps first |
 
-Not built from the board: the segmented filter, the links of "Supporting evidence", the lines of "Recently decided" (a document tag, the object and a date), and the "Filter" and "Approval History" toolbar buttons. Each needs data the helper does not report yet. The confirmation of Reject and Revoke is a system dialog until the dialog of section 7 is built.
+Not built from the board: the segmented filter, the links of "Supporting evidence", the lines of "Recently decided" (a document tag, the object and a date), and the "Filter" toolbar button. Each needs data the helper does not report yet. "Approval History" is not a toolbar button: it is a compact secondary button in the heading of "Recently decided" and opens Activity & Audit. The confirmation of Reject and Revoke is a system dialog until the dialog of section 7 is built.
 
 ## 19. Implementation notes: document surfaces (design wave 1, Specifications)
 
@@ -373,7 +373,7 @@ Added to `Surfaces.swift` for Specifications ([screens/SPECIFICATIONS.md](screen
 
 `ReviewMark` (in `ApprovalInbox.swift`) is the mark in the head of a loaded review, shared by the Approval Inbox and Specifications: the pill "Requested", the tag "Stale", or the pill "No decision yet" or "Decision recorded" ([screens/SPECIFICATIONS.md](screens/SPECIFICATIONS.md), section 5.2).
 
-Not built from the board: the segmented control ("Document", "Compare"), the paragraph of a section (13.5, line height 1.6, at most 700 wide), the option cards of "Alternatives", the two-column comparison of revisions, the finding lines of "Validation" with the pills "Conflict" and "Missing", the lines of "Approval history" with their tags, the outline of a document and the toolbar buttons. Each needs data the helper does not report yet: the text of a document, its earlier revisions, its validation and the history of its decisions.
+Not built from the board: the segmented control ("Document", "Compare"), the paragraph of a section (13.5, line height 1.6, at most 700 wide), the option cards of "Alternatives", the two-column comparison of revisions, the finding lines of "Validation" with the pills "Conflict" and "Missing", the lines of "Approval history" with their tags, the outline of a document and the toolbar buttons. Each needs data the helper does not report yet: the text of a document, its earlier revisions, its validation and the history of its decisions. The "View all" of "Approval history" is built as a compact secondary button in that heading; it opens Activity & Audit and stands for the toolbar's "View Approval History".
 
 ## 20. Implementation notes: audit surfaces (design wave 1, Activity & Audit)
 

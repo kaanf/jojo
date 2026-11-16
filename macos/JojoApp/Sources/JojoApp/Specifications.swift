@@ -222,7 +222,14 @@ struct SpecificationsView: View {
     private var trailing: some View {
         VStack(alignment: .leading, spacing: 18) {
             block("Approval scope") { scope }
-            block("Approval history") { history }
+            VStack(alignment: .leading, spacing: 8) {
+                SectionHeading("Approval history") {
+                    Button("View all") { actions.open(ApprovalInboxState.historyScreen) }
+                        .buttonStyle(.jojo(.secondary, compact: true))
+                }
+                history
+                Footnote(ApprovalInboxState.historyNote("View all")).padding(.horizontal, 2)
+            }
             block("Validation") {
                 NoticeWell("Not reported. The core sends no findings about a document, such as a conflict or a missing acceptance criterion.")
             }
