@@ -283,6 +283,26 @@ Built in `macos/JojoApp/Sources/JojoApp`: `Theme.swift` (tokens, typography, car
 | Sidebar counters | Recovery Center: subjects on hold, `warn`. Agent Runs: attempts, plain count |
 | Destinations without a screen | The Empty form of STATES.md with the destination's glyph and "… is not built yet" |
 
-The five screens that existed before the shell are shown unchanged under these destinations until each is redesigned: Runs under Agent Runs, Review under Approval Inbox, Recovery under Recovery Center, Start under Execution Plan, Candidate under Verification & Evidence.
+Four screens that existed before the shell are shown unchanged under these destinations until each is redesigned: Runs under Agent Runs, Review under Approval Inbox, Start under Execution Plan, Candidate under Verification & Evidence. Recovery Center is redesigned ([screens/RECOVERY_CENTER.md](screens/RECOVERY_CENTER.md)).
 
-Review aid: `JOJO_SNAPSHOT_DIR=<directory> swift test --filter DesignShellTests` writes `shell-dark.png` and `shell-light.png` (the shell with every status component and button kind), rendered off screen.
+Review aid: `JOJO_SNAPSHOT_DIR=<directory> swift test --filter DesignShellTests` writes `shell-dark.png` and `shell-light.png` (the shell with every status component, button kind and shared surface), and each redesigned screen in its states (`recovery-center-…`, `recovery-closed-…`, `launch-review-…`, `recovery-disconnected-…`, `recovery-empty-…`, `recovery-loading-…`), rendered off screen.
+
+## 14. Implementation notes: shared surfaces (design wave 1, screens)
+
+Built in `macos/JojoApp/Sources/JojoApp/Surfaces.swift` for the first redesigned screen and meant for the next ones. The values below are the ones sections 5 and 11 and the canvas boards do not have.
+
+| Component | Notes |
+|---|---|
+| `Banner` | Section 11. Warning glyph `exclamationmark.triangle.fill`, danger `exclamationmark.octagon.fill`, in the status color. The message may wrap. The button is optional: a state whose restoring action does not exist yet has none |
+| `Card` | Section 5.1 as `CardShape.page`. `.list` is the same card without padding. `.panel` (radius 10, padding 12 by 14) and `.panelList` are the smaller cards the Recovery Center boards use inside a column; both take the card ring and shadow of the theme |
+| `Rows`, `GroupHeader` | Section 5.3: hairline between rows, none after the last |
+| `ListRow` | Section 5.3. The leading slot is any view (`LeadingTile`, a `CheckBox`); the chevron is optional. `wraps` lets the second line wrap at 13 pt and aligns the row to the top. `inset` replaces the 16 pt side padding |
+| `LeadingTile` | 26 × 26, radius 7, 13 pt medium glyph in `onAccent`; `tileNeutral`, or the status color of a tone |
+| `SectionHeading` | 12 semibold `text2`, minimum height 22, optional trailing slot |
+| `Footnote` | 12 pt `info.circle` and one sentence in the `meta` style, `text3` |
+| `StateBlock` | The centered block of STATES.md (Empty, Error, Permission denied) |
+| `LoadingBlock` | The Loading form of STATES.md; bars in `fill`, at most 420 wide |
+| `CheckBox` | 14 × 14, radius 3.5. On: `accent` with a 9 pt bold white check and the primary button border. Off: 1 pt `text4` ring. Drawn, because a system checkbox cannot be rendered off screen |
+| `Scrolling` | A vertical scroll view; in the off-screen snapshot (`offscreen` in the environment) the content is laid out in place and clipped |
+
+A redesigned screen fills the content area and sets its own padding; the screens not yet redesigned keep the 20 pt side padding of the shell.

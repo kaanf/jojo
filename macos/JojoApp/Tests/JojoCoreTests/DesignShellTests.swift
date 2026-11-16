@@ -161,14 +161,180 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.opaqueSidebar, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 720)
+            .frame(width: 1120, height: 1240)
             guard let directory else { continue }
-            let renderer = ImageRenderer(content: shell)
-            renderer.scale = 2
-            let image = try XCTUnwrap(renderer.nsImage)
-            let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
-            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-            try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("shell-\(name).png"))
+            try write(shell, to: directory, "shell-\(name).png")
+        }
+    }
+
+    private func write(_ view: some View, to directory: String, _ file: String) throws {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        let image = try XCTUnwrap(renderer.nsImage)
+        let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(file))
+    }
+
+    // MARK: Recovery Center (docs/design/screens/RECOVERY_CENTER.md)
+
+    /// A recovery row as the helper sends it; `choices` nil is a helper older than 1.1.
+    private func held(_ attempt: String, absent: Bool = false, blockers: [String] = [], choices: [RecoveryChoice]? = [.Hold],
+                      complete: Bool = true) -> RecoveryRow {
+        var row: [String: JSON] = [:]
+        if let choices {
+            row = ["blockers": .list(blockers.map(JSON.text)), "blockers_complete": .bool(complete),
+                   "process_absent": .bool(absent), "choices": .list(choices.map { .text($0.rawValue) })]
+        }
+        return RecoveryRow(attempt: attempt, assessment: "Assessment { blockers: \(blockers) }",
+                           findings: "stage=Spawned worktree=/data/worktrees/\(attempt.prefix(8)) stdout=4096",
+                           detailComplete: complete, structured: RecoveryAssessment(row: .object(row)))
+    }
+
+    private var fixture: RecoveryCenterState {
+        RecoveryCenterState(connection: .ready(epoch: 7), admission: "Open", rows: [
+            held(String(repeating: "1a2b3c4d", count: 4), absent: true, choices: RecoveryChoice.allCases),
+            held(String(repeating: "5e6f7a8b", count: 4), blockers: ["process state unknown", "worktree changed after snapshot"]),
+            held(String(repeating: "9c0d1e2f", count: 4), choices: nil, complete: false),
+        ], digest: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", commandPending: false)
+    }
+
+    func test_dw1_recovery_actions_follow_what_the_core_offers() {
+        let items = fixture.items
+        let (dead, unknown, old) = (items[0], items[1], items[2])
+
+        XCTAssertEqual(dead.title, "Attempt 1a2b3c4d")
+        XCTAssertEqual(dead.pillLabel, "Confirmed dead")
+        XCTAssertEqual(dead.primary, .ValidateOutput)
+        XCTAssertTrue(RecoveryChoice.allCases.allSatisfy(dead.offers))
+        XCTAssertEqual(dead.sentence(.Hold), RecoveryChoice.Hold.sentence)
+        XCTAssertEqual(dead.blockerLine, "No blockers")
+
+        // Not proven gone is unknown, never dead; only Hold is offered and the reason is stated.
+        XCTAssertEqual(unknown.pillLabel, "Unknown")
+        XCTAssertNil(unknown.primary)
+        XCTAssertEqual(RecoveryChoice.allCases.filter(unknown.offers), [.Hold])
+        XCTAssertTrue(unknown.sentence(.ValidateOutput).hasPrefix("Unavailable while process state is unknown."))
+        XCTAssertTrue(unknown.footnote.hasPrefix("Only Hold is available."))
+        XCTAssertEqual(unknown.blockerLine, "2 blockers")
+        XCTAssertEqual(unknown.findingSentence, "process state unknown")
+
+        // Proven gone but not offered: the reason is the inspection, not the process.
+        let blocked = HeldItem(row: held("a", absent: true, blockers: ["snapshot mismatch"]))
+        XCTAssertEqual(blocked.pillLabel, "Confirmed dead")
+        XCTAssertEqual(blocked.sentence(.ContinueFreshContext), "Unavailable: the core's inspection does not offer this choice.")
+
+        // An older helper reports no choices: nothing is claimed, the helper still decides.
+        XCTAssertNil(old.row.structured)
+        XCTAssertEqual(old.pillLabel, "Unknown")
+        XCTAssertTrue(RecoveryChoice.allCases.allSatisfy(old.offers))
+        XCTAssertEqual(old.blockerLine, "Blockers not reported")
+        XCTAssertTrue(old.footnote.contains("does not report which choices"))
+
+        XCTAssertEqual(RecoveryChoice.allCases.filter(\.confirms), [.ValidateOutput, .ContinueWithHistory, .ContinueFreshContext])
+        XCTAssertEqual(Set(RecoveryChoice.allCases.map(\.buttonTitle)).count, 4)
+    }
+
+    func test_dw1_recovery_states_admission_and_actions_only_from_a_connected_core() {
+        var state = fixture
+        XCTAssertEqual(state.admissionState, .open)
+        XCTAssertTrue(state.canAct)
+        XCTAssertFalse(state.loading)
+        XCTAssertEqual(state.digestShown, "0f1e2d3c4b5a")
+
+        state.admission = "Closed"
+        XCTAssertEqual(state.admissionState, .closed)
+        state.admission = ""
+        XCTAssertEqual(state.admissionState, .unknown)
+
+        state.commandPending = true
+        XCTAssertFalse(state.canAct, "the control that sent a command cannot send again")
+        state.commandPending = false
+
+        // The last reported admission is not current once the helper is gone; nothing can be sent.
+        state.admission = "Open"
+        for connection in [HelperConnection.channelLost("pipe closed"), .ended(status: 1), .launchFailed("no helper")] {
+            state.connection = connection
+            XCTAssertEqual(state.link, .lost)
+            XCTAssertEqual(state.admissionState, .unknown)
+            XCTAssertFalse(state.canAct)
+            XCTAssertFalse(state.loading, "rows stay on screen as the last known state")
+        }
+        state.connection = .incompatible(epoch: 7)
+        XCTAssertEqual(state.link, .incompatible)
+        XCTAssertFalse(state.canAct)
+
+        let waiting = RecoveryCenterState(connection: .ready(epoch: 7), admission: "Closed", rows: [], digest: "", commandPending: false)
+        XCTAssertTrue(waiting.loading)
+        XCTAssertFalse(waiting.canAct)
+        XCTAssertEqual(waiting.digestShown, "None")
+        let lost = RecoveryCenterState(connection: .ended(status: 1), admission: "", rows: [], digest: "", commandPending: false)
+        XCTAssertFalse(lost.loading, "a helper that ended will not deliver an inspection")
+    }
+
+    func test_dw1_start_new_session_needs_every_finding_reviewed() {
+        var state = fixture
+        let all = Set(state.rows.map(\.attempt))
+        XCTAssertEqual(state.startBlocked(reviewed: all), "Admission is already open.")
+
+        state.admission = "Closed"
+        XCTAssertEqual(state.startBlocked(reviewed: []), "Unavailable until every finding is marked reviewed.")
+        XCTAssertEqual(state.startBlocked(reviewed: Set(all.prefix(2))), "Unavailable until every finding is marked reviewed.")
+        XCTAssertNil(state.startBlocked(reviewed: all))
+
+        state.commandPending = true
+        XCTAssertEqual(state.startBlocked(reviewed: all), "Unavailable while a command awaits the core.")
+        state.commandPending = false
+        state.digest = ""
+        XCTAssertEqual(state.startBlocked(reviewed: all), "Unavailable until an inspection is loaded.")
+        state.digest = "d"
+        state.connection = .channelLost("pipe closed")
+        XCTAssertEqual(state.startBlocked(reviewed: all), "Unavailable: the core is not connected.")
+
+        // An inspection that found nothing has nothing to review.
+        let empty = RecoveryCenterState(connection: .ready(epoch: 7), admission: "Closed", rows: [], digest: "d", commandPending: false)
+        XCTAssertNil(empty.startBlocked(reviewed: []))
+    }
+
+    func test_dw1_banner_and_card_shapes_follow_the_component_table() {
+        XCTAssertEqual(Banner<EmptyView>.Kind.warning.tone, .warn)
+        XCTAssertEqual(Banner<EmptyView>.Kind.danger.tone, .danger)
+        XCTAssertNotEqual(Banner<EmptyView>.Kind.warning.symbol, Banner<EmptyView>.Kind.danger.symbol)
+        XCTAssertEqual(CardShape.page, CardShape(radius: 12, vertical: 14, horizontal: 16))
+        XCTAssertEqual(CardShape.list, CardShape(radius: 12, vertical: 0, horizontal: 0))
+        XCTAssertEqual(CardShape.panel.radius, 10)
+        XCTAssertEqual(CardShape.panelList.radius, 10)
+    }
+
+    /// Review aid, as above: the Recovery Center, its launch review, and the empty, loading
+    /// and disconnected forms. The rows are test data; the app shows only what the helper reports.
+    func test_dw1_recovery_center_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        var closed = fixture
+        closed.admission = "Closed"
+        var lost = fixture
+        lost.connection = .channelLost("pipe closed")
+        let nothing = RecoveryCenterState(connection: .ready(epoch: 7), admission: "Open", rows: [], digest: "d", commandPending: false)
+        let loading = RecoveryCenterState(connection: .ready(epoch: 7), admission: "", rows: [], digest: "", commandPending: false)
+        let cases: [(String, RecoveryCenterState, Bool)] = [
+            ("recovery-center", fixture, false), ("recovery-closed", closed, false), ("launch-review", closed, true),
+            ("recovery-disconnected", lost, false), ("recovery-empty", nothing, false), ("recovery-loading", loading, false),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, reviewing) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.recoveryCenter), showInspector: {}) {
+                        RecoveryCenterView(state: state, reviewing: reviewing)
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: 1120, height: 720)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
         }
     }
 }
@@ -203,8 +369,75 @@ private struct Gallery: View {
                 Button("Push") {}.buttonStyle(.jojo(.primary)).disabled(true)
                 DisabledReason("Unavailable: 5 requirements unmet.")
             }
-            NotBuiltYet(screen: .dashboard)
+            section("Banners") {
+                VStack(spacing: 8) {
+                    Banner(.warning, title: "These facts are 38 minutes old",
+                           message: "Inspected 09:04. Recovery actions stay unavailable until you reinspect.") {
+                        Button("Reinspect") {}.buttonStyle(.jojo(.secondary, compact: true))
+                    }
+                    Banner(.danger, title: "Jojo core isn't responding",
+                           message: "Showing the last known state, read-only. No actions can be requested.")
+                }
+            }
+            HStack(alignment: .top, spacing: 16) {
+                titled("List and rows") {
+                    Card(.list) {
+                        VStack(spacing: 0) {
+                            GroupHeader("Needs you", count: 2)
+                            Rows(Sample.rows) { row in
+                                ListRow(row.title, meta: row.meta, detail: row.detail, chevron: true) {
+                                    LeadingTile(symbol: row.symbol, tone: row.tone)
+                                } trailing: {
+                                    if row.tone == .warn { EvidencePill(.needsApproval) } else { DocumentTag(.proposed) }
+                                }
+                            }
+                        }
+                    }
+                }
+                titled("Card, panel and notes") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Card { Text("Card: radius 12, padding 14 by 16").textStyle(.body).foregroundStyle(theme.text) }
+                        SectionHeading("Section heading")
+                        Card(.panel) {
+                            HStack(spacing: 10) {
+                                CheckBox(isOn: true)
+                                CheckBox(isOn: false)
+                                Text("Panel card: radius 10, padding 12 by 14").textStyle(.body).foregroundStyle(theme.text)
+                            }
+                        }
+                        Footnote("Footnote: one sentence that says what did not change.")
+                        LoadingBlock("Loading attempts…")
+                    }
+                }
+            }
+            StateBlock(symbol: "folder", title: "No projects yet",
+                       message: "Create a project or import a folder that already has Git repositories.") {
+                Button("Create Project") {}.buttonStyle(.jojo(.primary, compact: true))
+                Button("Import…") {}.buttonStyle(.jojo(.secondary, compact: true))
+            }
+            .frame(height: 130)
+            NotBuiltYet(screen: .dashboard).frame(height: 110)
         }
+    }
+
+    /// Canvas examples for the gallery only; never shown by the app.
+    private struct Sample: Identifiable {
+        let title: String, meta: String, detail: String, symbol: String, tone: Tone
+        var id: String { title }
+
+        static let rows = [
+            Sample(title: "Approve plan revision 3", meta: "FT-142", detail: "Two steps changed since revision 2",
+                   symbol: "list.bullet.indent", tone: .warn),
+            Sample(title: "PRD rev 5", meta: "FT-007", detail: "Proposed 09:12", symbol: "doc.text", tone: .info),
+        ]
+    }
+
+    private func titled(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).textStyle(.sectionTitle).foregroundStyle(theme.textStrong)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {

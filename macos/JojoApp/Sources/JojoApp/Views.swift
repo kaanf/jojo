@@ -13,21 +13,26 @@ struct MainView: View {
         Themed {
             AppShell(model: model, screen: $screen, showInspector: { delegate.showAuxiliary() }) {
                 VStack(alignment: .leading, spacing: 8) {
-                    QuitBanner(model: model)
+                    QuitBanner(model: model).padding(EdgeInsets(top: 20, leading: 20, bottom: 0, trailing: 20))
                     ZStack(alignment: .topLeading) {
-                        shown(.agentRuns) { RunsView(model: model) }
-                        shown(.approvalInbox) { ReviewView(model: model, subject: $subject) }
-                        shown(.recoveryCenter) { RecoveryView(model: model) }
-                        shown(.executionPlan) { StartView(model: model) }
-                        shown(.verification) { CandidateView(model: model) }
-                        if !MainView.built.contains(screen) { NotBuiltYet(screen: screen) }
+                        Group {
+                            shown(.agentRuns) { RunsView(model: model) }
+                            shown(.approvalInbox) { ReviewView(model: model, subject: $subject) }
+                            shown(.executionPlan) { StartView(model: model) }
+                            shown(.verification) { CandidateView(model: model) }
+                            if !MainView.built.contains(screen) { NotBuiltYet(screen: screen) }
+                        }
+                        .padding(.horizontal, 20)
+                        // A redesigned screen fills the content area and sets its own padding.
+                        shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     if !model.workspace.status.isEmpty {
                         Text(model.workspace.status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                            .padding(.horizontal, 20)
                     }
                 }
-                .padding(EdgeInsets(top: 20, leading: 20, bottom: 28, trailing: 20))
+                .padding(.bottom, 28)
             }
             .overlay { QuitOverlay(model: model) }
         }
@@ -213,38 +218,6 @@ struct ReviewView: View {
                 .disabled(model.workspace.reviewStale)
             }
             Spacer()
-        }
-        .padding(8)
-    }
-}
-
-struct RecoveryView: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Startup is paused: admission stays closed until reviewed recovery. Nothing runs automatically.")
-                .foregroundStyle(.secondary)
-            List(model.workspace.recovery) { row in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Interrupted/unknown attempt \(row.attempt)").font(.system(.body, design: .monospaced))
-                    Text(row.assessment).font(.caption)
-                    Text(row.findings + (row.detailComplete ? "" : " … (partial)")).font(.caption).textSelection(.enabled)
-                    ForEach(RecoveryChoice.allCases, id: \.self) { choice in
-                        Button(choice.label) { model.workspace.resolveRecovery(row.attempt, choice) }
-                            .disabled(model.workspace.commandPending)
-                    }
-                    Text("The helper permits only what its inspection of processes and the worktree supports; unknown or live work can only be kept on hold.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-            .overlay { if model.workspace.recovery.isEmpty { Text("No interrupted or unknown work.").foregroundStyle(.secondary) } }
-            HStack {
-                Button("Inspect Again") { model.workspace.inspectRecovery() }
-                Button("Start After Review (opens admission)") { model.workspace.startAfterRecovery() }
-                    .disabled(model.workspace.commandPending || model.workspace.recoveryDigest.isEmpty)
-                Spacer()
-            }
         }
         .padding(8)
     }
