@@ -414,3 +414,12 @@ Added to `Surfaces.swift` for Execution Plan ([screens/EXECUTION_PLAN.md](screen
 | `LaneBand` | A lane of the graph: radius 8, `fill2` with a `hairline` outline, and a header 24 high with a neutral square (8 × 8, radius 2, `tileNeutral`) and a name at 11.5 semibold, `text2` |
 
 Not built from the board: the status pill of a node, its Running and Blocked outlines, the "Eligible" tag, the gate node, the per-repository color of a lane, the green, white and amber edge colors, the pipeline cells of section 5.4 and the lifecycle stepper of section 2.1. Each needs data the helper does not report: a state of a step, an evaluation of a dependency, a gate as an object, a color of a repository, a lifecycle stage.
+
+## 23. Implementation notes: chat surfaces (design wave 2, Feature Chat)
+
+Added to `Surfaces.swift` for Feature Chat and New Feature ([screens/FEATURE_CHAT.md](screens/FEATURE_CHAT.md)). Values not on the canvas boards are marked there.
+
+| Component | Notes |
+|---|---|
+| `TextArea` | A multi-line text field: 13 pt, padding 8 by 10, `fill`, radius 8; it grows from `lines` (default 3) to 8 lines. Off screen its text or prompt is drawn in place, as `InputField` does |
+| `ChatMessage` | One message of a transcript: a 22 pt round avatar with the author's initial (`accent` with `onAccent` for the lead, `fill` with `text2` for the human), the author at 13 semibold `textStrong` and a meta line at 11.5 `text3` beside it, then the content with a gap of 6. Padding 10 by 12, radius 10; the human's message stands on `fill2`, the lead's has no fill |

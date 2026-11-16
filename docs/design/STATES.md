@@ -50,4 +50,4 @@ The right column names what exists in the app and protocol now. Rows without a s
 | Loading | A query without a reply yet; `WorkspaceModel.eventsLoad` is `loading` for the event journal; `HelperConnection.notStarted` and `.handshaking` for the Hello answer in the Core section of Settings & Providers |
 | Empty | An empty page of rows |
 | Permission denied | No source yet |
-| Discovery states | No source yet (M2, Feature Chat) |
+| Discovery states | Since M2, the `FeatureChat` query: Empty is a feature without turns; Investigating is a turn in state `Running` (or `Stopping`); Blocked is an unanswered blocking question about the whole feature; Complete is a requirements document that is `ready`. A blocking question about one plan step is a separate warning, "Feature continues · step … is blocked by Q…" (`FeatureChatState.discovery`, `docs/design/screens/FEATURE_CHAT.md`) |

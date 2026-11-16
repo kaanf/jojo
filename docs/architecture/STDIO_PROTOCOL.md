@@ -160,3 +160,42 @@ A plan is "approved" exactly when a Start would find its approval current. A new
 Not returned, because the core does not store it: a name, description, acceptance criteria or file scope of a step; a lifecycle state of a step; whether an edge's predicate is met; the result of the plan's validation. Stored but not returned: the edges of the artifact graph, the permission digest, the required outputs, the additional resources of a step, and the attempts of a step (`scheduler_attempts`).
 
 The whole plan is one answer. An answer above the frame limit is refused with `PayloadTooLarge: use bounded queries`, as for every request; the steps are not paged.
+
+## Protocol 1.2: Feature Chat (M2)
+
+Protocol minor 2 adds three commands and three queries for the lead agent of a feature. The helper's `MINOR` is 2; Hello for a frame of minor ≥ 2 lists `ChatTurn AnswerQuestion CancelTurn` after the 1.1 commands and `FeatureChat ChatText ChatIndex` after the 1.1 queries. A 1.0 or 1.1 frame naming any of them is answered `UnknownType`; everything a 1.1 client sends is answered exactly as before. The macOS client sends these six requests at minor 2 and every other request at minor 1 (`Request.minor`). Every payload is checked for its exact field set: a frame with any other field is answered `InvalidPayload: unexpected or missing fields`.
+
+A turn is one fresh, read-only provider run in a registered repository: Claude Code with `--tools Read,Glob,Grep --permission-mode manual`, Codex with `--sandbox read-only`. It is not an attempt: it has no worktree, plan, candidate or approval. One run at a time: a turn is refused while an attempt or another turn is active, and a Start is refused while a turn runs. A reply never approves anything.
+
+### Commands
+
+| Request | Fields | What it does |
+|---|---|---|
+| `ChatTurn` | `feature` (identity), `kind` (`Discover` or `Plan`), `repository` (a registered repository), `provider` (`Codex` or `ClaudeCode`), `message` (text) | Accepts one turn under the command identity, which is the turn's identity, composes its prompt from stored content, records the HEAD commit of the repository, and runs it. The first turn of a feature must be `Discover` and its `message` is the objective; a later `message` is a note and may be empty. A `Plan` turn needs the feature's requirements document approved. The receipt adds `turn` and `dispatch` (`launched`, or `not repeated` for a replayed command). Refusals: `AdmissionClosed`, `CapacityOne: …`, `SliceNotConfigured`, `NoProductionAdapter: …`, `AdapterRejected: …`, `TurnRefused: …` (repository not registered, another repository, no objective, no approved requirements, message too long), `PromptTooLarge: …`; `TurnFailed: …` when the accepted turn could not be launched (it is then sealed as failed) |
+| `AnswerQuestion` | `question` (identity), `revision` (the question's revision as shown), `action` (`Answer`, `Defer` or `Block`), `answer` (text exactly when `action` is `Answer`, otherwise `null`) | Appends a human answer, or sets the question aside (`Defer`) or makes it blocking again (`Block`), by compare-and-swap at `revision`. Only questions a turn asked are reachable. A question about the whole feature is part of what the requirements approval binds, so answering it makes that approval stale; a question about one plan step changes no approval. Refusals: `UnknownQuestion: …`, `InvalidAnswer: …`, `UnknownAction`, a revision conflict |
+| `CancelTurn` | `turn` | Records the human's stop of a running turn; the runner stops the process tree within one poll and the turn ends `Cancelled`. Read from the control queue. Refusals: `UnknownTurn`, `TurnFinished` |
+
+### Queries
+
+`FeatureChat` with `feature` and `after` (an ordinal; `0` from the start) returns one page:
+
+| Field | Value |
+|---|---|
+| `feature` | The feature |
+| `turns` | The turns after `after`, oldest first, as many as fit in 40 KiB of rows (at least one). Per turn: `turn`, `ordinal`, `kind`, `provider`, `base` (the commit the turn read), `message` (at most 1024 characters) and `message_complete`, `state` (`Running`, `Stopping`, `Replied`, `Failed`, `Cancelled`, `Interrupted`), `detail` (why it failed, at most 1 KiB), `summary` (the lead's words to the human), `prd` (`document`, `revision` of the version the turn created, or `null`), `plan` (`adr`, `plan`, `validation`, `drafted`, `steps` with `step`, `key`, `title`; or `null`), `questions` |
+| `questions` (per turn) | `question`, `revision`, `prompt`, `blocking`, `answer` (newest, at most 1024 characters, or `null`) with `answer_complete`, `answered_by` (`HUMAN`, `MODEL` or `null`), `step` (the key of the one step it is about, or `null` for the whole feature) |
+| `next` | The ordinal to ask after for the next page, or `null` |
+| `running` | `turn` and `stop_requested` of the turn without a result, or `null` |
+| `prd` | The feature's requirements document: `document`, `revision`, `author`, `ready` (complete and no unanswered blocking question), `blockers` (their count), `approved` (a current approval), `length` (characters); or `null` |
+
+`ChatText` with `subject`, `part` and `offset` returns at most 8192 characters of one long text from a character offset: `subject`, `offset`, `next`, `total`, `complete`, `text`; or `null` when the subject has no such text. `part` is `Message`, `Reply` or `Prompt` (subject: a turn), `Answer` (subject: a question, its newest answer) or `Prd` (subject: a requirements document, the rendered newest version). Another `part` is answered `UnknownPart`.
+
+`ChatIndex` with no field returns `repositories` (per registered repository: `repository`, `path` at most 160 characters, `path_complete`), `repositories_complete`, `features` (per feature with a turn, newest first: `feature`, `repository`, `objective` at most 160 characters, `objective_complete`, `turns`, `running`) and `features_complete`. Each list holds at most 32 rows.
+
+### What a reply becomes
+
+The lead's last message must be exactly one JSON object of the turn's schema (`jojo-lead-discovery-v1` or `jojo-lead-plan-v1`, `crates/jojo-domain/src/planner.rs`); one surrounding code fence is tolerated and nothing else. A discovery reply becomes clarification questions and a new version of the feature's one requirements document, all authored by the model. A plan reply becomes an ADR draft at once and, when the human has approved that ADR, a validation plan and an execution plan: one node per step, one edge per dependency with an `Evidence` predicate of kind `ValidationPassed` on the prerequisite step, a provider per step, every step from the base commit the turn read. A plan reply that asks about the whole feature drafts nothing. A message that is not such an object fails the turn and stores nothing. The `HumanDecision` receipt carries an extra field `lead_plan` (`PlanNotDrafted: …`) only when an approved ADR's draft could not become a plan.
+
+### Other changes
+
+A blocking question about one plan step that no human answered refuses that step's `Start` with `StepQuestionOpen: …`. When a helper closes or loses its client, a running turn is stopped and sealed `Failed` with the detail `the helper is closing`; a turn an earlier helper left without a result is sealed `Interrupted` when the next helper starts. Neither is a recovery subject.
