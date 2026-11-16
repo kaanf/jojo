@@ -283,9 +283,9 @@ Built in `macos/JojoApp/Sources/JojoApp`: `Theme.swift` (tokens, typography, car
 | Sidebar counters | Recovery Center: subjects on hold, `warn`. Agent Runs: the snapshot's attempt rows, plain count |
 | Destinations without a screen | The Empty form of STATES.md with the destination's glyph and "… is not built yet" |
 
-Three screens that existed before the shell are shown unchanged under these destinations until each is redesigned: Review under Approval Inbox, Start under Execution Plan, Candidate under Verification & Evidence. Recovery Center ([screens/RECOVERY_CENTER.md](screens/RECOVERY_CENTER.md)) and Agent Runs ([screens/AGENT_RUNS.md](screens/AGENT_RUNS.md)) are redesigned.
+Two screens that existed before the shell are shown unchanged under these destinations until each is redesigned: Review under Approval Inbox and Start under Execution Plan. Recovery Center ([screens/RECOVERY_CENTER.md](screens/RECOVERY_CENTER.md)), Agent Runs ([screens/AGENT_RUNS.md](screens/AGENT_RUNS.md)) and Verification & Evidence ([screens/VERIFICATION.md](screens/VERIFICATION.md)) are redesigned.
 
-Review aid: `JOJO_SNAPSHOT_DIR=<directory> swift test --filter DesignShellTests` writes `shell-dark.png` and `shell-light.png` (the shell with every status component, button kind and shared surface), and each redesigned screen in its states (`recovery-center-…`, `recovery-closed-…`, `launch-review-…`, `recovery-disconnected-…`, `recovery-empty-…`, `recovery-loading-…`; `agent-runs-…` at the opening size, `agent-runs-wide-…`, `agent-runs-held-…`, `agent-runs-unloaded-…`, `agent-runs-disconnected-…`, `agent-runs-empty-…`, `agent-runs-loading-…`), rendered off screen.
+Review aid: `JOJO_SNAPSHOT_DIR=<directory> swift test --filter DesignShellTests` writes `shell-dark.png` and `shell-light.png` (the shell with every status component, button kind and shared surface), and each redesigned screen in its states (`recovery-center-…`, `recovery-closed-…`, `launch-review-…`, `recovery-disconnected-…`, `recovery-empty-…`, `recovery-loading-…`; `agent-runs-…` at the opening size, `agent-runs-wide-…`, `agent-runs-held-…`, `agent-runs-unloaded-…`, `agent-runs-disconnected-…`, `agent-runs-empty-…`, `agent-runs-loading-…`; `verification-…` at the opening size, `verification-tall-…`, `verification-failed-…` wide, `verification-narrow-…`, `verification-unknown-…`, `verification-not-run-…`, `verification-requested-…`, `verification-disconnected-…`, `verification-empty-…`), rendered off screen.
 
 ## 14. Implementation notes: shared surfaces (design wave 1, screens)
 
@@ -322,3 +322,17 @@ Added to `Surfaces.swift` for Agent Runs ([screens/AGENT_RUNS.md](screens/AGENT_
 | `NoticeWell` | One sentence in the `meta` style, `text2`; padding 8 by 10, radius 8, background `fill2` (canvas: white at 4%) |
 
 Not built from the board: the segmented control, the compact lifecycle stepper, the console's search field with its copy and save buttons, and the evidence tags "Recording", "Recorded" and "Truncated". Each needs data the helper does not report yet.
+
+## 16. Implementation notes: verification surfaces (design wave 1, Verification & Evidence)
+
+Added to `Surfaces.swift` for Verification & Evidence ([screens/VERIFICATION.md](screens/VERIFICATION.md)). Section 10 and the canvas board give the measures; the values they do not have are named.
+
+| Component | Notes |
+|---|---|
+| `ResultRow` | Section 10, with the columns of the board: the name at 13 semibold `textStrong` over an optional second line (`meta`, `text3`), 150 wide; the evidence pill in a column 130 wide; an optional count in `mono`, 80 wide; the command in `mono` over a note (`meta`, `text3`), flexible; one trailing control. Padding 10 by 14, gap 10. Not on the canvas: the name column is fixed at 150 and the row does not wrap; its texts do. The hairline between rows is drawn by the list (`Rows`), not by the row |
+| `EvidenceRow` | Section 10: the name at 13 in `text` (or in `mono` when it is a path), a note in `mono` `text3` on one line, an evidence pill. Padding 9 by 14, gap 10 |
+| `DiffLine`, `DiffView` | Section 10: monospaced 12, rows at least 22 high, vertical padding 6, radius 10; line number 34 wide and right aligned, sign 16 wide, code wrapping. `DiffLine.parse` reads a unified diff: a line is added, removed or context only inside the line counts of its hunk header, so code that looks like a file header stays code; removed lines carry the old file's number, added and context lines the new file's; file headers, hunk headers and anything outside a hunk have no number and no sign. Not on the canvas: background `#F1F1F4` in light (dark `#17171A`, section 12); ring `cardRing`; numbers and header lines in `text3` (canvas `#6E6E76`), code in `text` (canvas `#E6E6EA`); 14 of trailing padding |
+| `InputField` | Not on the Verification board; the shape is the search field of the Agent Runs board: height 26, radius 6, background `fill`, horizontal padding 8, text at 12 (monospaced for an identity), prompt in `text3`. A plain system text field; in the off-screen snapshot its text or prompt is drawn in place |
+| `RequestedNotice` | The "Requested" state of STATES.md and of section 3: a "Requested" pill (Waiting form) and "Sent to core · waiting for confirmation" in `meta`, `text2`; padding 8 by 12, radius 8, gap 8, background `fill2` (canvas: white at 5%) |
+
+Not built from the board: the count pills of the verdict header, the "Missing" pill (it is not one of the nine evidence states of section 2.3), the requirement lines of "Seal evidence" and the history rows. Each needs data or a command the helper does not have yet.

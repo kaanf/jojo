@@ -180,7 +180,7 @@
       "child_fixture",
       "t16_helper_role"
     ],
-    "swift_executed": 59,
+    "swift_executed": 64,
     "gui_scenarios": {
       "scripts/gui_p1_14.py": 9,
       "scripts/gui_p2_02.py": 3,
@@ -320,7 +320,7 @@
           "Recovery",
           "PrepareClose"
         ],
-        "state": "state phase=idle connection=ready(epoch: 5) duplicates=0 primary-visible=true aux=false review-status=Start accepted for attempt 4f5ec8d8bb32453a91847a1e2aaa1bb1 (launched); follow the run in Runs recovery=1 admission=Open pending=false"
+        "state": "state phase=idle connection=ready(epoch: 5) duplicates=0 primary-visible=true aux=false review-status=Start accepted for attempt 204a1efc6caa47df951dfbac2dfcb77d (launched); follow the run in Runs recovery=1 admission=Open pending=false"
       },
       "fake_lost_start_response_is_reconciled_not_resent": {
         "passed": true,
@@ -516,10 +516,11 @@
     "macos/JojoApp/Sources/JojoApp/RecoveryCenter.swift": "93fe7bff9905aedfa7fbf8d60963b41b7a0f6613a5c804516859ac376c3946f6",
     "macos/JojoApp/Sources/JojoApp/Shell.swift": "479608e6730912f2c5f05bdf0f100511aaca948434af814265dddacc635cda8f",
     "macos/JojoApp/Sources/JojoApp/StatusComponents.swift": "1cd5545fedbebf378e31ffb7293b1c5db21ea6632468664c2aa3b0f5db4d8d3f",
-    "macos/JojoApp/Sources/JojoApp/Surfaces.swift": "df2dac9e44982012d5e5c23484d8aa2b2ce1b132cbb9724def5c0a972c4e12d6",
+    "macos/JojoApp/Sources/JojoApp/Surfaces.swift": "7c5a82da22e6b298c75056e5e7d5285f4431afc37c1930b8e7a3caa262d6e96a",
     "macos/JojoApp/Sources/JojoApp/Theme.swift": "5d31cd071025b7a98b6beddb519681fbf2e068b534c5508bbdaafdab9385be49",
     "macos/JojoApp/Sources/JojoApp/UITestDriver.swift": "36f31e296954011e146ca7aa2ff8d9cbe98bf7489fe707760edbbef1cc6d4ab8",
-    "macos/JojoApp/Sources/JojoApp/Views.swift": "fd41212dde12d9afb537ae9ea28c863e8410a2d1b8571aab77cd3fa2b95e1c7a",
+    "macos/JojoApp/Sources/JojoApp/Verification.swift": "caf2ae0495b8148ea81519850acafcff04e98c846ae24fed0aa63f80d35db844",
+    "macos/JojoApp/Sources/JojoApp/Views.swift": "b4c5d54d81b1b69032deb39ad95d96db85bfd9c4e3fe51c5b189a025db4bf4a6",
     "macos/JojoApp/Sources/JojoAppBoundary/JojoSceneBoundary.swift": "3cb39d8acd4459b3aed69b676f2c1ef7a594206d11ae93150256678bb6cb57c3",
     "macos/JojoApp/Sources/JojoCore/Envelope.swift": "1a36fe64de7b48d58e0d28ddb09073ff84c0b43a34d45ebf032759b3e305b62b",
     "macos/JojoApp/Sources/JojoCore/HelperClient.swift": "19f07328ae6a34d2565ae718ba35f579b32847c58f566530db955f52eb657b26",
@@ -529,7 +530,7 @@
     "macos/JojoApp/Sources/JojoCore/QuitCoordinator.swift": "34fe38345935df2d226f4d68f15ceeef205a05742afb900ee7d8d157f10cd99c",
     "macos/JojoApp/Sources/JojoCore/TimerScheduler.swift": "3dfefe3e47da3a9362d6ff1306063f74d14e0aac59f75818fe9d2d80107319c3",
     "macos/JojoApp/Sources/JojoCore/Workspace.swift": "1b4c3772abfeb8b56c8d83a75aebe22d79aca7b7f8f36961689507d0bb3ecfe1",
-    "macos/JojoApp/Tests/JojoCoreTests/DesignShellTests.swift": "c6aaf7d2b5e188f165b7eacbb7fe65ebcf65f9239c179276c220fee0773b6268",
+    "macos/JojoApp/Tests/JojoCoreTests/DesignShellTests.swift": "d333d08aaddef3b01004e02acd6605cd9952528cf0c9b1db3fa0bb6d201d43f5",
     "macos/JojoApp/Tests/JojoCoreTests/FakeHelper.swift": "2b79ba9f0b6bfd6d4762f82823d8d5eb6c4d7934e4fddc7d0aaaa253029ce0eb",
     "macos/JojoApp/Tests/JojoCoreTests/P202StartRecoveryTests.swift": "33967a1fc0f015c09cbeef875dc7f18d7943d36443e042efffba8af742185ece",
     "macos/JojoApp/Tests/JojoCoreTests/P203CandidateReviewTests.swift": "87d86735c1e48e0873435559d0be8dcb60b0365a6c26babe012e3cfd956a541a",
@@ -539,7 +540,7 @@
     "macos/JojoApp/Tests/JojoCoreTests/T14ReviewProtocolTests.swift": "a8fe089e4f41b7ff9c093a382668d81f877bcf504afdce32b3c434b4e8cc0070",
     "rust-toolchain.toml": "28ba63ba51f7635afd6b0663f2613a1037ab602a039a889e991b1164b84d4714",
     "scripts/check_p1_01_boundaries.py": "ee3d65a0669572ab0c02ac0cac3a4c065105f489587443486285ab2fc9a28f5a",
-    "scripts/gates/current.json": "87e1484f91d4e03145716226aa655bf5a48a0248ce751323f72cd0617cb41369",
+    "scripts/gates/current.json": "d5460ceefc491086350144a4a4284ff4ba8a598863b03ca97c99afc109fbdf86",
     "scripts/gui_p1_14.py": "925bfb4362f648d69152ec59fbd5d4f7f9cae46e6ac30ab8f22e5afd0971dd50",
     "scripts/gui_p2_02.py": "2d0bf2f80f5600c208eca7439f4ebdc2b4fec9b38383e6f40399a55e45c36869",
     "scripts/gui_p2_03.py": "6dce73497aa9a434e03965bbcd90f1894b25c6608a216098b42d2c9a918c81b3",

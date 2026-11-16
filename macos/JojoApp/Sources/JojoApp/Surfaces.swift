@@ -589,3 +589,258 @@ struct NoticeWell: View {
             .background(theme.fill2, in: RoundedRectangle(cornerRadius: 8))
     }
 }
+
+// MARK: Verification surfaces (docs/design/COMPONENTS.md, sections 10 and 16)
+
+/// A one-line text field. In the off-screen snapshot, where a system field does not draw,
+/// its text or prompt is drawn in place.
+struct InputField: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.offscreen) private var offscreen
+    let prompt: String
+    @Binding var text: String
+    var mono = false
+    var submit: () -> Void = {}
+
+    var body: some View {
+        Group {
+            if offscreen {
+                Text(text.isEmpty ? prompt : text).foregroundStyle(text.isEmpty ? theme.text3 : theme.text).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                TextField("", text: $text, prompt: Text(prompt).foregroundColor(theme.text3))
+                    .textFieldStyle(.plain).foregroundStyle(theme.text).onSubmit(submit)
+            }
+        }
+        .font(.system(size: 12, design: mono ? .monospaced : .default))
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(theme.fill, in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityLabel(prompt)
+    }
+}
+
+/// One verification result: name, evidence pill, an optional count, the command or the
+/// core's detail over a note, and one trailing control.
+struct ResultRow<Trailing: View>: View {
+    @Environment(\.theme) private var theme
+    let name: String
+    var scope: String?
+    let state: EvidenceState
+    var label: String?
+    var count: String?
+    var command: String?
+    var note: String?
+    @ViewBuilder let trailing: () -> Trailing
+
+    init(_ name: String, scope: String? = nil, state: EvidenceState, label: String? = nil, count: String? = nil,
+         command: String? = nil, note: String? = nil, @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.name = name
+        self.scope = scope
+        self.state = state
+        self.label = label
+        self.count = count
+        self.command = command
+        self.note = note
+        self.trailing = trailing
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(name).textStyle(.bodyStrong).foregroundStyle(theme.textStrong)
+                if let scope { Text(scope).textStyle(.meta).foregroundStyle(theme.text3) }
+            }
+            .frame(width: 150, alignment: .leading)
+            EvidencePill(state, label: label).frame(width: 130, alignment: .leading)
+            if let count { Text(count).textStyle(.mono).foregroundStyle(theme.text).frame(width: 80, alignment: .leading) }
+            VStack(alignment: .leading, spacing: 2) {
+                if let command { Text(command).textStyle(.mono).foregroundStyle(theme.text) }
+                if let note { Text(note).textStyle(.meta).foregroundStyle(theme.text3) }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailing()
+        }
+        .textSelection(.enabled)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+    }
+}
+
+extension ResultRow where Trailing == EmptyView {
+    init(_ name: String, scope: String? = nil, state: EvidenceState, label: String? = nil, count: String? = nil,
+         command: String? = nil, note: String? = nil) {
+        self.init(name, scope: scope, state: state, label: label, count: count, command: command, note: note) { EmptyView() }
+    }
+}
+
+/// One record of evidence: its name, a short note such as a digest, and an evidence pill.
+struct EvidenceRow: View {
+    @Environment(\.theme) private var theme
+    let name: String
+    var note: String?
+    let state: EvidenceState
+    var label: String?
+    /// The name is an identifier (a path).
+    var mono = false
+
+    init(_ name: String, note: String? = nil, state: EvidenceState, label: String? = nil, mono: Bool = false) {
+        self.name = name
+        self.note = note
+        self.state = state
+        self.label = label
+        self.mono = mono
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(name).textStyle(mono ? .mono : .body).foregroundStyle(theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let note { Text(note).textStyle(.mono).foregroundStyle(theme.text3).lineLimit(1) }
+            EvidencePill(state, label: label)
+        }
+        .textSelection(.enabled)
+        .padding(.vertical, 9)
+        .padding(.horizontal, 14)
+    }
+}
+
+/// One line of a unified diff, numbered from its hunk header.
+struct DiffLine: Identifiable, Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        /// A file or hunk header, or any line outside a hunk: no number and no sign.
+        case context, added, removed, header
+    }
+
+    let id: Int
+    let kind: Kind
+    /// Removed lines carry the old file's number, added and context lines the new one's.
+    var number: Int?
+    let text: String
+
+    static func parse(_ diff: String) -> [DiffLine] {
+        var lines: [DiffLine] = []
+        // Lines the current hunk still has in the old and in the new file.
+        var (old, new, oldLeft, newLeft) = (0, 0, 0, 0)
+        var rows = diff.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if rows.last == "" { rows.removeLast() }
+        for row in rows {
+            let id = lines.count
+            if oldLeft > 0 || newLeft > 0, let sign = row.first, "+- ".contains(sign) {
+                let text = String(row.dropFirst())
+                switch sign {
+                case "+":
+                    lines.append(DiffLine(id: id, kind: .added, number: new, text: text))
+                    (new, newLeft) = (new + 1, newLeft - 1)
+                case "-":
+                    lines.append(DiffLine(id: id, kind: .removed, number: old, text: text))
+                    (old, oldLeft) = (old + 1, oldLeft - 1)
+                default:
+                    lines.append(DiffLine(id: id, kind: .context, number: new, text: text))
+                    (old, new, oldLeft, newLeft) = (old + 1, new + 1, oldLeft - 1, newLeft - 1)
+                }
+                continue
+            }
+            if row.hasPrefix("@@"), let hunk = hunk(row) {
+                (old, oldLeft, new, newLeft) = hunk
+            } else if !row.hasPrefix("\\") {
+                // Anything else outside the counted lines ends the hunk.
+                (oldLeft, newLeft) = (0, 0)
+            }
+            lines.append(DiffLine(id: id, kind: .header, number: nil, text: row))
+        }
+        return lines
+    }
+
+    /// "@@ -12,7 +12,9 @@": start and length in the old and in the new file; a length left out is 1.
+    private static func hunk(_ row: String) -> (Int, Int, Int, Int)? {
+        let parts = row.split(separator: " ")
+        guard parts.count >= 3, parts[1].hasPrefix("-"), parts[2].hasPrefix("+") else { return nil }
+        func range(_ part: Substring) -> (Int, Int)? {
+            let numbers = part.dropFirst().split(separator: ",").map { Int($0) }
+            guard let first = numbers.first, let start = first else { return nil }
+            guard numbers.count > 1 else { return (start, 1) }
+            return numbers[1].map { (start, $0) }
+        }
+        guard let before = range(parts[1]), let after = range(parts[2]) else { return nil }
+        return (before.0, before.1, after.0, after.1)
+    }
+}
+
+/// A unified diff: line number, sign and code, with added and removed lines tinted.
+struct DiffView: View {
+    @Environment(\.theme) private var theme
+    let lines: [DiffLine]
+
+    init(_ lines: [DiffLine]) {
+        self.lines = lines
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines) { line in
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    Text(line.number.map(String.init) ?? "").foregroundStyle(theme.text3).frame(width: 34, alignment: .trailing)
+                    Text(sign(line.kind)).foregroundStyle(signColor(line.kind)).frame(width: 16)
+                    Text(line.text).foregroundStyle(line.kind == .header ? theme.text3 : theme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.trailing, 14)
+                .frame(minHeight: 22)
+                .background(background(line.kind))
+            }
+        }
+        .font(.system(size: 12, design: .monospaced))
+        .textSelection(.enabled)
+        .padding(.vertical, 6)
+        .background(DiffView.background(dark: theme.isDark).color)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(theme.cardRing, lineWidth: 1))
+    }
+
+    /// The canvas has the dark value only.
+    static func background(dark: Bool) -> RGBA {
+        RGBA(dark ? 0x17171A : 0xF1F1F4)
+    }
+
+    private func sign(_ kind: DiffLine.Kind) -> String {
+        switch kind {
+        case .added: return "+"
+        case .removed: return "-"
+        case .context, .header: return ""
+        }
+    }
+
+    private func signColor(_ kind: DiffLine.Kind) -> Color {
+        kind == .added ? theme.ok : theme.danger
+    }
+
+    private func background(_ kind: DiffLine.Kind) -> Color {
+        switch kind {
+        case .added: return theme.ok.opacity(0.09)
+        case .removed: return theme.danger.opacity(0.10)
+        case .context, .header: return .clear
+        }
+    }
+}
+
+/// A command was sent and the core has not confirmed it (STATES.md, "Requested").
+struct RequestedNotice: View {
+    @Environment(\.theme) private var theme
+    var text = "Sent to core · waiting for confirmation"
+
+    var body: some View {
+        HStack(spacing: 8) {
+            OperationalPill(.waiting, label: "Requested")
+            Text(text).textStyle(.meta).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.fill2, in: RoundedRectangle(cornerRadius: 8))
+    }
+}

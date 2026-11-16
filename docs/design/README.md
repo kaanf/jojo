@@ -9,6 +9,7 @@ The design of the macOS app, written down so that SwiftUI code can be built and 
 | [STATES.md](STATES.md) | The nine application states and the four discovery states, with their copy, and what the helper reports for each today |
 | [screens/RECOVERY_CENTER.md](screens/RECOVERY_CENTER.md) | Recovery Center and launch review: the two canvas boards, and what the app shows of them today |
 | [screens/AGENT_RUNS.md](screens/AGENT_RUNS.md) | Agent Runs: the canvas board, and what the app shows of it today |
+| [screens/VERIFICATION.md](screens/VERIFICATION.md) | Verification & Evidence: the canvas board, and what the app shows of it today |
 
 ## Source
 
@@ -21,6 +22,7 @@ Claude Design canvas "Jojo macOS", https://claude.ai/artifact/UuyW4DFxPEciFKZm8Z
 | STATES.md | "States" (`States.dc.html`) |
 | screens/RECOVERY_CENTER.md | "Recovery Center" (`RecoveryCenter.dc.html`), "Recovery Center · launch review" (`RecoveryLaunch.dc.html`) |
 | screens/AGENT_RUNS.md | "Agent Runs" (`AgentRuns.dc.html`) |
+| screens/VERIFICATION.md | "Verification & Evidence" (`Verification.dc.html`) |
 
 Values were read from the boards' markup and stylesheet, not measured from a picture. Section 4 of STATES.md and section 10 of DESIGN_SYSTEM.md (the mapping to the helper and to SwiftUI) are not from the canvas; they were written for this project.
 
@@ -34,7 +36,7 @@ When the canvas changes, update these files in the same step and note the new ve
 
 ## Screens
 
-The canvas has 23 boards. Which milestone builds which screen, and where the design and the roadmap disagree, is in [DESIGN_ROADMAP_DIFFERENCES.md](../roadmap/DESIGN_ROADMAP_DIFFERENCES.md), section 4. The screens themselves are not transcribed yet; each is written down when its wave starts.
+The canvas has 23 boards. Which milestone builds which screen, and where the design and the roadmap disagree, is in [DESIGN_ROADMAP_DIFFERENCES.md](../roadmap/DESIGN_ROADMAP_DIFFERENCES.md), section 4. Three screens are transcribed (the table above); each of the others is written down when it is built.
 
 | Page | Boards |
 |---|---|

@@ -18,13 +18,13 @@ struct MainView: View {
                         Group {
                             shown(.approvalInbox) { ReviewView(model: model, subject: $subject) }
                             shown(.executionPlan) { StartView(model: model) }
-                            shown(.verification) { CandidateView(model: model) }
                             if !MainView.built.contains(screen) { NotBuiltYet(screen: screen) }
                         }
                         .padding(.horizontal, 20)
                         // A redesigned screen fills the content area and sets its own padding.
                         shown(.agentRuns) { AgentRunsScreen(model: model, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
+                        shown(.verification) { VerificationScreen(model: model, open: { screen = $0 }) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     if !model.workspace.status.isEmpty {
@@ -231,127 +231,6 @@ struct StartView: View {
         GridRow {
             Text(name)
             TextField("identity (32 hex)", text: value).font(.system(.body, design: .monospaced))
-        }
-    }
-}
-
-/// P2-03 result review: agent output, changed files, diff, write-scope verdict, the host
-/// validation result and the human decision. PASS is shown only for the helper's recorded
-/// host validation; what the provider reported is labelled as the provider's own claim.
-struct CandidateView: View {
-    @ObservedObject var model: AppModel
-    @State private var attempt = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                TextField("Attempt identity (32 hex)", text: $attempt).font(.system(.body, design: .monospaced))
-                Button("Load") { model.workspace.loadCandidate(attempt) }
-            }
-            if let c = model.workspace.candidate {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        result(c)
-                        validation(c)
-                        files
-                        text("Git diff (base → sealed candidate)", model.workspace.diff)
-                        text("Agent output and logs", model.workspace.agentLog.joined(separator: "\n"))
-                        text("Validation report", model.workspace.validationReport)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                HStack {
-                    Button("Run Validation") { model.workspace.validateCandidate() }
-                        .disabled(c.candidate == nil || c.decision != "NONE")
-                    Button("Accept Candidate") { model.workspace.decideCandidate(.Accept) }
-                        .disabled(!c.canAccept)
-                    Button("Reject Candidate", role: .destructive) { model.workspace.decideCandidate(.Reject) }
-                        .disabled(c.candidate == nil || c.decision != "NONE")
-                    Spacer()
-                    Text("Accepting records your decision only. Nothing is merged, pushed or published.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .disabled(model.workspace.commandPending)
-            } else {
-                Text("Load a finished attempt to review its candidate.").foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(8)
-    }
-
-    private func result(_ c: CandidateReview) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Run").font(.headline)
-            if c.sealed {
-                Text("Outcome: \(c.outcome) — \(c.reason)")
-                Text("Provider reported: \(c.providerTerminal.isEmpty ? "nothing" : c.providerTerminal) (the provider's own statement; not a validation result)")
-                    .foregroundStyle(.secondary)
-                Text("Sealed candidate: \(c.candidate ?? "none")").font(.system(.caption, design: .monospaced))
-                Text("Decision: \(c.decision)")
-            } else {
-                Text("No sealed result yet.")
-            }
-        }
-        .textSelection(.enabled)
-    }
-
-    private func validation(_ c: CandidateReview) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text("Validation").font(.headline)
-                badge(c.validation)
-                Text("Write scope").font(.headline)
-                badge(model.workspace.scope)
-            }
-            if !c.validationDetail.isEmpty { Text(c.validationDetail) }
-            if !model.workspace.scopeDetail.isEmpty { Text("Scope: \(model.workspace.scopeDetail)") }
-            ForEach(c.reasons, id: \.self) { Text("• \($0)") }
-            if c.validation == .notRun {
-                Text("Jojo has not validated this candidate. Tests the agent says it ran do not count.")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .textSelection(.enabled)
-    }
-
-    /// Four visually distinct states; colour is never the only signal.
-    private func badge(_ v: ValidationVerdict) -> some View {
-        let (symbol, color): (String, Color) = switch v {
-        case .pass: ("checkmark.circle.fill", .green)
-        case .fail: ("xmark.octagon.fill", .red)
-        case .unknown: ("questionmark.diamond.fill", .orange)
-        case .notRun: ("circle.dashed", .gray)
-        }
-        return Label(v.label, systemImage: symbol)
-            .font(.system(.body, design: .monospaced).bold())
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .foregroundStyle(color)
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(color))
-    }
-
-    private var files: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Changed files (\(model.workspace.changedFiles.count))").font(.headline)
-            ForEach(model.workspace.changedFiles) { f in
-                HStack {
-                    Text(f.scope == "ALLOWED" ? "in scope" : f.scope == "BASELINE" ? "PROTECTED BASELINE" : f.scope == "OUT_OF_SCOPE" ? "OUT OF SCOPE" : "UNKNOWN")
-                        .font(.caption.bold())
-                        .foregroundStyle(f.scope == "ALLOWED" ? Color.secondary : Color.red)
-                    Text("\(f.kind) \(f.path)").font(.system(.caption, design: .monospaced))
-                }
-            }
-        }
-        .textSelection(.enabled)
-    }
-
-    private func text(_ title: String, _ body: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.headline)
-            Text(body.isEmpty ? "(none)" : body)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

@@ -161,7 +161,7 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.opaqueSidebar, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 1560)
+            .frame(width: 1120, height: 2030)
             guard let directory else { continue }
             try write(shell, to: directory, "shell-\(name).png")
         }
@@ -478,6 +478,183 @@ final class DesignShellTests: XCTestCase {
             }
         }
     }
+    // MARK: Verification & Evidence (docs/design/screens/VERIFICATION.md)
+
+    private static let sampleDiff = """
+    diff --git a/Sources/Invite.swift b/Sources/Invite.swift
+    index 3f1c2aa..9d04e1b 100644
+    --- a/Sources/Invite.swift
+    +++ b/Sources/Invite.swift
+    @@ -12,5 +12,6 @@ struct Invite {
+         let token: String
+    -    var uses = 1
+    +    var uses: Int
+    +    var revoked = false
+         let lobby: String
+     }
+    @@ -40 +41 @@
+    -+++ old marker
+    +--- new marker
+    \\ No newline at end of file
+    """
+
+    private func verification(_ validation: String = "PASS", sealed: Bool = true, decision: String = "NONE") -> VerificationState {
+        VerificationState(
+            connection: .ready(epoch: 7), admission: "Open",
+            candidate: result(Self.ids[0], sealed: sealed, validation: validation, decision: decision),
+            changedFiles: [ChangedFile(path: "Sources/Invite.swift", kind: "M", scope: "ALLOWED"),
+                           ChangedFile(path: "Tests/InviteTests.swift", kind: "A", scope: "ALLOWED"),
+                           ChangedFile(path: "Package.resolved", kind: "M", scope: "OUT_OF_SCOPE"),
+                           ChangedFile(path: "scripts/gates/current.json", kind: "M", scope: "BASELINE"),
+                           ChangedFile(path: "notes.txt", kind: "A", scope: "LATER")],
+            scope: .fail, scopeDetail: "", diff: Self.sampleDiff,
+            log: ["stdout: $ swift test", "stdout: Test Suite 'All tests' passed", "result: success"],
+            report: "swift test\nexit 0\n38 tests, 0 failures", commandPending: false)
+    }
+
+    func test_dw1_verification_states_the_core_verdict_and_never_counts_unknown_as_passed() {
+        let headline = { (s: VerificationState) in VerificationState.headline(s.candidate!) }
+        XCTAssertEqual(headline(verification()).title, "Host validation passed")
+        XCTAssertEqual(headline(verification()).state, .passed)
+        for (validation, state) in [("FAIL", EvidenceState.failed), ("UNKNOWN", .unknown), ("NOT_RUN", .notRun), ("LATER", .unknown)] {
+            XCTAssertEqual(headline(verification(validation)).title, "Not verified", validation)
+            XCTAssertEqual(headline(verification(validation)).state, state, validation)
+        }
+        let unsealed = verification(sealed: false)
+        XCTAssertEqual(headline(unsealed).title, "Not verified")
+        XCTAssertEqual(headline(unsealed).label, "No sealed result")
+        XCTAssertEqual(VerificationState.sentence(unsealed.candidate!),
+                       "Unknown and not-run checks never count as passed. This attempt has no sealed candidate.")
+        XCTAssertEqual(VerificationState.sentence(verification().candidate!),
+                       "Unknown and not-run checks never count as passed. Results apply to candidate c4c4c4c4c4c4 only.")
+        XCTAssertNil(VerificationState.validationNote(verification().candidate!))
+        XCTAssertEqual(VerificationState.validationNote(verification("UNKNOWN").candidate!),
+                       "The core could not determine the result. Never shown as passed or failed.")
+        XCTAssertEqual(VerificationState.validationNote(verification("NOT_RUN").candidate!),
+                       "Jojo has not validated this candidate. Tests the agent says it ran do not count.")
+        XCTAssertEqual(VerificationState.decision(verification().candidate!), "None recorded")
+        XCTAssertEqual(VerificationState.decision(verification(decision: "ACCEPTED").candidate!), "ACCEPTED")
+    }
+
+    func test_dw1_verification_accept_follows_the_core_rule_and_actions_need_a_connected_core() {
+        let passing = verification()
+        XCTAssertEqual(passing.candidate?.canAccept, true)
+        XCTAssertNil(passing.acceptBlocked)
+        XCTAssertNil(passing.validateBlocked)
+        XCTAssertNil(passing.rejectBlocked)
+
+        for validation in ["FAIL", "UNKNOWN", "NOT_RUN"] {
+            let state = verification(validation)
+            XCTAssertEqual(state.candidate?.canAccept, false)
+            XCTAssertEqual(state.acceptBlocked, "Unavailable: the core accepts only a passing host validation of exactly this candidate.")
+            XCTAssertNil(state.validateBlocked, "validation can run again")
+            XCTAssertNil(state.rejectBlocked, "an unverified candidate can be rejected")
+        }
+
+        var lost = passing
+        lost.connection = .channelLost("pipe closed")
+        var pending = passing
+        pending.commandPending = true
+        var empty = passing
+        empty.candidate = nil
+        let cases = [(lost, "Unavailable: the core is not connected."), (pending, "Unavailable while a command awaits the core."),
+                     (verification(decision: "REJECTED"), "Already decided: REJECTED."),
+                     (verification(sealed: false), "No sealed candidate."), (empty, "No sealed candidate.")]
+        for (state, reason) in cases {
+            XCTAssertEqual(state.acceptBlocked, reason)
+            XCTAssertEqual(state.validateBlocked, reason)
+            XCTAssertEqual(state.rejectBlocked, reason)
+        }
+    }
+
+    func test_dw1_verification_scope_and_records_say_what_the_core_reported() {
+        let state = verification()
+        XCTAssertEqual(state.changedFiles.map { VerificationState.scope($0).label },
+                       ["In scope", "In scope", "Out of scope", "Protected baseline", "Unknown"])
+        XCTAssertEqual(state.changedFiles.map { VerificationState.scope($0).state }, [.passed, .passed, .failed, .failed, .unknown])
+        XCTAssertEqual(state.scopeCounts, "2 in scope · 1 out of scope · 1 protected baseline · 1 unknown")
+        XCTAssertEqual(state.records.map(\.note), ["c4c4c4c4…c4c4", "3 records", "receipt 4", "3 lines"])
+        XCTAssertEqual(state.records.map(\.state), [.sealed, .passed, .passed, .passed])
+        XCTAssertEqual(state.console.map(\.text), state.log)
+
+        var bare = verification(sealed: false)
+        (bare.changedFiles, bare.scope, bare.diff, bare.log, bare.report) = ([], .notRun, "", [], "")
+        XCTAssertNil(bare.scopeCounts)
+        XCTAssertEqual(bare.noFiles, "No sealed candidate.")
+        XCTAssertEqual(bare.records.map(\.label), ["Not sealed", "Recorded", "Recorded", "Not loaded"])
+        XCTAssertEqual(bare.console.map(\.text), ["Reading the log records…"])
+        XCTAssertEqual(bare.reportLines.map(\.text), ["No report text loaded."])
+
+        var reading = verification()
+        (reading.changedFiles, reading.scope) = ([], .notRun)
+        XCTAssertEqual(reading.noFiles, "Reading the changed paths…")
+        reading.scope = .pass
+        XCTAssertEqual(reading.noFiles, "No changed paths.")
+    }
+
+    func test_dw1_diff_lines_are_numbered_from_their_hunk_headers() {
+        let lines = DiffLine.parse(Self.sampleDiff)
+        XCTAssertEqual(lines.map(\.kind), [.header, .header, .header, .header, .header, .context, .removed, .added, .added, .context,
+                                           .context, .header, .removed, .added, .header])
+        XCTAssertEqual(lines.map(\.number), [nil, nil, nil, nil, nil, 12, 13, 13, 14, 15, 16, nil, 40, 41, nil])
+        // Inside a hunk a line is code even when it looks like a file header.
+        XCTAssertEqual(lines[12].text, "+++ old marker")
+        XCTAssertEqual(lines[13].text, "--- new marker")
+        XCTAssertEqual(lines[6].text, "    var uses = 1")
+        XCTAssertEqual(DiffLine.parse(""), [])
+        XCTAssertEqual(DiffLine.parse("… (truncated)").map(\.kind), [.header])
+        XCTAssertEqual(DiffView.background(dark: true), RGBA(0x17171A))
+    }
+
+    /// Review aid, as above: Verification & Evidence with test rows at the opening size and
+    /// wide, and its failed, unknown, requested, disconnected and empty forms.
+    func test_dw1_verification_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        var failed = verification("FAIL")
+        failed.candidate = CandidateReview([
+            "attempt": .text(Self.ids[0]), "sealed": .bool(true), "outcome": .text("Succeeded"), "reason": .text("exit 0"),
+            "provider_terminal": .text("result: success"), "candidate": .text(String(repeating: "c4", count: 20)),
+            "log_records": .int(80),
+            "validation": .object(["state": .text("FAIL"), "detail": .text("validation command exited 1"), "receipt": .int(5),
+                                   "candidate": .text(String(repeating: "c4", count: 20)),
+                                   "reasons": .list([.text("InviteTests.testRevokesOnLobbyClose failed"),
+                                                     .text("1 changed path is outside the write scope")])]),
+            "decision": .text("NONE")])
+        var unknown = verification("UNKNOWN")
+        (unknown.changedFiles, unknown.scope, unknown.scopeDetail, unknown.diff) = ([], .unknown, "CandidateTampered", "")
+        var pending = verification()
+        pending.commandPending = true
+        var lost = verification(decision: "ACCEPTED")
+        lost.connection = .channelLost("pipe closed")
+        var closed = verification("NOT_RUN")
+        (closed.admission, closed.report) = ("Closed", "")
+        var empty = verification()
+        empty.candidate = nil
+        let opening = CGSize(width: 1120, height: 720), tall = CGSize(width: 1120, height: 1500), wide = CGSize(width: 1440, height: 1500)
+        let cases: [(String, VerificationState, CGSize)] = [
+            ("verification", verification(), opening), ("verification-tall", verification(), tall),
+            ("verification-failed", failed, wide), ("verification-unknown", unknown, tall),
+            ("verification-requested", pending, opening), ("verification-disconnected", lost, tall),
+            ("verification-not-run", closed, tall), ("verification-narrow", failed, CGSize(width: 900, height: 1900)),
+            ("verification-empty", empty, opening),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, size) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.verification), showInspector: {}) {
+                        VerificationView(state: state)
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
+        }
+    }
 }
 
 /// Every status component and button kind on a card, for the snapshot.
@@ -594,6 +771,43 @@ private struct Gallery: View {
                     }
                 }
             }
+            titled("Verification result rows") {
+                Card(.panelList) {
+                    VStack(spacing: 0) {
+                        ResultRow("Integration", scope: "crew-api", state: .failed, count: "37 / 38",
+                                  command: "./gradlew integrationTest", note: "revokes on lobby close: expected 410, got 200") {
+                            Button("Inspect Failure") {}.buttonStyle(.jojo(.secondary, compact: true))
+                        }
+                        Rectangle().fill(theme.hairline).frame(height: 1)
+                        ResultRow("Contract check", scope: "crew-api", state: .unknown, count: "n/a",
+                                  command: "./gradlew contractTest", note: "Runner killed by signal 9. No result recorded.")
+                    }
+                }
+            }
+            HStack(alignment: .top, spacing: 16) {
+                titled("Evidence rows") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Card(.panelList) {
+                            VStack(spacing: 0) {
+                                EvidenceRow("Attempt logs · T4 #2", note: "sha256 9f2c…41ab", state: .passed, label: "Hash verified")
+                                Rectangle().fill(theme.hairline).frame(height: 1)
+                                EvidenceRow("iosApp/Info.plist", note: "M", state: .failed, label: "Out of scope", mono: true)
+                            }
+                        }
+                    }
+                }
+                titled("Diff, input field and requested notice") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        DiffView(DiffLine.parse("@@ -41,3 +41,4 @@ fun close(lobby: Lobby) {\n     lobby.state = CLOSED\n-    return 200\n+    invites.revokeAll(lobby)\n+    return 410\n }"))
+                        HStack(spacing: 8) {
+                            InputField(prompt: "Attempt identity (32 hex)", text: .constant(""), mono: true).frame(width: 240)
+                            Button("Load") {}.buttonStyle(.jojo(.secondary, compact: true))
+                        }
+                        RequestedNotice()
+                    }
+                }
+            }
+            .environment(\.offscreen, true)
             StateBlock(symbol: "folder", title: "No projects yet",
                        message: "Create a project or import a folder that already has Git repositories.") {
                 Button("Create Project") {}.buttonStyle(.jojo(.primary, compact: true))
