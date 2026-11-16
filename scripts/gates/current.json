@@ -1,6 +1,6 @@
 {
-  "artifact": "gate-m1",
-  "scope": "Tree after M1 (Claude Code adapter, production stream profile for claude 2.1.311, helper --claude-* options, Start dispatch by provider). Offline; fixture agents only; no live provider execution, credential access, push or merge.",
+  "artifact": "gate-dw1",
+  "scope": "Tree after design wave 1, app shell (theme tokens for dark and light, sidebar, toolbar, status components; Swift app only), on top of M1 (Claude Code adapter, production stream profile for claude 2.1.311, helper --claude-* options, Start dispatch by provider). Offline; fixture agents only; no live provider execution, credential access, push or merge.",
   "boundary_tests_min": 105,
   "rust": {
     "passed_min": 420,
@@ -43,7 +43,7 @@
     ]
   },
   "swift": {
-    "tests_min": 39
+    "tests_min": 49
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,

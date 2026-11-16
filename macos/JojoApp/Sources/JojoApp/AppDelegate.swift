@@ -216,8 +216,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func showPrimary() {
         if primary == nil {
-            let window = makeWindow(title: "Jojo", size: NSSize(width: 860, height: 600),
+            let window = makeWindow(title: "Jojo", size: NSSize(width: 1120, height: 720),
                                     content: MainView(model: model, delegate: self))
+            // The shell draws its own toolbar strip and sidebar under the system title bar;
+            // traffic lights, window shadow and corners stay the system's.
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
             window.identifier = NSUserInterfaceItemIdentifier("jojo.primary")
             primary = window
         }

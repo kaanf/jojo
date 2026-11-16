@@ -257,3 +257,32 @@ The component board is drawn in dark only, with literal colors. Where it and the
 | Dashed outlines, stepper rings and connectors | white at 12% to 32% | no token; no light value |
 | Banner tint and outline | status color at 8% and 28% | differ from the `*Tint` and `*Ring` tokens |
 | Pressed and focused states | not drawn | not defined |
+
+## 13. Implementation notes: app shell and status components (design wave 1)
+
+Built in `macos/JojoApp/Sources/JojoApp`: `Theme.swift` (tokens, typography, card elevation), `StatusComponents.swift` (pills, tag, counter, key cap, buttons), `Shell.swift` (sidebar, toolbar, content). Nothing in this section is from the canvas; these are the values the code needed that sections 1 to 4 do not have.
+
+| Point | Value in the app |
+|---|---|
+| Window | System window with a full-size content view and a transparent, untitled title bar. The toolbar strip starts at the top of the window; the sidebar content starts below the traffic lights. Opens at 1120 × 720, minimum 900 × 620 |
+| Appearance | Follows the system. There is no switch in the app yet |
+| Sidebar glyphs (SF Symbols) | Dashboard `square.grid.2x2`, Projects `folder`, Approval Inbox `tray`, Recovery Center `cross.case`, Feature Chat `bubble.left.and.bubble.right`, Specifications `doc.text`, Execution Plan `list.bullet.indent`, Agent Runs `play.circle`, Source Control `arrow.triangle.branch`, Verification & Evidence `checkmark.shield`, Activity & Audit `clock.arrow.circlepath`, Settings & Providers `gearshape` |
+| Operational pill symbols | Blocked `exclamationmark.triangle.fill`, Paused `pause.fill` |
+| Evidence pill symbols | Passed `checkmark`, Sealed `lock.fill`, Failed `xmark`, Incomplete `circle.lefthalf.filled`, Needs approval `hand.raised.fill`, Not run `minus`, Skipped `forward.fill`, Invalidated `slash.circle`, Unknown a bold "?" |
+| Toolbar symbols | Refresh `arrow.clockwise`, Show Inspector `sidebar.right` |
+| Pressed button | Opacity 0.8. A custom button style has no system pressed state |
+| Dashed outline of Unknown, light | Black at 30% (dark: white at 30%, from the canvas) |
+| Counter on a selected sidebar item | `onAccent` text on white at 20% |
+| Key cap | Height 18, horizontal padding 5 |
+| Search field to first item | 8 |
+| Search field | Drawn disabled (opacity 0.42) with the tooltip "The command palette is not available yet." until the palette exists |
+| Feature switcher | No project or feature exists in the helper yet. It shows "No project" and "No feature selected" on a `tileNeutral` tile, never an example |
+| Status well | Dot: `ok` for admission `Open`, `danger` for any other reported value, an empty ring when unknown. Admission is stated only while the helper connection is ready; otherwise "Admission unknown". The identifier is the helper epoch. The second line is the helper connection, because provider availability is not reported yet |
+| Toolbar breadcrumb | "Jojo › screen", and "Jojo › System › screen" for the System group, until projects and features exist |
+| Toolbar, command pending | A "Requested" pill (Waiting form) while `WorkspaceModel.commandPending` is true |
+| Sidebar counters | Recovery Center: subjects on hold, `warn`. Agent Runs: attempts, plain count |
+| Destinations without a screen | The Empty form of STATES.md with the destination's glyph and "… is not built yet" |
+
+The five screens that existed before the shell are shown unchanged under these destinations until each is redesigned: Runs under Agent Runs, Review under Approval Inbox, Recovery under Recovery Center, Start under Execution Plan, Candidate under Verification & Evidence.
+
+Review aid: `JOJO_SNAPSHOT_DIR=<directory> swift test --filter DesignShellTests` writes `shell-dark.png` and `shell-light.png` (the shell with every status component and button kind), rendered off screen.

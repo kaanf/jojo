@@ -13,16 +13,18 @@ Read this first in a new session. Updated 2026-11-16. Update it whenever a step 
 | **Refactor R-01** (typed protocol messages) | **Done** (2026-11-16). Details: [DESIGN_ROADMAP_DIFFERENCES.md](DESIGN_ROADMAP_DIFFERENCES.md), E4 |
 | Refactor R-02 (split the long functions) | Optional, not started. Needs its own GO |
 | **M1** (Claude Code adapter) | **Done except automatic discovery (D3).** Details: DESIGN_ROADMAP_DIFFERENCES.md, E5 |
-| Design system as text | Done (`docs/design/`). No screen is implemented yet |
-| Design wave 1, M2 … M6 | Not started |
+| Design system as text | Done (`docs/design/`) |
+| **Design wave 1, app shell** | **Done** (2026-11-16): window, sidebar, toolbar, theme tokens for dark and light, status components (pills, tag, counter, buttons). Details: `docs/design/COMPONENTS.md`, section 13 |
+| Design wave 1, screens | Not started. The five old screens run unchanged inside the shell |
+| M2 … M6 | Not started |
 
-## Next step: design wave 1
+## Next step: design wave 1, the screens
 
-Chosen by the human on 2026-11-16. Build from `docs/design/` (system fonts): app shell, sidebar, status model, then the screens whose data exists today (Recovery Center and launch review, Agent Runs, Source Control local diff and scope, Verification, Approval Inbox for spec and plan, Specifications, Settings, Activity). Write each screen down in `docs/design/` from its canvas board before building it. The other two candidates stay open:
+Chosen by the human on 2026-11-16. The app shell, sidebar and status components are built. Next: the screens whose data exists today (Recovery Center and launch review, Agent Runs, Source Control local diff and scope, Verification, Approval Inbox for spec and plan, Specifications, Settings, Activity). Write each screen down in `docs/design/` from its canvas board before building it. The other two candidates stay open:
 
 
 1. **D3, the rest of M1.** Find the Claude Code and Codex executables automatically, record version and digest per run, warn instead of refusing when the binary changes. Needs a decision first: where discovery runs and how the version is learned without running the CLI (E5, "Not done").
-2. **Design wave 1.** App shell, sidebar, status model and the screens whose data exists today, built from `docs/design/`.
+2. **Design wave 1, the screens.** The screens whose data exists today, built from `docs/design/` inside the shell that now exists.
 3. **M2.** Feature Chat lead agent. It can now run on either CLI.
 
 The roadmap order is in [SOURCE_FIRST_REUSE_MAP.md](SOURCE_FIRST_REUSE_MAP.md), section 3. Refactor R-02 stays optional and needs its own GO.
@@ -47,7 +49,7 @@ python3 scripts/verify.py              # everything, including 17 GUI scenarios 
 python3 scripts/verify.py --skip gui   # without the GUI stage; result is passed but complete: false
 ```
 
-Requirements live in `scripts/gates/current.json`; the result goes to `verification/gate-m1-result.json` and `.log` (earlier results stay in `gate-m0-…` and `gate-r01-…`). Last full run (2026-11-16, after M1): 105 script tests, 420 Rust tests, 39 Swift tests, 17 GUI scenarios, no failures. Rust test names in `required` are written as the test runner prints them, with the module path for unit tests (`protocol::tests::…`).
+Requirements live in `scripts/gates/current.json`; the result goes to `verification/gate-dw1-result.json` and `.log` (earlier results stay in `gate-m0-…`, `gate-r01-…` and `gate-m1-…`). Last full run (2026-11-16, after the app shell of design wave 1): 105 script tests, 420 Rust tests, 49 Swift tests, 17 GUI scenarios, no failures. Rust test names in `required` are written as the test runner prints them, with the module path for unit tests (`protocol::tests::…`).
 
 The twelve P2-04 rehearsal scenarios are run by hand (they passed after R-01; evidence in `~/JojoDisposable/r01-rehearsal/20261116T034931Z`):
 
@@ -99,4 +101,7 @@ When a step adds tests, raise the minimums and add the new test names to `requir
 - Fourteen historical reports and the nine `research/upstream` pins are hash-checked by the gate. Add new documents; do not edit those.
 - The five reference repositories of the reuse map were only cloned to a temporary directory. Clone them again at the pinned SHAs when their files are needed; adding them under `research/upstream` needs the preservation baseline to be extended.
 - Live evidence of P2-05: `/Users/kaan/JojoDisposable/p2-05/20261115T133947Z`.
+- Design work: read `docs/design/` before the canvas. `JOJO_SNAPSHOT_DIR=<directory> swift test --filter DesignShellTests` (in `macos/JojoApp`) writes the shell and every status component as PNG files in dark and light, off screen; look at them instead of opening the app. New components go into the `Gallery` view of `DesignShellTests.swift`.
+- The Swift package keeps one test target. This toolchain runs each test target as its own bundle and the gate reads the last test summary only, so tests in a second target would not be counted.
+- The GUI scenarios drive the model through `--ui-script`, not the views; they do not notice a broken layout.
 - The human writes in Turkish and is answered in Turkish; project documents are in English.

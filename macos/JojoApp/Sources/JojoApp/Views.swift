@@ -1,54 +1,47 @@
 import JojoCore
 import SwiftUI
 
-/// Minimal review/lifecycle shell. Not a marketing design; no terminal emulator.
+/// The primary window: the app shell around the review/lifecycle screens. The five screens
+/// that exist keep their state while another destination is shown. No terminal emulator.
 struct MainView: View {
     @ObservedObject var model: AppModel
     let delegate: AppDelegate
     @State private var subject = ""
+    @State private var screen = Screen.agentRuns
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ConnectionHeader(model: model)
-            QuitBanner(model: model)
-            TabView {
-                RunsView(model: model).tabItem { Text("Runs") }
-                ReviewView(model: model, subject: $subject).tabItem { Text("Review") }
-                RecoveryView(model: model).tabItem { Text("Recovery") }
-                StartView(model: model).tabItem { Text("Start") }
-                CandidateView(model: model).tabItem { Text("Candidate") }
+        Themed {
+            AppShell(model: model, screen: $screen, showInspector: { delegate.showAuxiliary() }) {
+                VStack(alignment: .leading, spacing: 8) {
+                    QuitBanner(model: model)
+                    ZStack(alignment: .topLeading) {
+                        shown(.agentRuns) { RunsView(model: model) }
+                        shown(.approvalInbox) { ReviewView(model: model, subject: $subject) }
+                        shown(.recoveryCenter) { RecoveryView(model: model) }
+                        shown(.executionPlan) { StartView(model: model) }
+                        shown(.verification) { CandidateView(model: model) }
+                        if !MainView.built.contains(screen) { NotBuiltYet(screen: screen) }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    if !model.workspace.status.isEmpty {
+                        Text(model.workspace.status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                }
+                .padding(EdgeInsets(top: 20, leading: 20, bottom: 28, trailing: 20))
             }
-            if !model.workspace.status.isEmpty {
-                Text(model.workspace.status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-            }
+            .overlay { QuitOverlay(model: model) }
         }
-        .padding(12)
-        .overlay { QuitOverlay(model: model) }
-    }
-}
-
-struct ConnectionHeader: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        HStack {
-            Text("Helper: \(describe(model.client.connection))").font(.headline)
-            Spacer()
-            Text("Admission: \(model.workspace.admission.isEmpty ? "unknown" : model.workspace.admission)")
-            Button("Refresh") { model.workspace.refresh() }
-        }
+        .frame(minWidth: 900, minHeight: 620)
     }
 
-    private func describe(_ c: HelperConnection) -> String {
-        switch c {
-        case .notStarted: return "not started"
-        case .launchFailed(let r): return "launch failed — \(r)"
-        case .handshaking: return "connecting"
-        case .ready(let epoch): return "connected (epoch \(epoch), pid \(model.client.processIdentifier))"
-        case .incompatible(let epoch): return "protocol mismatch (epoch \(epoch)); diagnostics only"
-        case .channelLost(let r): return "channel lost — state unknown, not assumed stopped (\(r))"
-        case .ended(let s): return "exited with status \(s) — state unknown until reopen inspection"
-        }
+    /// Destinations that have a screen today; the others show `NotBuiltYet`.
+    static let built: Set<Screen> = [.agentRuns, .approvalInbox, .recoveryCenter, .executionPlan, .verification]
+
+    private func shown(_ target: Screen, @ViewBuilder _ content: () -> some View) -> some View {
+        content()
+            .opacity(screen == target ? 1 : 0)
+            .allowsHitTesting(screen == target)
+            .accessibilityHidden(screen != target)
     }
 }
 

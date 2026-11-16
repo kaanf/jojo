@@ -14,6 +14,7 @@ let package = Package(
         .target(name: "JojoAppBoundary"),
         .target(name: "JojoCore"),
         .executableTarget(name: "JojoApp", dependencies: ["JojoCore", "JojoAppBoundary"]),
-        .testTarget(name: "JojoCoreTests", dependencies: ["JojoCore"]),
+        // One test target: the gate reads the summary of a single test bundle.
+        .testTarget(name: "JojoCoreTests", dependencies: ["JojoCore", "JojoApp"]),
     ]
 )
