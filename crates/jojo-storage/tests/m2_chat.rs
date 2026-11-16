@@ -196,6 +196,76 @@ impl H {
             .count()
     }
 
+    /// Approves exactly the review bundle the helper returns for `subject`.
+    fn approve(&mut self, subject: &Json) -> Json {
+        let bundle = self.ok("ReviewBundle", object([("subject", subject.clone())]));
+        let Json::Object(mut fields) = bundle else {
+            panic!("no review bundle for {subject:?}")
+        };
+        let revision = fields
+            .iter()
+            .position(|(k, _)| k == "revision")
+            .map(|i| fields.remove(i).1)
+            .unwrap();
+        fields.push(("action".into(), text("Approve")));
+        self.next += 1;
+        let e = Envelope {
+            major: 1,
+            minor: 2,
+            session: OpaqueId(5),
+            epoch: self.s().engine.epoch().0,
+            request: OpaqueId(self.next),
+            revision: Some(uint(&revision).unwrap()),
+            kind: "HumanDecision".into(),
+            payload: Json::Object(fields),
+        };
+        let r = self.s().request(&e);
+        assert_eq!(r.kind, "Response", "{:?}", r.payload);
+        r.payload
+    }
+
+    fn approved(&mut self, subject: &Json) -> bool {
+        let subject = ArtifactId(id(subject).unwrap());
+        self.read(|v| v.current_artifact_approval(subject))
+            .is_some()
+    }
+
+    /// Discovery to an approved requirements document: ask, answer, draft, approve.
+    fn approved_requirements(&mut self, repository: &str) -> Json {
+        let chat = self.turn(
+            4001,
+            repository,
+            "Codex",
+            "slugify should be usable from the shell.\nfixture: lead",
+        );
+        for question in items(field(&items(field(&chat, &["turns"]))[0], &["questions"])).to_vec() {
+            self.ok(
+                "AnswerQuestion",
+                object([
+                    ("question", field(&question, &["question"]).clone()),
+                    ("revision", field(&question, &["revision"]).clone()),
+                    ("action", text("Answer")),
+                    ("answer", text("As simple as possible.")),
+                ]),
+            );
+        }
+        let chat = self.turn(4002, repository, "ClaudeCode", "");
+        let document = field(&chat, &["prd", "document"]).clone();
+        self.approve(&document);
+        assert!(self.approved(&document));
+        document
+    }
+
+    fn plan_payload(&self, repository: &str, provider: &str, message: &str) -> Json {
+        object([
+            ("feature", identity(OpaqueId(FEATURE))),
+            ("kind", text("Plan")),
+            ("repository", text(repository)),
+            ("provider", text(provider)),
+            ("message", text(message)),
+        ])
+    }
+
     fn chat(&mut self, after: u64) -> Json {
         self.ok(
             "FeatureChat",
@@ -460,4 +530,214 @@ fn m2_a_turn_left_by_a_dead_helper_is_closed_when_the_next_helper_starts() {
     let row = &items(field(&chat, &["turns"]))[1];
     assert_eq!(field(row, &["ordinal"]), &number(2));
     assert_eq!(str_of(row, &["state"]), "Replied");
+}
+
+#[test]
+fn m2_a_plan_turn_drafts_a_multi_step_plan_that_the_human_approves_document_by_document() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let prd = h.approved_requirements(&repository);
+    // The plan turn reads the approved revision and drafts the ADR at once.
+    let payload = h.plan_payload(&repository, "Codex", "Keep the steps small.");
+    let r = h.frame(4003, 2, "ChatTurn", payload);
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    until(|| h.s().workers.reap());
+    let prompt = h.chat_text(identity(OpaqueId(4003)), "Prompt");
+    assert!(str_of(&prompt, &["text"]).contains("# Product requirements (approved revision 1)"));
+    let chat = h.chat(0);
+    let row = items(field(&chat, &["turns"])).last().unwrap().clone();
+    assert_eq!(str_of(&row, &["kind"]), "Plan");
+    assert_eq!(str_of(&row, &["state"]), "Replied", "{row:?}");
+    let plan = field(&row, &["plan"]).clone();
+    assert_eq!(field(&plan, &["drafted"]), &Json::Bool(false));
+    let keys: Vec<&str> = items(field(&plan, &["steps"]))
+        .iter()
+        .map(|s| str_of(s, &["key"]))
+        .collect();
+    assert_eq!(keys, ["core", "docs", "check"]);
+    let asked = items(field(&row, &["questions"])).to_vec();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(str_of(&asked[0], &["step"]), "docs");
+    assert_eq!(field(&asked[0], &["blocking"]), &Json::Bool(true));
+    // A question about one step leaves the requirements approval alone.
+    assert!(h.approved(&prd));
+    let (adr, plan_id, validation) = (
+        field(&plan, &["adr"]).clone(),
+        field(&plan, &["plan"]).clone(),
+        field(&plan, &["validation"]).clone(),
+    );
+    assert!(!h.approved(&adr));
+    assert_eq!(
+        h.ok("ReviewBundle", object([("subject", plan_id.clone())])),
+        Json::Null
+    );
+
+    // Approving the ADR turns the draft into its validation plan and execution plan,
+    // neither approved.
+    let decided = h.approve(&adr);
+    assert!(get(&decided, "lead_plan").is_err(), "{decided:?}");
+    let chat = h.chat(0);
+    let row = items(field(&chat, &["turns"])).last().unwrap().clone();
+    assert_eq!(field(&row, &["plan", "drafted"]), &Json::Bool(true));
+    assert!(!h.approved(&plan_id) && !h.approved(&validation));
+    let plan_subject = ArtifactId(id(&plan_id).unwrap());
+    let stored = h
+        .read(|v| {
+            let revision = v.review_bundle(plan_subject)?.unwrap().revision;
+            v.execution_plan(plan_subject, revision)
+        })
+        .unwrap();
+    let steps: Vec<OpaqueId> = items(field(&row, &["plan", "steps"]))
+        .iter()
+        .map(|s| id(field(s, &["step"])).unwrap())
+        .collect();
+    assert_eq!(
+        stored
+            .plan
+            .execution
+            .nodes
+            .iter()
+            .map(|n| n.id)
+            .collect::<Vec<_>>(),
+        steps
+    );
+    let mut edges: Vec<(OpaqueId, OpaqueId)> = stored
+        .plan
+        .execution
+        .edges
+        .iter()
+        .map(|e| (e.prerequisite.id, e.dependent.id))
+        .collect();
+    edges.sort();
+    let mut expected = vec![(steps[0], steps[2]), (steps[1], steps[2])];
+    expected.sort();
+    assert_eq!(edges, expected);
+    for edge in &stored.plan.execution.edges {
+        let jojo_domain::dependency::Predicate::Evidence { requirement, .. } = &edge.predicate
+        else {
+            panic!("a step edge is an evidence predicate");
+        };
+        assert_eq!(
+            requirement.kind,
+            jojo_domain::dependency::EvidenceKind::ValidationPassed
+        );
+    }
+    let providers: Vec<_> = stored.plan.resources.iter().map(|r| r.provider).collect();
+    assert_eq!(
+        providers,
+        [
+            jojo_domain::provider::ProviderKind::Codex,
+            jojo_domain::provider::ProviderKind::ClaudeCode,
+            jojo_domain::provider::ProviderKind::ClaudeCode
+        ]
+    );
+
+    // Each document is approved on its own, then the plan is what the core runs from.
+    h.approve(&validation);
+    h.approve(&plan_id);
+    assert!(h.approved(&prd) && h.approved(&adr));
+    assert!(h.approved(&validation) && h.approved(&plan_id));
+    let approved = h.ok("ApprovedPlan", object([("after", Json::Null)]));
+    assert_eq!(items(field(&approved, &["steps"])).len(), 3);
+    assert_eq!(items(field(&approved, &["edges"])).len(), 2);
+
+    // The blocking question about "docs" holds that step's Start, and only that.
+    let start = |step: &OpaqueId| {
+        object([
+            ("prd", prd.clone()),
+            ("adr", adr.clone()),
+            ("plan", plan_id.clone()),
+            ("validation", validation.clone()),
+            ("step", identity(*step)),
+        ])
+    };
+    assert_eq!(
+        h.refused("Start", start(&steps[1])),
+        "StepQuestionOpen: a blocking question about this step is unanswered"
+    );
+    h.ok(
+        "AnswerQuestion",
+        object([
+            ("question", field(&asked[0], &["question"]).clone()),
+            ("revision", field(&asked[0], &["revision"]).clone()),
+            ("action", text("Answer")),
+            ("answer", text("zsh and bash.")),
+        ]),
+    );
+    let chat = h.chat(0);
+    let row = items(field(&chat, &["turns"])).last().unwrap().clone();
+    let answered = items(field(&row, &["questions"]))[0].clone();
+    assert_eq!(str_of(&answered, &["answer"]), "zsh and bash.");
+    let full = h.chat_text(field(&answered, &["question"]).clone(), "Answer");
+    assert_eq!(str_of(&full, &["text"]), "zsh and bash.");
+    // Answering a step question changed no approval.
+    assert!(h.approved(&prd) && h.approved(&plan_id));
+    let r = h.at(2, "Start", start(&steps[1]));
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    assert_eq!(str_of(&r.payload, &["dispatch"]), "launched");
+    until(|| h.s().workers.reap());
+    let attempt = id(field(&r.payload, &["attempt"])).unwrap();
+    let result = h
+        .read(|v| v.attempt_result(attempt))
+        .expect("sealed result");
+    assert_eq!(
+        result.outcome,
+        jojo_domain::attempt::AttemptOutcome::Succeeded,
+        "{result:?}"
+    );
+}
+
+#[test]
+fn m2_a_plan_turn_needs_approved_requirements_and_a_feature_question_stales_them() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let early = h.plan_payload(&repository, "Codex", "");
+    let first = h.turn_payload(&repository, "Codex", "objective\nfixture: lead");
+    let r = h.frame(4009, 2, "ChatTurn", first);
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    until(|| h.s().workers.reap());
+    assert_eq!(
+        h.refused("ChatTurn", early),
+        "TurnRefused: a plan turn needs the approved requirements document"
+    );
+    // The feature already began, so its requirements come from the next turns.
+    let chat = h.chat(0);
+    for question in items(field(&items(field(&chat, &["turns"]))[0], &["questions"])).to_vec() {
+        h.ok(
+            "AnswerQuestion",
+            object([
+                ("question", field(&question, &["question"]).clone()),
+                ("revision", field(&question, &["revision"]).clone()),
+                ("action", text("Answer")),
+                ("answer", text("As simple as possible.")),
+            ]),
+        );
+    }
+    let chat = h.turn(4011, &repository, "ClaudeCode", "");
+    let prd = field(&chat, &["prd", "document"]).clone();
+    h.approve(&prd);
+    let payload = h.plan_payload(&repository, "ClaudeCode", "fixture: lead-plan-asks");
+    let r = h.frame(4010, 2, "ChatTurn", payload);
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    until(|| h.s().workers.reap());
+    let chat = h.chat(0);
+    let row = items(field(&chat, &["turns"])).last().unwrap().clone();
+    assert_eq!(str_of(&row, &["state"]), "Replied");
+    assert_eq!(field(&row, &["plan"]), &Json::Null);
+    let asked = items(field(&row, &["questions"])).to_vec();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(field(&asked[0], &["step"]), &Json::Null);
+    assert_eq!(
+        str_of(&asked[0], &["prompt"]),
+        "Must the tool also run on Windows?"
+    );
+    // A new question about the feature is part of what the approval bound.
+    assert!(!h.approved(&prd));
+    assert_eq!(field(&chat, &["prd", "approved"]), &Json::Bool(false));
+    assert_eq!(field(&chat, &["prd", "ready"]), &Json::Bool(false));
+    let again = h.plan_payload(&repository, "Codex", "");
+    assert_eq!(
+        h.refused("ChatTurn", again),
+        "TurnRefused: a plan turn needs the approved requirements document"
+    );
 }

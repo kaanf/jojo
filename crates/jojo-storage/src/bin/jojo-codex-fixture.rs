@@ -216,6 +216,13 @@ fn lead_draft(title: &str) -> String {
     )
 }
 
+/// A plan reply: two independent steps on different providers and one that depends on
+/// both, with a blocking question about one step only.
+const LEAD_PLAN: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Three steps: the entry point and the usage text in parallel, then a check of both.","adr":"# Decision\nOne entry point beside the library; no new dependency.\nfixture: develop README.md","steps":[{"key":"core","title":"Add the entry point","provider":"Codex","depends_on":[],"write_scope":["src/lib.rs"],"baseline":[],"tests":["unit"],"command":["/usr/bin/true"]},{"key":"docs","title":"Describe the usage","provider":"ClaudeCode","depends_on":[],"write_scope":["README.md"],"baseline":[],"tests":["readme"],"command":["/usr/bin/true"]},{"key":"check","title":"Check the entry point","provider":"ClaudeCode","depends_on":["core","docs"],"write_scope":["tests"],"baseline":["src/lib.rs"],"tests":["check"],"command":["/usr/bin/true"]}],"questions":[{"prompt":"Which shells must the usage text cover?","blocking":true,"step":"docs"}]}"##;
+
+/// A plan reply that cannot be drafted yet: it asks about the feature as a whole.
+const LEAD_PLAN_ASKS: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Before cutting the work I need one answer.","adr":"# Decision\nPending.","steps":[{"key":"core","title":"Add the entry point","provider":"Codex","depends_on":[],"write_scope":["src/lib.rs"],"baseline":[],"tests":["unit"],"command":["/usr/bin/true"]}],"questions":[{"prompt":"Must the tool also run on Windows?","blocking":true,"step":null}]}"##;
+
 /// What the stand-in lead agent does in a turn (M2).
 enum Lead {
     /// Reads, then ends with this last message.
@@ -232,7 +239,10 @@ fn lead(scenario: &str, prompt: &str, args: &[String]) -> Lead {
     if let Some(seconds) = scenario.strip_prefix("lead-hang ") {
         return Lead::Hang(seconds.parse::<u64>().unwrap_or(0).min(600));
     }
+    let planning = prompt.contains("jojo-lead-plan-v1");
     match scenario {
+        "lead" if planning => Lead::Reply(LEAD_PLAN.into()),
+        "lead-plan-asks" => Lead::Reply(LEAD_PLAN_ASKS.into()),
         "lead" if prompt.contains("# Questions and answers so far\nNone.") => {
             Lead::Reply(LEAD_QUESTIONS.into())
         }

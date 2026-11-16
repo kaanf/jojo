@@ -625,7 +625,8 @@ impl Service {
                     DecisionVerb::Reject => DecisionAction::Reject,
                     DecisionVerb::Revoke => DecisionAction::Revoke,
                 };
-                self.engine
+                let decided = self
+                    .engine
                     .human_decide(
                         CommandId(e.request),
                         HumanOrigin::TrustedUi {
@@ -634,8 +635,31 @@ impl Service {
                         review,
                         action,
                     )
-                    .map(receipt)
-                    .map_err(|e| format!("{e:?}"))
+                    .map_err(|e| format!("{e:?}"))?;
+                // M2: an approved ADR lets a lead plan draft become its plan and
+                // validation plan, both unapproved. Nothing runs when nothing waits.
+                drop(reader);
+                let pending = self
+                    .engine
+                    .reader()
+                    .and_then(|mut r| r.read(|v| v.lead_plans_pending()))
+                    .map_err(|e| e.to_string())?;
+                let advanced = if pending && !decided.replayed {
+                    self.command("AdvanceLeadPlans", d.subject.0, |tx| {
+                        tx.advance_lead_plans().map(|n| format!("advanced {n}"))
+                    })
+                } else {
+                    Ok(String::new())
+                };
+                // The decision is committed either way; a draft that could not become a
+                // plan is reported beside it and stays as it was.
+                let Json::Object(mut fields) = receipt(decided) else {
+                    unreachable!("receipt is an object")
+                };
+                if let Err(why) = advanced {
+                    fields.push(("lead_plan".into(), text(format!("PlanNotDrafted: {why}"))));
+                }
+                Ok(Json::Object(fields))
             }
             RequestKind::PrepareClose
             | RequestKind::CancelClose

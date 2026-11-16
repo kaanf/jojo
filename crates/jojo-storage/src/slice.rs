@@ -519,6 +519,25 @@ impl Tx<'_> {
             return Err(deny("CapacityOne: a lead turn is active"));
         }
         let step_id = id_to_text(request.step.id);
+        // M2: a blocking question the lead asked about this step, and only this step,
+        // holds its Start until a human answers or defers it.
+        if self
+            .conn
+            .query_optional(
+                "SELECT 1 FROM step_questions q
+                 JOIN aggregates a ON a.kind='step_question' AND a.id=q.question
+                 WHERE q.step=?1 AND a.state='BLOCKING'
+                   AND NOT EXISTS(SELECT 1 FROM step_answers s WHERE s.question=q.question)
+                 LIMIT 1",
+                &[Value::Text(&step_id)],
+                |r| r.int(0),
+            )?
+            .is_some()
+        {
+            return Err(deny(
+                "StepQuestionOpen: a blocking question about this step is unanswered",
+            ));
+        }
         let revision = Value::Int(crate::model::to_db(request.step.revision.0)?);
         if self
             .conn

@@ -651,7 +651,7 @@ fn m2_acceptance_holds_admission_capacity_and_the_shape_of_a_feature() {
         t.cmd(|tx| tx.finish_turn(OpaqueId(60), TurnOutcome::Failed, "again", None, &[])),
         Err("TurnFinished".into())
     );
-    // A second repository cannot join the feature; a plan turn is not built at this layer.
+    // A second repository cannot join the feature; a plan needs approved requirements.
     let elsewhere = t.base.join("disposable/other");
     fs::create_dir_all(&elsewhere).unwrap();
     git(
@@ -680,7 +680,7 @@ fn m2_acceptance_holds_admission_capacity_and_the_shape_of_a_feature() {
             kind: TurnKind::Plan,
             ..t.request(62, ProviderKind::Codex, "")
         }),
-        "TurnRefused: plan turns are not available"
+        "TurnRefused: a plan turn needs the approved requirements document"
     );
     // The other feature can now begin, in its own order.
     t.accept(&other).unwrap();

@@ -19,22 +19,30 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::RecvTimeoutError;
 
+use jojo_domain::dependency::{
+    ApprovalBinding, DEPENDENCY_SCHEMA, Edge, EvidenceBinding, EvidenceKind, EvidenceRequirement,
+    ExecutionPlan, Graph, GraphKind, NodeRef, Predicate, Source, SourceRevision, StepInputs,
+};
 use jojo_domain::identity::{ArtifactId, FeatureId, OpaqueId, QuestionId, RepositoryId, Revision};
 use jojo_domain::ipc::{identity, number, object, text};
 use jojo_domain::json::Json;
 use jojo_domain::planner::{
-    self, Exchange, LeadReply, MAX_HUMAN_TEXT_BYTES, TurnKind, TurnSpec, discover_prompt,
+    self, Exchange, LeadReply, MAX_HUMAN_TEXT_BYTES, PlanDraft, TurnKind, TurnSpec,
+    discover_prompt, plan_prompt,
 };
 use jojo_domain::protocol::{ChatPart, QuestionAction};
 use jojo_domain::provider::{
     EventPayload, MAX_PROMPT_BYTES, ProviderFingerprint, ProviderKind, Stream, TerminalStatus,
 };
+use jojo_domain::scheduler::{ResourceMode, StepResources};
+use jojo_domain::validation::CANDIDATE_OUTPUT;
 
 use crate::artifacts::{Author, PreparedPrd, Provenance, QuestionDisposition, version};
 use crate::digest::sha256_hex;
 use crate::engine::{Engine, ReadView};
 use crate::error::{CommandError, StorageError, TxError};
 use crate::launch::{LaunchContext, LaunchHooks, StopPlan};
+use crate::model::AggregateKey;
 use crate::model::text_enum;
 use crate::model::{
     Admission, CommandId, CommandRequest, EngineEpoch, EventSeq, from_db, id_from_text, id_to_text,
@@ -43,6 +51,7 @@ use crate::model::{
 use crate::process::{
     ExitObservation, ProcessLaunch, ProcessMessage, Signal, SignalOutcome, SpawnFailure, Supervised,
 };
+use crate::slice::{SLICE_ENVIRONMENT, SLICE_PERMISSION};
 use crate::sqlite::{Connection, Value};
 use crate::tx::Tx;
 
@@ -50,8 +59,14 @@ use crate::tx::Tx;
 pub const TURN_TIMEOUT_MILLIS: u64 = 10 * 60 * 1000;
 pub const TURN_MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
 pub const TURN_MAX_FRAME_BYTES: u64 = 1024 * 1024;
-/// Identities a reply may need: a PRD, five questions, six steps, three plan subjects.
-pub const TURN_REPLY_IDS: usize = 16;
+/// Identities a reply may need: a PRD or three plan subjects, five questions, six steps
+/// and the fifteen edges six ordered steps can have at most.
+pub const TURN_REPLY_IDS: usize = 32;
+/// How old the evidence that a prerequisite step passed its validation may be when a
+/// dependent step is admitted. A draft value; the human approves it with the plan.
+pub const STEP_EVIDENCE_MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// Aggregate kind of a question about one step; its state is the question's disposition.
+pub const STEP_QUESTION_KIND: &str = "step_question";
 const MAX_DETAIL_BYTES: usize = 1024;
 /// Bytes of turn rows one chat page carries before it stops (one row always fits).
 pub const CHAT_PAGE_BYTES: usize = 40 * 1024;
@@ -243,6 +258,158 @@ fn excerpt(body: &str) -> (Json, Json) {
     (text(cut), Json::Bool(complete))
 }
 
+/// A stable identity for the edge from one step to another.
+fn edge_id(prerequisite: OpaqueId, dependent: OpaqueId) -> OpaqueId {
+    let digest = sha256_hex(&[
+        b"jojo.lead-plan-edge/1",
+        id_to_text(prerequisite).as_bytes(),
+        id_to_text(dependent).as_bytes(),
+    ]);
+    OpaqueId(u128::from_str_radix(&digest[..32], 16).unwrap_or(0) | 1)
+}
+
+/// The execution plan of a lead draft: one node per step, one edge per dependency whose
+/// predicate is that the prerequisite step passed its host validation, every step from
+/// the same repository and base commit the turn read, on its own provider.
+fn lead_plan(
+    draft: &PlanDraft,
+    steps: &[OpaqueId],
+    repository: RepositoryId,
+    base: &str,
+    validation: &str,
+    approvals: Vec<ApprovalBinding>,
+) -> ExecutionPlan {
+    let node = |id: OpaqueId| NodeRef {
+        id,
+        revision: Revision(1),
+    };
+    let source = Source {
+        repository,
+        revision: SourceRevision::Commit(base.to_owned()),
+    };
+    let validation_digest = sha256_hex(&[validation.as_bytes()]);
+    let mut edges = Vec::new();
+    for (index, step) in draft.steps.iter().enumerate() {
+        for key in &step.depends_on {
+            let Some(from) = draft.steps.iter().position(|s| &s.key == key) else {
+                continue;
+            };
+            edges.push(Edge {
+                id: edge_id(steps[from], steps[index]),
+                prerequisite: node(steps[from]),
+                dependent: node(steps[index]),
+                predicate: Predicate::Evidence {
+                    schema: DEPENDENCY_SCHEMA,
+                    requirement: Box::new(EvidenceRequirement {
+                        kind: EvidenceKind::ValidationPassed,
+                        evidence_id: format!("validation:{}", id_to_text(steps[from])),
+                        observation_revision: Revision(1),
+                        binding: EvidenceBinding {
+                            sources: vec![source.clone()],
+                            environment: None,
+                            artifact_digest: None,
+                            contract: None,
+                            validation_plan: Some(validation_digest.clone()),
+                            test_inventory: draft.steps[from].tests.clone(),
+                            output: None,
+                        },
+                        max_age_ms: STEP_EVIDENCE_MAX_AGE_MS,
+                    }),
+                },
+            });
+        }
+    }
+    ExecutionPlan {
+        schema: 2,
+        artifacts: Graph {
+            kind: GraphKind::Artifact,
+            nodes: approvals
+                .iter()
+                .map(|a| NodeRef {
+                    id: a.artifact.0,
+                    revision: a.revision,
+                })
+                .collect(),
+            edges: vec![],
+        },
+        execution: Graph {
+            kind: GraphKind::Execution,
+            nodes: steps.iter().map(|id| node(*id)).collect(),
+            edges,
+        },
+        approvals,
+        inputs: steps
+            .iter()
+            .map(|id| StepInputs {
+                step: node(*id),
+                environment: Some(SLICE_ENVIRONMENT.into()),
+                selected_outputs: vec![],
+                base_sources: vec![source.clone()],
+            })
+            .collect(),
+        permission_digest: sha256_hex(&[SLICE_PERMISSION.as_bytes()]),
+        validation_digest,
+        required_outputs: vec![CANDIDATE_OUTPUT.into()],
+        resources: draft
+            .steps
+            .iter()
+            .zip(steps)
+            .map(|(step, id)| StepResources {
+                step: node(*id),
+                repository,
+                provider: step.provider,
+                priority: 0,
+                additional: vec![],
+                repository_mode: ResourceMode::Shared,
+            })
+            .collect(),
+    }
+}
+
+/// The text a reviewer is shown for a lead plan; the canonical graph is the bound body.
+fn plan_text(
+    draft: &PlanDraft,
+    steps: &[OpaqueId],
+    repository: RepositoryId,
+    base: &str,
+    validation: ArtifactId,
+) -> String {
+    let mut out = format!(
+        "Execution plan: {} steps, drafted by the lead agent\nrepository: {}\nbase commit: {base}\n\
+         permission: {SLICE_PERMISSION}\nvalidation plan: {}\nrequired output: {CANDIDATE_OUTPUT}\n",
+        steps.len(),
+        id_to_text(repository.0),
+        id_to_text(validation.0),
+    );
+    for (step, id) in draft.steps.iter().zip(steps) {
+        let list = |paths: &[jojo_domain::validation::ScopePath]| {
+            paths
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        out.push_str(&format!(
+            "\nstep {} ({}): {}\nprovider: {:?}\ndepends on: {}\nwrite scope: {}\n\
+             baseline: {}\ncheck: {} = {}\n",
+            step.key,
+            id_to_text(*id),
+            step.title,
+            step.provider,
+            if step.depends_on.is_empty() {
+                "nothing".to_owned()
+            } else {
+                step.depends_on.join(", ")
+            },
+            list(&step.write_scope),
+            list(&step.baseline),
+            step.tests.join(", "),
+            step.command.join(" "),
+        ));
+    }
+    out
+}
+
 /// One turn as a chat page shows it, with the questions it asked.
 fn chat_row(conn: &Connection, record: &TurnRecord) -> Result<Json, StorageError> {
     let questions = conn
@@ -282,9 +449,86 @@ fn chat_row(conn: &Connection, record: &TurnRecord) -> Result<Json, StorageError
                 ("answer", answer),
                 ("answer_complete", complete),
                 ("answered_by", author.map_or(Json::Null, text)),
+                ("step", Json::Null),
             ]))
         })
         .collect::<Result<Vec<_>, StorageError>>()?;
+    let turn_id = Value::Text(&id_to_text(record.turn));
+    let mut questions = questions;
+    for (id, revision, prompt, state, answer, key) in conn.query(
+        "SELECT q.question, a.revision, q.prompt, a.state,
+                (SELECT answer.body FROM step_answers answer
+                 WHERE answer.question=q.question ORDER BY answer.ordinal DESC LIMIT 1),
+                s.key
+         FROM step_questions q
+         JOIN aggregates a ON a.kind='step_question' AND a.id=q.question
+         JOIN lead_plan_steps s ON s.step=q.step
+         WHERE q.turn=?1 ORDER BY q.event",
+        std::slice::from_ref(&turn_id),
+        |r| {
+            Ok((
+                r.text(0)?,
+                r.int(1)?,
+                r.text(2)?,
+                r.text(3)?,
+                r.optional_text(4)?,
+                r.text(5)?,
+            ))
+        },
+    )? {
+        let answered = answer.is_some();
+        let (answer, complete) = match &answer {
+            Some(body) => excerpt(body),
+            None => (Json::Null, Json::Bool(true)),
+        };
+        questions.push(object([
+            ("question", identity(id_from_text(&id)?)),
+            ("revision", number(from_db(revision)?)),
+            ("prompt", text(prompt)),
+            ("blocking", Json::Bool(state == "BLOCKING")),
+            ("answer", answer),
+            ("answer_complete", complete),
+            (
+                "answered_by",
+                if answered { text("HUMAN") } else { Json::Null },
+            ),
+            ("step", text(key)),
+        ]));
+    }
+    let subjects = conn.query_optional(
+        "SELECT adr,plan,validation,
+                EXISTS(SELECT 1 FROM execution_plans p WHERE p.plan=s.plan)
+         FROM lead_plan_subjects s WHERE s.turn=?1",
+        std::slice::from_ref(&turn_id),
+        |r| Ok((r.text(0)?, r.text(1)?, r.text(2)?, r.int(3)?)),
+    )?;
+    let plan = match subjects {
+        None => Json::Null,
+        Some((adr, plan, validation, stored)) => {
+            let steps = conn
+                .query(
+                    "SELECT step,key,title FROM lead_plan_steps WHERE turn=?1 ORDER BY ordinal",
+                    std::slice::from_ref(&turn_id),
+                    |r| Ok((r.text(0)?, r.text(1)?, r.text(2)?)),
+                )?
+                .into_iter()
+                .map(|(step, key, title)| {
+                    Ok(object([
+                        ("step", identity(id_from_text(&step)?)),
+                        ("key", text(key)),
+                        ("title", text(title)),
+                    ]))
+                })
+                .collect::<Result<Vec<_>, StorageError>>()?;
+            object([
+                ("adr", identity(id_from_text(&adr)?)),
+                ("plan", identity(id_from_text(&plan)?)),
+                ("validation", identity(id_from_text(&validation)?)),
+                ("drafted", Json::Bool(stored != 0)),
+                ("steps", Json::List(steps)),
+            ])
+        }
+    };
     let (message, message_complete) = excerpt(&record.message);
     let (state, detail, summary, prd) = match &record.result {
         None if record.stop_requested => ("Stopping", String::new(), String::new(), Json::Null),
@@ -318,6 +562,7 @@ fn chat_row(conn: &Connection, record: &TurnRecord) -> Result<Json, StorageError
         ("detail", text(detail)),
         ("summary", text(summary)),
         ("prd", prd),
+        ("plan", plan),
         ("questions", Json::List(questions)),
     ]))
 }
@@ -439,7 +684,20 @@ impl Tx<'_> {
                 };
                 discover_prompt(&objective, &list, draft.as_deref(), note)
             }
-            TurnKind::Plan => return Err(deny("TurnRefused: plan turns are not available")),
+            TurnKind::Plan => {
+                let approved = match feature_prd(self.conn, request.feature)? {
+                    Some(prd) if crate::approvals::applicable(self.conn, prd)?.is_some() => {
+                        version(self.conn, prd, None)?
+                    }
+                    _ => None,
+                };
+                let Some(prd) = approved else {
+                    return Err(deny(
+                        "TurnRefused: a plan turn needs the approved requirements document",
+                    ));
+                };
+                plan_prompt(&objective, &list, prd.revision.0, &prd.rendered, note)
+            }
         };
         if prompt.len() > MAX_PROMPT_BYTES {
             return Err(deny(
@@ -575,6 +833,108 @@ impl Tx<'_> {
                     };
                 }
             }
+            Some((_, LeadReply::Plan(draft))) if record.kind == TurnKind::Plan => {
+                summary = &draft.summary;
+                let known = exchanges(self.conn, record.feature)?;
+                let feature_questions: Vec<_> = draft
+                    .questions
+                    .iter()
+                    .filter(|q| q.step.is_none() && !known.iter().any(|k| k.prompt == q.prompt))
+                    .collect();
+                if !feature_questions.is_empty() {
+                    // A question about the whole feature is part of what the PRD approval
+                    // binds: asking it makes that approval stale, so nothing is drafted on
+                    // top of it. The next plan turn starts from the answers.
+                    for question in feature_questions {
+                        let question_id = QuestionId(next()?);
+                        self.ask_question(
+                            question_id,
+                            record.feature,
+                            None,
+                            &question.prompt,
+                            if question.blocking {
+                                QuestionDisposition::Blocking
+                            } else {
+                                QuestionDisposition::Deferred
+                            },
+                            &provenance,
+                        )?;
+                        self.conn.execute(
+                            "INSERT INTO lead_turn_questions VALUES (?1,?2)",
+                            &[Value::Text(&id_to_text(question_id.0)), Value::Text(&text)],
+                        )?;
+                    }
+                } else {
+                    let prd = feature_prd(self.conn, record.feature)?
+                        .filter(|prd| {
+                            crate::approvals::applicable(self.conn, *prd).is_ok_and(|d| d.is_some())
+                        })
+                        .ok_or_else(|| deny("the requirements are no longer approved"))?;
+                    let (adr, plan, validation) = (
+                        ArtifactId(next()?),
+                        ArtifactId(next()?),
+                        ArtifactId(next()?),
+                    );
+                    self.conn.execute(
+                        "INSERT INTO lead_plan_subjects VALUES (?1,?2,?3,?4)",
+                        &[
+                            Value::Text(&text),
+                            Value::Text(&id_to_text(adr.0)),
+                            Value::Text(&id_to_text(plan.0)),
+                            Value::Text(&id_to_text(validation.0)),
+                        ],
+                    )?;
+                    let mut steps = Vec::new();
+                    for (ordinal, step) in draft.steps.iter().enumerate() {
+                        let id = next()?;
+                        steps.push((step.key.clone(), id));
+                        self.conn.execute(
+                            "INSERT INTO lead_plan_steps VALUES (?1,?2,?3,?4,?5)",
+                            &[
+                                Value::Text(&text),
+                                Value::Int(to_db(ordinal as u64 + 1)?),
+                                Value::Text(&id_to_text(id)),
+                                Value::Text(&step.key),
+                                Value::Text(&step.title),
+                            ],
+                        )?;
+                    }
+                    for question in draft.questions.iter().filter(|q| q.step.is_some()) {
+                        let step = steps
+                            .iter()
+                            .find(|(key, _)| Some(key) == question.step.as_ref())
+                            .map(|(_, id)| *id)
+                            .ok_or_else(|| deny("a step question names no step"))?;
+                        let question_id = next()?;
+                        let key = AggregateKey::new(STEP_QUESTION_KIND, question_id);
+                        let disposition = if question.blocking {
+                            QuestionDisposition::Blocking
+                        } else {
+                            QuestionDisposition::Deferred
+                        };
+                        let revision = self.create_aggregate(&key, disposition.as_db())?;
+                        let event = self.append_event(
+                            "StepQuestionAsked",
+                            Some((&key, revision)),
+                            &id_to_text(step),
+                        )?;
+                        self.conn.execute(
+                            "INSERT INTO step_questions VALUES (?1,?2,?3,?4,?5,?6)",
+                            &[
+                                Value::Text(&id_to_text(question_id)),
+                                Value::Text(&text),
+                                Value::Text(&id_to_text(step)),
+                                Value::Text(&question.prompt),
+                                Value::Int(i64::from(question.blocking)),
+                                Value::Int(to_db(event.0)?),
+                            ],
+                        )?;
+                    }
+                    // The ADR is a draft at once; the plan and its validation follow when
+                    // the human has approved the ADR (`advance_lead_plans`).
+                    self.put_review_document(adr, None, prd, None, &draft.adr, &draft.adr)?;
+                }
+            }
             Some(_) => return Err(deny("the reply is not of the turn's kind")),
             None => {}
         }
@@ -620,11 +980,23 @@ impl Tx<'_> {
         revision: Revision,
         action: &QuestionAction,
     ) -> Result<String, TxError> {
+        let id = Value::Text(&id_to_text(question.0));
+        let step_question = self
+            .conn
+            .query_optional(
+                "SELECT 1 FROM step_questions WHERE question=?1",
+                std::slice::from_ref(&id),
+                |r| r.int(0),
+            )?
+            .is_some();
+        if step_question {
+            return self.answer_step_question(question.0, revision, action);
+        }
         if self
             .conn
             .query_optional(
                 "SELECT 1 FROM lead_turn_questions WHERE question=?1",
-                &[Value::Text(&id_to_text(question.0))],
+                &[id],
                 |r| r.int(0),
             )?
             .is_none()
@@ -644,6 +1016,118 @@ impl Tx<'_> {
             }
         };
         Ok(format!("question revision={}", revision.0))
+    }
+
+    /// A question about one step: the same three actions, on its own aggregate. It never
+    /// touches what an approval binds; it only decides whether that step may start.
+    fn answer_step_question(
+        &mut self,
+        question: OpaqueId,
+        expected: Revision,
+        action: &QuestionAction,
+    ) -> Result<String, TxError> {
+        let key = AggregateKey::new(STEP_QUESTION_KIND, question);
+        let state = self
+            .aggregate(&key)?
+            .map(|record| record.state)
+            .ok_or_else(|| deny("UnknownQuestion"))?;
+        let (state, kind) = match action {
+            QuestionAction::Answer(body) => {
+                if body.len() > crate::artifacts::MAX_TEXT_BYTES
+                    || body.contains('\0')
+                    || !body.chars().any(char::is_alphanumeric)
+                {
+                    return Err(deny("answer is empty or too long"));
+                }
+                (state, "StepQuestionAnswered")
+            }
+            QuestionAction::Defer => (
+                QuestionDisposition::Deferred.as_db().to_owned(),
+                "StepQuestionDispositionChanged",
+            ),
+            QuestionAction::Block => (
+                QuestionDisposition::Blocking.as_db().to_owned(),
+                "StepQuestionDispositionChanged",
+            ),
+        };
+        let revision = self.update_aggregate(&key, expected, &state)?;
+        let event = self.append_event(kind, Some((&key, revision)), &state)?;
+        if let QuestionAction::Answer(body) = action {
+            self.conn.execute(
+                "INSERT INTO step_answers
+                 SELECT ?1, coalesce(max(ordinal),0)+1, ?2, ?3 FROM step_answers WHERE question=?1",
+                &[
+                    Value::Text(&id_to_text(question)),
+                    Value::Text(body),
+                    Value::Int(to_db(event.0)?),
+                ],
+            )?;
+        }
+        Ok(format!("question revision={}", revision.0))
+    }
+
+    /// Turns each lead plan draft whose ADR the human has approved into its validation
+    /// plan and execution plan, both unapproved drafts. Returns how many were advanced.
+    /// Called after a human decision; a draft that is complete is left alone.
+    pub fn advance_lead_plans(&mut self) -> Result<u64, TxError> {
+        let pending = self.conn.query(
+            "SELECT s.turn,s.adr,s.plan,s.validation FROM lead_plan_subjects s
+             WHERE NOT EXISTS(SELECT 1 FROM execution_plans p WHERE p.plan=s.plan)",
+            &[],
+            |r| Ok((r.text(0)?, r.text(1)?, r.text(2)?, r.text(3)?)),
+        )?;
+        let mut advanced = 0;
+        for (turn_text, adr, plan, validation) in pending {
+            let (adr, plan, validation) = (
+                ArtifactId(id_from_text(&adr)?),
+                ArtifactId(id_from_text(&plan)?),
+                ArtifactId(id_from_text(&validation)?),
+            );
+            let Some(adr_approval) = self.current_artifact_approval(adr)? else {
+                continue;
+            };
+            let record = turn(self.conn, id_from_text(&turn_text)?)?
+                .ok_or_else(|| deny("plan draft without its turn"))?;
+            let Some(prd) = feature_prd(self.conn, record.feature)? else {
+                continue;
+            };
+            let Some(prd_approval) = self.current_artifact_approval(prd)? else {
+                continue;
+            };
+            let reply = self.conn.query_one(
+                "SELECT reply FROM lead_turn_results WHERE turn=?1",
+                &[Value::Text(&turn_text)],
+                |r| r.text(0),
+            )?;
+            let Ok(LeadReply::Plan(draft)) = planner::parse_reply(TurnKind::Plan, &reply) else {
+                return Err(deny("stored plan reply no longer reads as a plan"));
+            };
+            let steps: Vec<OpaqueId> = self
+                .conn
+                .query(
+                    "SELECT step FROM lead_plan_steps WHERE turn=?1 ORDER BY ordinal",
+                    &[Value::Text(&turn_text)],
+                    |r| r.text(0),
+                )?
+                .iter()
+                .map(|id| id_from_text(id))
+                .collect::<Result<_, _>>()?;
+            let checks = draft.validation(&steps).map_err(deny)?;
+            let canonical = checks.canonical();
+            self.put_review_document(validation, None, prd, Some(adr), &canonical, &canonical)?;
+            let built = lead_plan(
+                &draft,
+                &steps,
+                record.repository,
+                &record.base,
+                &canonical,
+                vec![prd_approval, adr_approval],
+            );
+            let shown = plan_text(&draft, &steps, record.repository, &record.base, validation);
+            self.put_execution_plan(plan, None, prd, adr, &built, &shown)?;
+            advanced += 1;
+        }
+        Ok(advanced)
     }
 
     /// Closes every turn an earlier helper left unfinished. Such a turn held no worktree,
@@ -784,9 +1268,12 @@ impl ReadView<'_> {
                 |r| r.text(0),
             )?,
             ChatPart::Answer => self.conn.query_optional(
-                "SELECT a.body FROM clarification_answers a
-                 JOIN lead_turn_questions l ON l.question=a.question_id
-                 WHERE a.question_id=?1 ORDER BY a.ordinal DESC LIMIT 1",
+                "SELECT body FROM (
+                   SELECT a.body, a.ordinal FROM clarification_answers a
+                   JOIN lead_turn_questions l ON l.question=a.question_id WHERE a.question_id=?1
+                   UNION ALL
+                   SELECT body, ordinal FROM step_answers WHERE question=?1)
+                 ORDER BY ordinal DESC LIMIT 1",
                 &[id],
                 |r| r.text(0),
             )?,
@@ -810,6 +1297,19 @@ impl ReadView<'_> {
             ("complete", Json::Bool(next >= total)),
             ("text", text(chunk)),
         ]))
+    }
+
+    /// Whether a lead plan draft waits for its ADR approval to become a plan.
+    pub fn lead_plans_pending(&self) -> Result<bool, StorageError> {
+        Ok(self
+            .conn
+            .query_optional(
+                "SELECT 1 FROM lead_plan_subjects s
+                 WHERE NOT EXISTS(SELECT 1 FROM execution_plans p WHERE p.plan=s.plan) LIMIT 1",
+                &[],
+                |r| r.int(0),
+            )?
+            .is_some())
     }
 
     /// The one turn that has no result yet, if there is one.
