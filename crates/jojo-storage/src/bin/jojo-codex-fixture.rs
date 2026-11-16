@@ -207,27 +207,126 @@ fn claude_main(args: &[String], scenario: &str) {
     }
 }
 
+const LEAD_QUESTIONS: &str = r#"{"schema":"jojo-lead-discovery-v1","summary":"The repository has a slugify stub and its tests.","questions":[{"prompt":"Should the tool read from arguments, standard input, or both?","blocking":true},{"prompt":"Is packaging in scope?","blocking":false}],"prd":null}"#;
+
+/// A discovery reply with a complete requirements draft titled `title` and no question.
+fn lead_draft(title: &str) -> String {
+    format!(
+        r#"{{"schema":"jojo-lead-discovery-v1","summary":"Drafted the requirements from the answers.","questions":[],"prd":{{"schema_version":1,"title":"{title}","goal":"A title can be turned into a slug without writing code.","non_goals":["Packaging"],"actors":[{{"id":"A1","name":"Author"}}],"use_cases":[{{"id":"UC1","title":"Slug one title","actor_ids":["A1"],"preconditions":["A shell is open in the repository"],"main_flow":["The author passes a title","The slug is printed"],"alternate_flows":[{{"id":"UC1-A1","title":"Several words","steps":["The words are joined by hyphens"]}}],"error_flows":[{{"id":"UC1-E1","title":"Nothing to slug","steps":["An error is printed"]}}],"postconditions":["Nothing on disk changed"],"acceptance_ids":["AC1"]}}],"acceptance_criteria":[{{"id":"AC1","statement":"A title given as arguments prints its slug and exits with status 0."}}],"nfrs":[],"assumptions":[{{"id":"AS1","statement":"Arguments are joined with one space."}}],"blockers":[]}}}}"#
+    )
+}
+
+/// What the stand-in lead agent does in a turn (M2).
+enum Lead {
+    /// Reads, then ends with this last message.
+    Reply(String),
+    /// Uses a tool that changes a path, which no turn may do, then replies.
+    Write(String),
+    /// Stays alive without output for at most this many seconds, then ends unfinished.
+    Hang(u64),
+}
+
+/// M2: the scenarios of a lead agent turn, the same for both dialects. `lead` answers by
+/// what the prompt already holds: questions first, then a draft, then a revised draft.
+fn lead(scenario: &str, prompt: &str, args: &[String]) -> Lead {
+    if let Some(seconds) = scenario.strip_prefix("lead-hang ") {
+        return Lead::Hang(seconds.parse::<u64>().unwrap_or(0).min(600));
+    }
+    match scenario {
+        "lead" if prompt.contains("# Questions and answers so far\nNone.") => {
+            Lead::Reply(LEAD_QUESTIONS.into())
+        }
+        "lead" if prompt.contains("# Current requirements draft\nNone yet.") => {
+            Lead::Reply(lead_draft("Slugify from the shell"))
+        }
+        "lead" => Lead::Reply(lead_draft("Slugify from the shell, revised")),
+        "lead-prose" => Lead::Reply("I looked around and could not decide.".into()),
+        "lead-write" => Lead::Write(LEAD_QUESTIONS.into()),
+        // What actually crossed the OS boundary, as seen from inside the child.
+        "report" => {
+            let mut variables: Vec<String> = std::env::vars()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect();
+            variables.sort();
+            Lead::Reply(format!("argv={args:?} variables={variables:?}"))
+        }
+        other => {
+            eprintln!("unknown lead scenario {other:?}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn hang(seconds: u64) {
+    // Bounded: the scenario ends on its own even if nothing ever stops it.
+    for _ in 0..seconds * 10 {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn claude_lead(act: Lead) {
+    claude(
+        "system",
+        r#""subtype":"init","tools":["Glob","Grep","Read"],"mcp_servers":[],"permissionMode":"default","apiKeySource":"none","claude_code_version":"2.1.311""#,
+    );
+    claude_tool("toolu_fixture_1", "Read");
+    match act {
+        Lead::Reply(text) => claude_text(&text),
+        Lead::Write(text) => {
+            claude_tool("toolu_fixture_2", "Write");
+            claude_text(&text);
+        }
+        Lead::Hang(seconds) => return hang(seconds),
+    }
+    claude_result(false, "completed");
+}
+
+fn codex_lead(act: Lead) {
+    line(THREAD);
+    line(TURN);
+    line(
+        r#"{"type":"item.completed","item":{"id":"item-1","type":"command_execution","exit_code":0}}"#,
+    );
+    match act {
+        Lead::Reply(text) => line(&message(&text)),
+        Lead::Write(text) => {
+            line(r#"{"type":"item.completed","item":{"id":"item-2","type":"file_change"}}"#);
+            line(&message(&text));
+        }
+        Lead::Hang(seconds) => return hang(seconds),
+    }
+    line(DONE);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("-p") {
-        let mut prompt = String::new();
-        let _ = std::io::stdin().read_to_string(&mut prompt);
-        let scenario = prompt
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("fixture: "))
-            .unwrap_or(prompt.trim());
-        return claude_main(&args, scenario);
-    }
-    if args.first().map(String::as_str) != Some("exec") {
-        eprintln!("fixture accepts only the exec subcommand");
-        std::process::exit(64);
-    }
     let mut prompt = String::new();
     let _ = std::io::stdin().read_to_string(&mut prompt);
     let scenario = prompt
         .lines()
         .find_map(|l| l.trim().strip_prefix("fixture: "))
         .unwrap_or(prompt.trim());
+    // M2: a lead agent prompt carries the objective of the first turn and the note of this
+    // one, so the scenario of a turn is the last directive, not the first.
+    let latest = prompt
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("fixture: "))
+        .next_back()
+        .unwrap_or(prompt.trim());
+    if args.first().map(String::as_str) == Some("-p") {
+        // M2: the read-only vector of a lead agent turn names the three read tools.
+        if args.iter().any(|a| a == "Read,Glob,Grep") {
+            return claude_lead(lead(latest, &prompt, &args));
+        }
+        return claude_main(&args, scenario);
+    }
+    if args.first().map(String::as_str) != Some("exec") {
+        eprintln!("fixture accepts only the exec subcommand");
+        std::process::exit(64);
+    }
+    if args.iter().any(|a| a == "read-only") {
+        return codex_lead(lead(latest, &prompt, &args));
+    }
     if let Some(path) = scenario.strip_prefix("develop ") {
         line(THREAD);
         line(TURN);

@@ -47,7 +47,8 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use jojo_domain::provider::{EventPayload, LaunchSpec, ProviderError, Stream};
+use jojo_domain::planner::{self, TurnSpec};
+use jojo_domain::provider::{EventPayload, LaunchSpec, ProviderError, ProviderKind, Stream};
 use jojo_domain::stream::{LineFramer, StreamNormalizer};
 
 pub const MAX_ARGS: usize = 256;
@@ -191,6 +192,96 @@ impl ProcessLaunch {
         if spec.fingerprint.parser == jojo_domain::claude::CLAUDE_PRINT_STREAM_JSON {
             crate::claude::verify_launch(spec, &args, &environment)?;
         }
+        Self::assemble(
+            &spec.fingerprint.executable,
+            args,
+            environment,
+            &spec.environment_allowlist,
+            &spec.cwd,
+            spec.prompt.clone(),
+            spec.raw_output_dir
+                .join(format!("generation-{}", spec.dispatch_generation)),
+            &spec.fingerprint.parser,
+            spec.max_frame_bytes,
+            spec.max_output_bytes,
+        )
+    }
+
+    /// M2: the OS request of one lead agent turn. The same checks as [`Self::from_spec`],
+    /// against the turn contract: the read-only argument vector of the spec's provider,
+    /// its own variables, the approved executable bytes, and the repository as working
+    /// directory. Nothing is journaled here and nothing is spawned.
+    pub fn for_turn(
+        spec: &TurnSpec,
+        args: Vec<String>,
+        environment: Vec<(String, String)>,
+    ) -> Result<Self, LaunchRejection> {
+        planner::check_turn(spec).map_err(LaunchRejection::Spec)?;
+        let fingerprint = &spec.fingerprint;
+        let normalizer =
+            StreamNormalizer::for_parser(&fingerprint.parser).map_err(LaunchRejection::Spec)?;
+        if normalizer.provider() != fingerprint.provider {
+            return Err(LaunchRejection::Spec(ProviderError::FingerprintMismatch));
+        }
+        if planner::turn_argv(spec).as_ref() != Ok(&args) {
+            return Err(LaunchRejection::Argument(
+                "not the allowlisted lead agent argument vector".into(),
+            ));
+        }
+        let home = planner::check_turn_environment(spec, &environment)
+            .map_err(|_| LaunchRejection::Environment(spec.environment_allowlist.join(" ")))?;
+        crate::codex::inspect_home(home).map_err(LaunchRejection::Environment)?;
+        // Lexical separation was checked on the spec; repeat it on what the paths resolve to.
+        for other in [&spec.repository, &spec.raw_output_dir] {
+            if std::fs::canonicalize(other).is_ok_and(|real| home.starts_with(&real)) {
+                return Err(LaunchRejection::Environment(
+                    "home lies inside the repository or output directory".into(),
+                ));
+            }
+        }
+        let digest = crate::codex::inspect_executable(&fingerprint.executable)
+            .map_err(LaunchRejection::Executable)?;
+        let configured = match fingerprint.provider {
+            ProviderKind::ClaudeCode => {
+                jojo_domain::claude::configured_digest(&fingerprint.configuration)
+            }
+            ProviderKind::Codex => {
+                jojo_domain::codex::configured_digest(&fingerprint.configuration)
+            }
+        };
+        if configured != Some(digest.as_str()) {
+            return Err(LaunchRejection::Executable(
+                "digest differs from the approved fingerprint".into(),
+            ));
+        }
+        Self::assemble(
+            &fingerprint.executable,
+            args,
+            environment,
+            &spec.environment_allowlist,
+            &spec.repository,
+            spec.prompt.clone(),
+            spec.raw_output_dir.join("generation-1"),
+            &fingerprint.parser,
+            spec.max_frame_bytes,
+            spec.max_output_bytes,
+        )
+    }
+
+    /// The checks every request shares, and the request itself.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        exe: &Path,
+        args: Vec<String>,
+        environment: Vec<(String, String)>,
+        allowlist: &[String],
+        cwd: &Path,
+        stdin: Vec<u8>,
+        spool: PathBuf,
+        parser: &str,
+        max_frame_bytes: u64,
+        max_output_bytes: u64,
+    ) -> Result<Self, LaunchRejection> {
         if args.len() > MAX_ARGS
             || args
                 .iter()
@@ -200,7 +291,7 @@ impl ProcessLaunch {
         }
         let mut names = BTreeSet::new();
         for (name, value) in &environment {
-            if !spec.environment_allowlist.contains(name)
+            if !allowlist.contains(name)
                 || !names.insert(name)
                 || value.len() > MAX_ARG_BYTES
                 || value.contains('\0')
@@ -208,36 +299,30 @@ impl ProcessLaunch {
                 return Err(LaunchRejection::Environment(name.clone()));
             }
         }
-        let exe = &spec.fingerprint.executable;
         let meta = std::fs::metadata(exe)
             .map_err(|e| LaunchRejection::Executable(format!("{}: {e}", exe.display())))?;
         if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
             return Err(LaunchRejection::Executable("not an executable file".into()));
         }
-        if !std::fs::metadata(&spec.cwd).is_ok_and(|m| m.is_dir()) {
-            return Err(LaunchRejection::WorkingDirectory(
-                spec.cwd.display().to_string(),
-            ));
+        if !std::fs::metadata(cwd).is_ok_and(|m| m.is_dir()) {
+            return Err(LaunchRejection::WorkingDirectory(cwd.display().to_string()));
         }
-        if spec.max_frame_bytes > MAX_FRAME_BYTES as u64 || spec.max_output_bytes > MAX_OUTPUT_BYTES
-        {
+        if max_frame_bytes > MAX_FRAME_BYTES as u64 || max_output_bytes > MAX_OUTPUT_BYTES {
             return Err(LaunchRejection::Spec(ProviderError::Limit));
         }
-        let frame = usize::try_from(spec.max_frame_bytes)
+        let frame = usize::try_from(max_frame_bytes)
             .map_err(|_| LaunchRejection::Spec(ProviderError::Limit))?;
         Ok(Self {
-            executable: exe.clone(),
+            executable: exe.to_owned(),
             args,
-            cwd: spec.cwd.clone(),
+            cwd: cwd.to_owned(),
             environment,
-            stdin: spec.prompt.clone(),
-            spool: spec
-                .raw_output_dir
-                .join(format!("generation-{}", spec.dispatch_generation)),
-            parser: spec.fingerprint.parser.clone(),
+            stdin,
+            spool,
+            parser: parser.to_owned(),
             limits: StreamLimits {
                 max_frame_bytes: frame,
-                max_output_bytes: spec.max_output_bytes,
+                max_output_bytes,
                 checkpoint_bytes: CHECKPOINT_BYTES,
             },
         })

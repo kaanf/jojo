@@ -505,6 +505,19 @@ impl Tx<'_> {
         if active != 0 {
             return Err(deny("CapacityOne: another attempt is active or held"));
         }
+        // M2: a lead agent turn is a provider run too; the two never overlap.
+        if self
+            .conn
+            .query_optional(
+                "SELECT 1 FROM lead_turns t WHERE NOT EXISTS
+                 (SELECT 1 FROM lead_turn_results r WHERE r.turn=t.turn) LIMIT 1",
+                &[],
+                |r| r.int(0),
+            )?
+            .is_some()
+        {
+            return Err(deny("CapacityOne: a lead turn is active"));
+        }
         let step_id = id_to_text(request.step.id);
         let revision = Value::Int(crate::model::to_db(request.step.revision.0)?);
         if self

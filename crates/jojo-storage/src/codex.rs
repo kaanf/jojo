@@ -219,6 +219,32 @@ impl CodexAdapter {
         let environment = vec![(CODEX_HOME_VARIABLE.to_owned(), home.to_owned())];
         ProcessLaunch::from_spec(spec, args, environment).map_err(CodexRejection::Launch)
     }
+
+    /// The fingerprint a lead agent turn (M2) is frozen against: this adapter's, with the
+    /// turn parser in place of the developer one.
+    pub fn turn_fingerprint(&self) -> ProviderFingerprint {
+        let mut fingerprint = self.fingerprint.clone();
+        fingerprint.parser = jojo_domain::planner::turn_parser(fingerprint.provider).into();
+        fingerprint
+    }
+
+    /// Frozen turn → the one allowed read-only OS request. No side effect.
+    pub fn prepare_turn(
+        &self,
+        spec: &jojo_domain::planner::TurnSpec,
+    ) -> Result<ProcessLaunch, CodexRejection> {
+        if spec.fingerprint != self.turn_fingerprint() {
+            return Err(CodexRejection::Fingerprint);
+        }
+        self.ready()?;
+        let args = jojo_domain::codex::discovery_argv(&spec.repository)
+            .map_err(|e| CodexRejection::Launch(LaunchRejection::Spec(e)))?;
+        let Some(home) = self.home.to_str() else {
+            return Err(CodexRejection::Home("path is not UTF-8".into()));
+        };
+        let environment = vec![(CODEX_HOME_VARIABLE.to_owned(), home.to_owned())];
+        ProcessLaunch::for_turn(spec, args, environment).map_err(CodexRejection::Launch)
+    }
 }
 
 impl ProviderAdapter for CodexAdapter {

@@ -159,6 +159,35 @@ impl ClaudeAdapter {
         ];
         ProcessLaunch::from_spec(spec, print_argv(), environment).map_err(ClaudeRejection::Launch)
     }
+
+    /// The fingerprint a lead agent turn (M2) is frozen against: this adapter's, with the
+    /// turn parser in place of the developer one.
+    pub fn turn_fingerprint(&self) -> ProviderFingerprint {
+        let mut fingerprint = self.fingerprint.clone();
+        fingerprint.parser = jojo_domain::planner::turn_parser(fingerprint.provider).into();
+        fingerprint
+    }
+
+    /// Frozen turn → the one allowed read-only OS request. No side effect.
+    pub fn prepare_turn(
+        &self,
+        spec: &jojo_domain::planner::TurnSpec,
+    ) -> Result<ProcessLaunch, ClaudeRejection> {
+        if spec.fingerprint != self.turn_fingerprint() {
+            return Err(ClaudeRejection::Fingerprint);
+        }
+        self.ready()?;
+        let Some(home) = self.home.to_str() else {
+            return Err(ClaudeRejection::Home("path is not UTF-8".into()));
+        };
+        let [home_name, user_name] = CLAUDE_VARIABLES;
+        let environment = vec![
+            (home_name.to_owned(), home.to_owned()),
+            (user_name.to_owned(), self.user.clone()),
+        ];
+        ProcessLaunch::for_turn(spec, jojo_domain::claude::discovery_argv(), environment)
+            .map_err(ClaudeRejection::Launch)
+    }
 }
 
 impl ProviderAdapter for ClaudeAdapter {

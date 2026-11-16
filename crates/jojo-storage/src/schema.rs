@@ -79,6 +79,11 @@ impl MigrationPlan {
                 name: "close tickets, shutdown targets and receipts",
                 sql: SCHEMA_V10,
             },
+            Migration {
+                version: 11,
+                name: "lead agent turns, plan drafts and step questions",
+                sql: SCHEMA_V11,
+            },
         ])
     }
 
@@ -974,6 +979,89 @@ CREATE TRIGGER shutdown_receipts_immutable BEFORE UPDATE ON shutdown_receipts BE
 CREATE TRIGGER shutdown_receipts_keep BEFORE DELETE ON shutdown_receipts BEGIN SELECT RAISE(ABORT,'immutable shutdown history'); END;
 "#;
 
+/// Version 11 (M2): Feature Chat. A lead agent turn is one read-only provider run in a
+/// registered repository; it is not an attempt and has no worktree, plan or approval
+/// behind it. The questions and the PRD a turn produces live in the version 2 tables; the
+/// tables below hold the turn itself, the draft plan of a plan turn until approvals let
+/// it become documents, and the questions that concern one step only (a feature-level
+/// question is part of what a PRD approval binds; a step question is not).
+const SCHEMA_V11: &str = r#"
+CREATE TABLE lead_turns (
+ turn TEXT PRIMARY KEY CHECK(length(turn)=32),
+ feature TEXT NOT NULL CHECK(length(feature)=32),
+ ordinal INTEGER NOT NULL CHECK(ordinal>0),
+ kind TEXT NOT NULL CHECK(kind IN ('Discover','Plan')),
+ repository TEXT NOT NULL REFERENCES local_repositories(id),
+ base TEXT NOT NULL CHECK(length(base) IN (40,64)),
+ provider TEXT NOT NULL CHECK(provider IN ('Codex','ClaudeCode')),
+ message TEXT NOT NULL,
+ prompt TEXT NOT NULL CHECK(length(prompt)>0),
+ prompt_digest TEXT NOT NULL CHECK(length(prompt_digest)=64),
+ epoch INTEGER NOT NULL REFERENCES engine_sessions(epoch),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ UNIQUE(feature, ordinal));
+CREATE TABLE lead_turn_stops (
+ turn TEXT PRIMARY KEY REFERENCES lead_turns(turn),
+ event INTEGER NOT NULL REFERENCES events(seq));
+CREATE TABLE lead_turn_results (
+ turn TEXT PRIMARY KEY REFERENCES lead_turns(turn),
+ outcome TEXT NOT NULL CHECK(outcome IN ('REPLIED','FAILED','CANCELLED','INTERRUPTED')),
+ detail TEXT NOT NULL, summary TEXT NOT NULL, reply TEXT NOT NULL,
+ prd TEXT, prd_revision INTEGER,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ CHECK((outcome='REPLIED')=(reply<>'')),
+ CHECK((prd IS NULL)=(prd_revision IS NULL)));
+-- One turn at a time, in order within its feature.
+CREATE TRIGGER lead_turn_single BEFORE INSERT ON lead_turns
+WHEN EXISTS(SELECT 1 FROM lead_turns t
+            WHERE NOT EXISTS(SELECT 1 FROM lead_turn_results r WHERE r.turn=t.turn))
+ OR NEW.ordinal IS NOT (SELECT coalesce(max(ordinal),0)+1 FROM lead_turns WHERE feature=NEW.feature)
+BEGIN SELECT RAISE(ABORT,'one lead turn at a time, appended in order'); END;
+CREATE TABLE lead_turn_questions (
+ question TEXT PRIMARY KEY REFERENCES clarification_questions(question_id),
+ turn TEXT NOT NULL REFERENCES lead_turns(turn));
+CREATE TABLE lead_plan_subjects (
+ turn TEXT PRIMARY KEY REFERENCES lead_turns(turn),
+ adr TEXT NOT NULL CHECK(length(adr)=32), plan TEXT NOT NULL CHECK(length(plan)=32),
+ validation TEXT NOT NULL CHECK(length(validation)=32));
+CREATE TABLE lead_plan_steps (
+ turn TEXT NOT NULL REFERENCES lead_turns(turn), ordinal INTEGER NOT NULL CHECK(ordinal>0),
+ step TEXT NOT NULL UNIQUE CHECK(length(step)=32), key TEXT NOT NULL, title TEXT NOT NULL,
+ PRIMARY KEY(turn, ordinal), UNIQUE(turn, key));
+CREATE TABLE step_questions (
+ question TEXT PRIMARY KEY CHECK(length(question)=32),
+ turn TEXT NOT NULL REFERENCES lead_turns(turn),
+ step TEXT NOT NULL REFERENCES lead_plan_steps(step),
+ prompt TEXT NOT NULL CHECK(length(prompt)>0),
+ blocking INTEGER NOT NULL CHECK(blocking IN (0,1)),
+ event INTEGER NOT NULL REFERENCES events(seq));
+CREATE TABLE step_answers (
+ question TEXT NOT NULL REFERENCES step_questions(question),
+ ordinal INTEGER NOT NULL CHECK(ordinal>0),
+ body TEXT NOT NULL CHECK(length(body)>0),
+ event INTEGER NOT NULL REFERENCES events(seq),
+ PRIMARY KEY(question, ordinal));
+CREATE TRIGGER step_answers_append BEFORE INSERT ON step_answers
+WHEN NEW.ordinal IS NOT (SELECT coalesce(max(ordinal),0)+1 FROM step_answers WHERE question=NEW.question)
+BEGIN SELECT RAISE(ABORT,'answers are appended in order'); END;
+CREATE TRIGGER lead_turns_immutable BEFORE UPDATE ON lead_turns BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_turns_keep BEFORE DELETE ON lead_turns BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_turn_stops_immutable BEFORE UPDATE ON lead_turn_stops BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_turn_stops_keep BEFORE DELETE ON lead_turn_stops BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_turn_results_immutable BEFORE UPDATE ON lead_turn_results BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_turn_results_keep BEFORE DELETE ON lead_turn_results BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_turn_questions_immutable BEFORE UPDATE ON lead_turn_questions BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_turn_questions_keep BEFORE DELETE ON lead_turn_questions BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_plan_subjects_immutable BEFORE UPDATE ON lead_plan_subjects BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_plan_subjects_keep BEFORE DELETE ON lead_plan_subjects BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_plan_steps_immutable BEFORE UPDATE ON lead_plan_steps BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_plan_steps_keep BEFORE DELETE ON lead_plan_steps BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER step_questions_immutable BEFORE UPDATE ON step_questions BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER step_questions_keep BEFORE DELETE ON step_questions BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER step_answers_immutable BEFORE UPDATE ON step_answers BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER step_answers_keep BEFORE DELETE ON step_answers BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -985,7 +1073,7 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 10));
+        assert_eq!((report.from_version, report.to_version), (0, 11));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);

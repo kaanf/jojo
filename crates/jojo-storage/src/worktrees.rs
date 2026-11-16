@@ -193,6 +193,22 @@ impl LocalRepository {
     }
 }
 
+/// M2: the commit a registered repository's HEAD names right now. A lead agent turn
+/// records it; the turn reads the working tree in place and owns no worktree.
+pub fn repository_head(repository: &LocalRepository) -> IoResult<String> {
+    repository.recheck()?;
+    let head = line(git(
+        &repository.path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+        None,
+    )?)?;
+    if oid(&head) {
+        Ok(head)
+    } else {
+        Err("repository HEAD is not a commit".into())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorktreeRoot {
     path: PathBuf,
