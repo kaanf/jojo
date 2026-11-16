@@ -98,6 +98,31 @@ fn facts(c: &Connection, p: &ExecutionPlan) -> Result<Facts, StorageError> {
     }
     Ok(facts)
 }
+/// The approved materialization of a step's sources, or (E8, M3) the plan branch of its
+/// run when [`crate::runner::run_source_allowed`] says that commit carries exactly what
+/// the step depends on.
+fn materialize_run(
+    c: &Connection,
+    id: ArtifactId,
+    revision: Revision,
+    p: &ExecutionPlan,
+    step: NodeRef,
+    now: ClockReading,
+    observed: &SourceVector,
+) -> Result<Result<SourceVector, String>, StorageError> {
+    let f = facts(c, p)?;
+    match materialize(p, step, &f, now, observed) {
+        Ok(v) => Ok(Ok(v)),
+        Err(why) => {
+            let satisfied = evaluate_step(p, step, &f, now).truth == Truth::Satisfied;
+            if satisfied && crate::runner::run_source_allowed(c, id, revision, p, step, observed)? {
+                Ok(Ok(observed.clone()))
+            } else {
+                Ok(Err(why))
+            }
+        }
+    }
+}
 fn blocked(reason: &str) -> StepEvaluation {
     StepEvaluation {
         truth: Truth::Unknown,
@@ -156,14 +181,7 @@ impl Tx<'_> {
         observed: &SourceVector,
     ) -> Result<bool, TxError> {
         let p = load_plan(self.conn, plan, revision)?.ok_or_else(|| deny("plan missing"))?;
-        Ok(materialize(
-            &p.plan,
-            step,
-            &facts(self.conn, &p.plan)?,
-            self.now,
-            observed,
-        )
-        .is_ok())
+        Ok(materialize_run(self.conn, plan, revision, &p.plan, step, self.now, observed)?.is_ok())
     }
     /// Validates both graphs before any mutation. Canonical graph bytes are the
     /// existing human-review document body, not a second approval authority.
@@ -346,13 +364,15 @@ impl Tx<'_> {
         if evaluated.truth != Truth::Satisfied {
             return Err(deny(format!("dependencies block: {evaluated:?}")));
         }
-        let sources = materialize(
+        let sources = materialize_run(
+            self.conn,
+            plan,
+            p.revision,
             &p.plan,
             step,
-            &facts(self.conn, &p.plan)?,
             self.now,
             observed_bases,
-        )
+        )?
         .map_err(deny)?;
         self.reserve_approval_with_dependencies_checked(attempt, prd, adr, plan)?;
         self.conn.execute("INSERT INTO dependency_attempt_inputs (attempt,plan,revision,step,step_revision,sources,evaluation_digest) VALUES (?1,?2,?3,?4,?5,?6,?7)",&[Value::Text(&id_to_text(attempt)),Value::Text(&id_to_text(plan.0)),Value::Int(to_db(p.revision.0)?),Value::Text(&id_to_text(step.id)),Value::Int(to_db(step.revision.0)?),Value::Text(&sources.canonical()),Value::Text(&sha256_hex(&[format!("{evaluated:?}").as_bytes()]))])?;
@@ -387,13 +407,7 @@ impl Tx<'_> {
         let mut result = evaluate(self.conn, id, revision, step, self.now)?;
         if result.truth == Truth::Satisfied {
             let p = load_plan(self.conn, id, revision)?.ok_or_else(|| deny("plan missing"))?;
-            match materialize(
-                &p.plan,
-                step,
-                &facts(self.conn, &p.plan)?,
-                self.now,
-                observed,
-            ) {
+            match materialize_run(self.conn, id, revision, &p.plan, step, self.now, observed)? {
                 Ok(current) if current.canonical() == frozen => {}
                 Ok(_) => result = blocked("frozen source vector changed"),
                 Err(reason) => result = blocked(&reason),

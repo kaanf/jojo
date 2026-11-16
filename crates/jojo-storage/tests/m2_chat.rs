@@ -1157,3 +1157,112 @@ impl H {
         self.ok("RecoveryStart", object([("digest", text(digest))]));
     }
 }
+
+// ---- M3: integration onto the plan branch ----
+
+impl H {
+    fn accept_step(&mut self, plan: &Json, index: usize) {
+        let attempt = self.step_field(plan, index, "attempt");
+        let candidate = self.step_field(plan, index, "candidate");
+        let receipt = self.step_field(plan, index, "receipt");
+        let r = self.at(
+            2,
+            "CandidateDecision",
+            object([
+                ("attempt", attempt),
+                ("candidate", candidate),
+                ("receipt", receipt),
+                ("action", text("Accept")),
+            ]),
+        );
+        assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    }
+
+    fn git_out(&self, args: &[&str]) -> String {
+        git(&self.repository, args).trim().to_owned()
+    }
+}
+
+#[test]
+fn m3_accepted_steps_go_onto_the_plan_branch_and_the_dependent_starts_from_it() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let (_, _, plan, _, _) = h.approved_kinds_plan(&repository);
+    let developer_head = h.git_out(&["rev-parse", "HEAD"]);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.run_until(&plan, |s| s[0] == "Review" && s[1] == "Review");
+    let branch = str_of(&h.plan_run(&plan), &["branch"]).to_owned();
+    let base = str_of(&h.plan_run(&plan), &["base"]).to_owned();
+    h.accept_step(&plan, 1);
+    h.accept_step(&plan, 0);
+    // Integrated in the order accepted; then the dependent starts from the branch.
+    let states = h.run_until(&plan, |s| s[2] != "Waiting" && s[2] != "Ready");
+    assert_eq!(&states[..2], ["Integrated", "Integrated"]);
+    let first = h.step_field(&plan, 1, "commit");
+    let second = h.step_field(&plan, 0, "commit");
+    assert_eq!(
+        h.git_out(&["rev-parse", &format!("{}^", str_of(&first, &[]))]),
+        base
+    );
+    assert_eq!(
+        h.git_out(&["rev-parse", &format!("{}^", str_of(&second, &[]))]),
+        str_of(&first, &[])
+    );
+    let join = id(&h.step_field(&plan, 2, "attempt")).unwrap();
+    assert_eq!(
+        h.read(|v| v.worktree(join)).unwrap().base,
+        str_of(&second, &[])
+    );
+    h.run_until(&plan, |s| s[2] == "Review");
+    h.accept_step(&plan, 2);
+    h.run_until(&plan, |s| s.iter().all(|s| s == "Integrated"));
+    let run = h.plan_run(&plan);
+    assert_eq!(str_of(&run, &["state"]), "DONE");
+    let head = str_of(&run, &["head"]).to_owned();
+    assert_eq!(
+        h.git_out(&["rev-parse", &format!("refs/heads/{branch}")]),
+        head
+    );
+    assert_eq!(
+        h.git_out(&["log", "--format=%an <%ae>", &format!("{base}..{head}")]),
+        "Jojo <jojo@localhost>\nJojo <jojo@localhost>\nJojo <jojo@localhost>"
+    );
+    let files = h.git_out(&["ls-tree", "--name-only", "-r", &head, "src"]);
+    assert_eq!(
+        files,
+        "src/api.txt\nsrc/join.txt\nsrc/lib.rs\nsrc/usage.txt"
+    );
+    // The developer's checkout is untouched: same HEAD, nothing changed.
+    assert_eq!(h.git_out(&["rev-parse", "HEAD"]), developer_head);
+    assert_eq!(h.git_out(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn m3_a_plan_branch_moved_by_someone_else_is_a_conflict_and_nothing_is_merged() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let (_, _, plan, _, _) = h.approved_kinds_plan(&repository);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.run_until(&plan, |s| s[0] == "Review" && s[1] == "Review");
+    let branch = str_of(&h.plan_run(&plan), &["branch"]).to_owned();
+    h.accept_step(&plan, 0);
+    h.run_until(&plan, |s| s[0] == "Integrated");
+    let integrated = h.git_out(&["rev-parse", &format!("refs/heads/{branch}")]);
+    // Someone moves the plan branch outside Jojo.
+    let tree = h.git_out(&["rev-parse", &format!("{integrated}^{{tree}}")]);
+    let foreign = h.git_out(&["commit-tree", &tree, "-p", &integrated, "-m", "outside"]);
+    h.git_out(&["update-ref", &format!("refs/heads/{branch}"), &foreign]);
+    h.accept_step(&plan, 1);
+    let states = h.run_until(&plan, |s| s[1] != "Accepted");
+    assert_eq!(states, ["Integrated", "Conflict", "Waiting"]);
+    let detail = h.step_field(&plan, 1, "detail");
+    assert!(
+        str_of(&detail, &[]).contains("the plan branch moved"),
+        "{detail:?}"
+    );
+    assert_eq!(str_of(&h.plan_run(&plan), &["state"]), "HALTED");
+    assert_eq!(
+        h.git_out(&["rev-parse", &format!("refs/heads/{branch}")]),
+        foreign
+    );
+}

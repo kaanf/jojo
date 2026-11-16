@@ -25,7 +25,7 @@ impl Service {
         }
         self.workers.reap();
         let mut reader = self.engine.reader().map_err(|e| e.to_string())?;
-        let runs = reader
+        let mut runs = reader
             .read(|v| v.running_plans())
             .map_err(|e| e.to_string())?;
         if runs.is_empty() {
@@ -39,6 +39,23 @@ impl Service {
         drop(reader);
         if admission != Admission::Open || !self.recovery.subjects().is_empty() {
             return Ok(());
+        }
+        // Accepted steps go onto their plan branch first, one at a time and each on the
+        // branch as the previous one left it, so that what depends on them can start in
+        // this same pass.
+        while let Some((run, step)) = runs
+            .iter()
+            .flat_map(|run| run.steps.iter().map(move |s| (run, s)))
+            .filter(|(_, s)| s.state == StepState::Accepted)
+            .min_by_key(|(_, s)| s.accepted)
+            .map(|(run, s)| (run.clone(), s.clone()))
+        {
+            self.runner_integrate(&run, &step)?;
+            runs = self
+                .engine
+                .reader()
+                .and_then(|mut r| r.read(|v| v.running_plans()))
+                .map_err(|e| e.to_string())?;
         }
         for run in &runs {
             for step in &run.steps {
@@ -86,6 +103,42 @@ impl Service {
             step,
         };
         self.start(request, start).map(drop)
+    }
+
+    /// One accepted step onto the plan branch, recorded once: as a commit or a conflict.
+    fn runner_integrate(&mut self, run: &PlanRunView, step: &RunStep) -> Result<(), String> {
+        let (Some(attempt), Some(candidate)) = (step.attempt, step.candidate.clone()) else {
+            return Ok(());
+        };
+        let message = format!(
+            "{}: {}\n\nJojo plan {:032x} revision {}, step {:032x}, attempt {:032x}, \
+             candidate {candidate}",
+            step.key, step.title, run.plan.0.0, run.revision.0, step.step.id.0, attempt.0
+        );
+        let name = format!(
+            "{}-{:032x}",
+            run.branch.trim_start_matches("jojo/plan/"),
+            self.ids.next_id().map_err(|_| "IDs exhausted")?.0
+        );
+        // A failure that is not a clean conflict is recorded as one too: nothing moved,
+        // and the human decides.
+        let outcome = integrate_candidate(
+            &self.engine,
+            attempt,
+            &candidate,
+            &run.branch,
+            &run.head,
+            &message,
+            &name,
+        )
+        .unwrap_or_else(|why| Integration::Conflict {
+            detail: format!("integration failed: {why}"),
+        });
+        let (plan, revision, id, parent) = (run.plan, run.revision, step.step.id, run.head.clone());
+        self.command("IntegratePlanStep", id, move |tx| {
+            tx.record_integration(plan, revision, id, attempt, &parent, &outcome)
+        })
+        .map(drop)
     }
 
     fn runner_validation(&mut self, attempt: OpaqueId, candidate: String) -> Result<(), String> {

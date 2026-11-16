@@ -71,9 +71,17 @@ fn git(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> IoResult<Vec<u8>> {
                 | "apply"
                 | "clone"
                 | "checkout"
+                | "add"
+                | "write-tree"
+                | "commit-tree"
+                | "update-ref"
         )
     ) || (args.first() == Some(&"worktree") && args.get(1) != Some(&"add"))
         || (args.first() == Some(&"checkout") && args.get(1) != Some(&"--detach"))
+        // M3: plan integration stages everything and moves only a plan branch.
+        || (args.first() == Some(&"add") && args.get(1) != Some(&"--all"))
+        || (args.first() == Some(&"update-ref")
+            && !args.get(1).is_some_and(|r| r.starts_with("refs/heads/jojo/plan/")))
     {
         return Err("unsupported local Git command".into());
     }
@@ -108,6 +116,17 @@ fn git(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> IoResult<Vec<u8>> {
             "core.autocrlf=false",
         ])
         .args(transport)
+        // M3: an integration commit has one fixed identity, never the user's.
+        .envs(
+            [
+                ("GIT_AUTHOR_NAME", "Jojo"),
+                ("GIT_AUTHOR_EMAIL", "jojo@localhost"),
+                ("GIT_COMMITTER_NAME", "Jojo"),
+                ("GIT_COMMITTER_EMAIL", "jojo@localhost"),
+            ]
+            .into_iter()
+            .filter(|_| args.first() == Some(&"commit-tree")),
+        )
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -807,6 +826,41 @@ impl CandidateSnapshot {
         }
         Ok(())
     }
+    /// M3: the packet's changes onto another commit checked out at `path`, without the
+    /// check that `path` is the packet's own head. A hunk that does not apply, or a new
+    /// file that already exists there, is an error: there is no merge.
+    fn apply_onto(&self, path: &Path) -> IoResult<()> {
+        for (patch, index) in [(&self.staged, true), (&self.unstaged, false)] {
+            if patch.is_empty() {
+                continue;
+            }
+            let mut args = vec!["apply", "--binary", "--whitespace=nowarn"];
+            if index {
+                args.push("--index");
+            }
+            args.push("-");
+            git(path, &args, Some(patch))?;
+        }
+        for e in &self.extras {
+            let dest = contained(path, &e.path)?;
+            if let Some(parent) = dest.parent() {
+                io(fs::create_dir_all(parent))?;
+            }
+            if e.link {
+                io(symlink(
+                    std::str::from_utf8(&e.bytes).map_err(|_| "non UTF8 link")?,
+                    &dest,
+                ))?;
+            } else {
+                write_new(&dest, &e.bytes)?;
+                io(fs::set_permissions(
+                    &dest,
+                    fs::Permissions::from_mode(e.mode),
+                ))?;
+            }
+        }
+        Ok(())
+    }
     fn apply(&self, path: &Path) -> IoResult<()> {
         if !self.staged.is_empty() {
             git(
@@ -1473,4 +1527,117 @@ pub fn verify_sealed_candidate(
     CandidateSnapshot::reopen(&reference.path, candidate)
         .map_err(|e| format!("sealed candidate packet rejected: {e}"))?;
     inspect_candidate_changes(engine, attempt, candidate)
+}
+
+/// M3: what integrating one accepted candidate onto a plan branch did.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Integration {
+    /// The branch now names `commit`, whose only parent is the branch's previous commit.
+    Integrated { commit: String },
+    /// Nothing moved; `detail` says why (a hunk or a new file that does not apply, or a
+    /// branch that moved). There is no merge and no conflict resolution.
+    Conflict { detail: String },
+}
+
+/// The private directory of plan integrations, beside the database.
+pub fn integration_root(engine: &Engine) -> IoResult<PathBuf> {
+    let data = engine
+        .db_path()
+        .parent()
+        .ok_or("database has no parent directory")?;
+    let root = canonical(data)?.join("integration");
+    match fs::symlink_metadata(&root) {
+        Ok(m) if m.is_dir() && m.permissions().mode() & 0o077 == 0 => {}
+        Ok(_) => return Err("integration root is not a private directory".into()),
+        Err(_) => private_dir(&root)?,
+    }
+    Ok(root)
+}
+
+/// M3: applies the sealed candidate of an accepted `attempt` onto `parent`, commits it with
+/// Jojo's identity and moves `branch` from `parent` (or from nothing, when `parent` is the
+/// plan's base and the branch does not exist yet) to that commit, all in the registered
+/// repository. The work happens in a new detached worktree `name` under the integration
+/// root; the developer's checkout is never touched. A branch that already names this
+/// exact integration (a helper that ended before recording it) is adopted.
+pub fn integrate_candidate(
+    engine: &Engine,
+    attempt: OpaqueId,
+    candidate: &str,
+    branch: &str,
+    parent: &str,
+    message: &str,
+    name: &str,
+) -> IoResult<Integration> {
+    let r = current_or_recovered(engine, attempt)?;
+    let reference = engine
+        .reader()
+        .map_err(|e| e.to_string())?
+        .read(|v| v.candidate_reference(attempt, candidate))
+        .map_err(|e| e.to_string())?
+        .ok_or("candidate is not durably recorded")?;
+    let packet = CandidateSnapshot::reopen(&reference.path, candidate)
+        .map_err(|e| format!("sealed candidate packet rejected: {e}"))?;
+    if packet.attempt != attempt || packet.repository != r.repository || !oid(parent) {
+        return Err("sealed candidate packet belongs to another attempt".into());
+    }
+    let refname = format!("refs/heads/{branch}");
+    if !refname.starts_with("refs/heads/jojo/plan/") || name.contains('/') || name.is_empty() {
+        return Err("not a plan branch or integration name".into());
+    }
+    let repo = r.repo.path.clone();
+    let current = git(&repo, &["rev-parse", "--verify", "--quiet", &refname], None)
+        .ok()
+        .map(line)
+        .transpose()?;
+    let dest = integration_root(engine)?.join(name);
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            "--quiet",
+            text_path(&dest)?,
+            parent,
+        ],
+        None,
+    )?;
+    if let Err(why) = packet.apply_onto(&dest) {
+        return Ok(Integration::Conflict {
+            detail: format!("the candidate does not apply to {parent}: {why}"),
+        });
+    }
+    git(&dest, &["add", "--all"], None)?;
+    let tree = line(git(&dest, &["write-tree"], None)?)?;
+    let commit = line(git(
+        &dest,
+        &["commit-tree", &tree, "-p", parent, "-m", message],
+        None,
+    )?)?;
+    match current {
+        Some(now) if now == parent => {
+            git(&repo, &["update-ref", &refname, &commit, parent], None)?;
+        }
+        None => {
+            let absent = "0".repeat(parent.len());
+            git(&repo, &["update-ref", &refname, &commit, &absent], None)?;
+        }
+        Some(now) => {
+            // Adopt an integration that was made but not recorded: same parent, same tree.
+            let tree_of = line(git(
+                &repo,
+                &["rev-parse", &format!("{now}^{{tree}}")],
+                None,
+            )?)?;
+            let parent_of = line(git(&repo, &["rev-parse", &format!("{now}^")], None)?)?;
+            if tree_of != tree || parent_of != parent {
+                return Ok(Integration::Conflict {
+                    detail: format!("the plan branch moved to {now}; expected {parent}"),
+                });
+            }
+            return Ok(Integration::Integrated { commit: now });
+        }
+    }
+    Ok(Integration::Integrated { commit })
 }

@@ -1047,6 +1047,53 @@ fn record(h: &mut H) {
         "ChatIndex",
         object([("limit", n(8))]),
     );
+    // M3 (1.3): project records and the plan runner; recorded last so that every
+    // earlier frame keeps its request identity.
+    let at3 = |h: &mut H, label: &str, kind: &str, payload: Json| {
+        h.at(label, 3, kind, payload);
+    };
+    let project = |repository: Json, capacity: i64| {
+        object([
+            ("project", hex(31)),
+            ("revision", n(0)),
+            ("name", text("Sample")),
+            ("repositories", Json::List(vec![repository])),
+            ("instructions", text("")),
+            ("test_command", Json::List(vec![])),
+            ("ci_command", Json::List(vec![])),
+            ("kinds", Json::List(vec![])),
+            ("default_provider", text("Codex")),
+            ("capacity", n(capacity)),
+        ])
+    };
+    at2(h, "save project at 1.2", "SaveProject", project(hex(7), 2));
+    at3(
+        h,
+        "save project unregistered",
+        "SaveProject",
+        project(hex(7), 2),
+    );
+    at3(
+        h,
+        "save project no capacity",
+        "SaveProject",
+        project(hex(7), 0),
+    );
+    at3(h, "projects empty", "Projects", object([]));
+    at3(h, "run unknown plan", "RunPlan", object([("plan", hex(7))]));
+    at3(
+        h,
+        "control unknown plan",
+        "ControlPlan",
+        object([("plan", hex(7)), ("action", text("Pause"))]),
+    );
+    at3(
+        h,
+        "control unknown action",
+        "ControlPlan",
+        object([("plan", hex(7)), ("action", text("Retry"))]),
+    );
+    at3(h, "plan run none", "PlanRun", object([("plan", hex(7))]));
 }
 
 #[test]
@@ -1254,4 +1301,12 @@ answer unknown action => 1.2 Error {"code":"UnknownAction"}
 cancel unknown turn => 1.2 Error {"code":"UnknownTurn"}
 chat index empty => 1.2 Response {"features":[],"features_complete":true,"repositories":[],"repositories_complete":true}
 chat index extra field => 1.2 Error {"code":"InvalidPayload: unexpected or missing fields"}
+save project at 1.2 => 1.2 Error {"code":"UnknownType"}
+save project unregistered => 1.3 Error {"code":"InvalidProject: a repository is not registered"}
+save project no capacity => 1.3 Error {"code":"InvalidProject: capacity is one to eight"}
+projects empty => 1.3 Response {"capacity":1,"configuration":1,"projects":[]}
+run unknown plan => 1.3 Error {"code":"RunRefused: not a plan a lead drafted"}
+control unknown plan => 1.3 Error {"code":"UnknownPlanRun: this plan was never started"}
+control unknown action => 1.3 Error {"code":"UnknownAction"}
+plan run none => 1.3 Response null
 "#;

@@ -480,6 +480,22 @@ impl Tx<'_> {
         let stored = crate::dependencies::load_plan(self.conn, s.plan, approval.revision)?
             .ok_or_else(|| deny("approved subject is not an execution plan"))?;
         let (_, planned, base, sources) = step_of(&stored.plan, request.step).map_err(deny)?;
+        // E8 (M3): a step of a started plan starts from its plan branch, which holds the
+        // base and every step integrated so far; the core checks that it holds exactly
+        // what the step depends on when the step is queued and reserved.
+        let (base, sources) = match crate::runner::run_head(self.conn, s.plan, approval.revision)? {
+            Some(head) if head != base => (
+                head.clone(),
+                SourceVector {
+                    sources: vec![Source {
+                        repository: planned,
+                        revision: SourceRevision::Commit(head),
+                    }],
+                    environment: sources.environment.clone(),
+                },
+            ),
+            _ => (base, sources),
+        };
         if planned != repository.id() {
             return Err(deny("repository differs from the approved plan"));
         }

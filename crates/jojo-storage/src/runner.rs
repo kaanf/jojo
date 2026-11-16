@@ -104,6 +104,8 @@ pub struct RunStep {
     pub candidate: Option<String>,
     pub receipt: Option<u64>,
     pub commit: Option<String>,
+    /// The event of the human's acceptance; integration follows this order.
+    pub accepted: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -499,6 +501,17 @@ fn view(v: &ReadView<'_>, plan: &str, revision: i64) -> Result<PlanRunView, Stor
             .unwrap_or_default();
         let (state, detail, attempt, candidate, receipt, commit) =
             step_state(v, plan, revision, node, cancelled)?;
+        let accepted = match attempt {
+            Some(a) => c
+                .query_optional(
+                    "SELECT event FROM candidate_acceptances WHERE attempt=?1",
+                    &[Value::Text(&id_to_text(a))],
+                    |r| r.int(0),
+                )?
+                .map(from_db)
+                .transpose()?,
+            None => None,
+        };
         steps.push(RunStep {
             step: node,
             key,
@@ -513,6 +526,7 @@ fn view(v: &ReadView<'_>, plan: &str, revision: i64) -> Result<PlanRunView, Stor
             candidate,
             receipt,
             commit,
+            accepted,
         });
     }
     // A step is ready only when every prerequisite is on the plan branch; a step behind a
@@ -788,5 +802,189 @@ impl ReadView<'_> {
     }
     pub fn plans_running(&self) -> Result<bool, StorageError> {
         Ok(!runs(self.conn, true)?.is_empty())
+    }
+}
+
+/// E8 (M3): the commit a step of a run starts from: the newest commit on the plan
+/// branch, which holds the base and every step integrated so far. `None` without a run.
+pub(crate) fn run_head(
+    c: &Connection,
+    plan: ArtifactId,
+    revision: Revision,
+) -> Result<Option<String>, StorageError> {
+    let p = Value::Text(&id_to_text(plan.0));
+    let r = Value::Int(to_db(revision.0)?);
+    let Some(base) = c.query_optional(
+        "SELECT base FROM plan_runs WHERE plan=?1 AND revision=?2",
+        &[p, r],
+        |row| row.text(0),
+    )?
+    else {
+        return Ok(None);
+    };
+    let head = c.query_optional(
+        "SELECT commit_id FROM plan_integrations WHERE plan=?1 AND revision=?2
+         AND outcome='INTEGRATED' ORDER BY ordinal DESC LIMIT 1",
+        &[p, r],
+        |row| row.text(0),
+    )?;
+    Ok(Some(head.unwrap_or(base)))
+}
+
+/// E8 (M3): a step of a run may start from a commit other than the approved base only
+/// when that commit is one this run integrated onto its plan branch and every
+/// prerequisite of the step was integrated at or before it. The plan's own evidence edges
+/// are evaluated as approved; this decides only the source.
+pub(crate) fn run_source_allowed(
+    c: &Connection,
+    plan: ArtifactId,
+    revision: Revision,
+    approved: &jojo_domain::dependency::ExecutionPlan,
+    step: NodeRef,
+    observed: &jojo_domain::dependency::SourceVector,
+) -> Result<bool, StorageError> {
+    use jojo_domain::dependency::SourceRevision;
+    let p = id_to_text(plan.0);
+    let r = to_db(revision.0)?;
+    let Some(repository) = c.query_optional(
+        "SELECT repository FROM plan_runs WHERE plan=?1 AND revision=?2",
+        &[Value::Text(&p), Value::Int(r)],
+        |row| row.text(0),
+    )?
+    else {
+        return Ok(false);
+    };
+    let input = approved.inputs.iter().find(|i| i.step == step);
+    let [source] = observed.sources.as_slice() else {
+        return Ok(false);
+    };
+    let SourceRevision::Commit(commit) = &source.revision else {
+        return Ok(false);
+    };
+    if id_to_text(source.repository.0) != repository
+        || input.is_none_or(|i| i.environment != observed.environment)
+    {
+        return Ok(false);
+    }
+    let ordinal = |column: &str, value: &str| -> Result<Option<i64>, StorageError> {
+        Ok(c.query_optional(
+            &format!(
+                "SELECT ordinal FROM plan_integrations WHERE plan=?1 AND revision=?2
+                 AND outcome='INTEGRATED' AND {column}=?3"
+            ),
+            &[Value::Text(&p), Value::Int(r), Value::Text(value)],
+            |row| row.int(0),
+        )?)
+    };
+    let Some(at) = ordinal("commit_id", commit)? else {
+        return Ok(false);
+    };
+    for e in approved
+        .execution
+        .edges
+        .iter()
+        .filter(|e| e.dependent == step)
+    {
+        match ordinal("step", &id_to_text(e.prerequisite.id))? {
+            Some(k) if k <= at => {}
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+impl Tx<'_> {
+    /// Records the integration of an accepted step exactly once. When it is on the plan
+    /// branch, the evidence its dependents wait for is observed: the host validation of
+    /// exactly this step passed and the human accepted it.
+    pub fn record_integration(
+        &mut self,
+        plan: ArtifactId,
+        revision: Revision,
+        step: OpaqueId,
+        attempt: OpaqueId,
+        parent: &str,
+        outcome: &Integration,
+    ) -> Result<String, TxError> {
+        if self.candidate_accepted(attempt)?.is_none() {
+            return Err(deny("only an accepted candidate is integrated"));
+        }
+        let head = run_head(self.conn, plan, revision)?
+            .ok_or_else(|| deny("UnknownPlanRun: this plan was never started"))?;
+        if head != parent {
+            return Err(deny("the plan branch moved; integrate again"));
+        }
+        let (name, commit, detail) = match outcome {
+            Integration::Integrated { commit } => ("INTEGRATED", Some(commit.as_str()), ""),
+            Integration::Conflict { detail } => ("CONFLICT", None, detail.as_str()),
+        };
+        let detail: String = detail.chars().take(1024).collect();
+        let (p, r) = (id_to_text(plan.0), to_db(revision.0)?);
+        let event = self.append_event(
+            "PlanStepIntegrated",
+            None,
+            &format!("{p}|{}|{name}|{}", id_to_text(step), commit.unwrap_or("-")),
+        )?;
+        self.conn.execute(
+            "INSERT INTO plan_integrations
+             SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,?5,?6,?7,?8,?9
+             FROM plan_integrations WHERE plan=?1 AND revision=?2",
+            &[
+                Value::Text(&p),
+                Value::Int(r),
+                Value::Text(&id_to_text(step)),
+                Value::Text(&id_to_text(attempt)),
+                Value::Text(parent),
+                Value::Text(name),
+                commit.map_or(Value::Null, Value::Text),
+                Value::Text(&detail),
+                Value::Int(to_db(event.0)?),
+            ],
+        )?;
+        if commit.is_none() {
+            return Ok("conflict".into());
+        }
+        let stored = crate::dependencies::load_plan(self.conn, plan, revision)?
+            .ok_or_else(|| deny("plan run without its plan"))?;
+        let wanted = format!("validation:{}", id_to_text(step));
+        let mut seen = Vec::new();
+        for e in &stored.plan.execution.edges {
+            let jojo_domain::dependency::Predicate::Evidence { requirement, .. } = &e.predicate
+            else {
+                continue;
+            };
+            if e.prerequisite.id != step
+                || requirement.evidence_id != wanted
+                || requirement.kind != jojo_domain::dependency::EvidenceKind::ValidationPassed
+                || seen.contains(&requirement.evidence_id)
+            {
+                continue;
+            }
+            seen.push(requirement.evidence_id.clone());
+            let observation = jojo_domain::dependency::Observation {
+                schema: jojo_domain::dependency::DEPENDENCY_SCHEMA,
+                id: requirement.evidence_id.clone(),
+                revision: requirement.observation_revision,
+                kind: requirement.kind,
+                binding: requirement.binding.clone(),
+                status: jojo_domain::dependency::EvidenceStatus::Verified,
+                observer: "jojo plan integration (host validation and human acceptance)".into(),
+                observed: self.now,
+                expires_at_unix_ms: self
+                    .now
+                    .unix_millis
+                    .saturating_add(i64::try_from(requirement.max_age_ms).unwrap_or(i64::MAX)),
+            };
+            self.record_dependency_observation(None, &observation)?;
+        }
+        Ok("integrated".into())
+    }
+
+    fn candidate_accepted(&self, attempt: OpaqueId) -> Result<Option<i64>, TxError> {
+        Ok(self.conn.query_optional(
+            "SELECT receipt FROM candidate_acceptances WHERE attempt=?1",
+            &[Value::Text(&id_to_text(attempt))],
+            |r| r.int(0),
+        )?)
     }
 }
