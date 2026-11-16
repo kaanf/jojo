@@ -161,7 +161,7 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.opaqueSidebar, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 2940)
+            .frame(width: 1120, height: 3360)
             guard let directory else { continue }
             try write(shell, to: directory, "shell-\(name).png")
         }
@@ -1034,6 +1034,217 @@ final class DesignShellTests: XCTestCase {
             }
         }
     }
+
+    // MARK: Activity & Audit (docs/design/screens/ACTIVITY.md)
+
+    /// One row of the `Events` answer, as the helper sends it.
+    private func event(_ seq: Int64, epoch: Int64 = 7, type: String = "WorktreeReady", kind: String? = nil, id: String? = nil,
+                       revision: Int64? = nil, payload: String = "state=READY", complete: Bool = true) -> JSON {
+        .object(["seq": .int(seq), "epoch": .int(epoch), "type": .text(type), "aggregate_kind": kind.map(JSON.text) ?? .null,
+                 "aggregate_id": id.map(JSON.text) ?? .null, "revision": revision.map(JSON.int) ?? .null,
+                 "payload": .text(payload), "detail_complete": .bool(complete)])
+    }
+
+    private func answerEvents(_ h: Harness, _ rows: [JSON]) {
+        let request = h.fake.last("Events")!
+        var e = Envelope(session: request.session, epoch: h.fake.epoch, id: request.id, type: "Response")
+        e.payloadList = rows
+        h.fake.deliver(e)
+    }
+
+    /// A workspace whose snapshot is at event `head`.
+    private func workspace(_ h: Harness, head: Int64) -> WorkspaceModel {
+        let model = WorkspaceModel(client: h.client)
+        model.refresh()
+        h.fake.reply(h.fake.last("Snapshot")!, ["rows": .list([]), "as_of_event_seq": .int(head), "admission": .text("Open")])
+        return model
+    }
+
+    func test_dw1_activity_reads_the_newest_events_in_pages_and_afterwards_only_newer_ones() {
+        let h = Harness()
+        let model = workspace(h, head: 81)
+        XCTAssertEqual(model.eventsLoad, .idle)
+        XCTAssertEqual(h.fake.count("Events"), 0, "the journal is read only when the screen asks")
+        model.loadEvents()
+        XCTAssertEqual(model.eventsLoad, .loading)
+        XCTAssertEqual(h.fake.last("Events")?.payload, ["after": .int(17), "limit": .int(8)], "the existing query, one helper page")
+        model.loadEvents()
+        XCTAssertEqual(h.fake.count("Events"), 1, "one read at a time")
+        answerEvents(h, (18...25).map { event($0) })
+        XCTAssertEqual(h.fake.last("Events")?.payload["after"], .int(25))
+        answerEvents(h, (26...28).map { event($0, type: "ArtifactApproved", kind: "artifact", id: Self.ids[4], revision: 5) })
+        XCTAssertEqual(model.eventsLoad, .loaded)
+        XCTAssertEqual(model.events.map(\.seq), Array(18...28))
+        XCTAssertEqual(model.events.last?.aggregateID, Self.ids[4])
+        XCTAssertEqual(model.events.last?.revision, 5)
+        XCTAssertNil(model.events.first?.aggregateKind)
+
+        model.loadEvents()
+        XCTAssertEqual(h.fake.last("Events")?.payload["after"], .int(28), "afterwards only what was committed since")
+        answerEvents(h, [event(29)])
+        XCTAssertEqual(model.events.map(\.seq), Array(18...29))
+
+        model.pollEvents()
+        XCTAssertEqual(h.fake.last("Events")?.payload, ["after": .int(81), "limit": .int(1)], "the poll is unchanged")
+        answerEvents(h, [])
+        XCTAssertEqual(model.events.count, 12, "the poll does not fill the list")
+    }
+
+    func test_dw1_activity_loads_older_events_without_gaps_and_keeps_them_when_a_read_fails() {
+        let h = Harness()
+        let model = workspace(h, head: 12)
+        model.loadOlderEvents()
+        XCTAssertEqual(h.fake.count("Events"), 0, "nothing is held yet")
+        model.loadEvents()
+        XCTAssertEqual(h.fake.last("Events")?.payload["after"], .int(0))
+        answerEvents(h, (1...8).map { event($0) })
+        answerEvents(h, (9...12).map { event($0) })
+        model.loadOlderEvents()
+        XCTAssertEqual(h.fake.count("Events"), 2, "the journal starts at the oldest held event")
+
+        let late = Harness()
+        let other = workspace(late, head: 100)
+        other.loadEvents()
+        answerEvents(late, [event(99), event(100)])
+        XCTAssertEqual(late.fake.last("Events")?.payload["after"], .int(36))
+        other.loadOlderEvents()
+        XCTAssertEqual(late.fake.last("Events")?.payload["after"], .int(34), "the 64 events before the oldest held one")
+        late.fake.error(late.fake.last("Events")!, "Unavailable")
+        XCTAssertEqual(other.eventsLoad, .failed("Unavailable"))
+        XCTAssertEqual(other.events.map(\.seq), [99, 100], "a failed read keeps what was read")
+        other.loadOlderEvents()
+        var malformed = event(35)
+        if case .object(var fields) = malformed { fields["type"] = nil; malformed = .object(fields) }
+        answerEvents(late, [malformed])
+        XCTAssertEqual(other.eventsLoad, .failed("malformed event"))
+        other.loadOlderEvents()
+        answerEvents(late, (35...42).map { event($0) })
+        XCTAssertEqual(late.fake.last("Events")?.payload["after"], .int(42))
+        answerEvents(late, (43...50).map { event($0) })
+        XCTAssertEqual(other.eventsLoad, .loading)
+        late.fake.breakChannel("pipe closed")
+        XCTAssertNotEqual(other.eventsLoad, .loading, "a lost channel ends the read")
+        XCTAssertEqual(other.events.map(\.seq), [99, 100], "a read that did not finish adds nothing, so the list has no gap")
+    }
+
+    private func journal() -> [JournalEvent] {
+        let ids = Self.ids
+        return [
+            event(60, epoch: 6, type: "CandidateAccepted", kind: "scheduler_attempt", id: ids[0], revision: 9, payload: "decision=ACCEPT;receipt=4"),
+            event(61, epoch: 6, type: "EngineStopped", payload: "shutdown=CLEAN"),
+            event(62, type: "EngineStarted", payload: "previous_epoch=6;previous_shutdown=CLEAN;quarantined_claims=0"),
+            event(63, type: "RecoveryStarted", payload: String(repeating: "95eb9cc2", count: 8)),
+            event(64, type: "ArtifactVersionCreated", kind: "artifact", id: ids[4], revision: 5, payload: "content=" + String(repeating: "c0de", count: 16)),
+            event(65, type: "ReviewDocumentCreated", kind: "review_document", id: ids[1], revision: 5,
+                  payload: "hash=" + String(repeating: "7c1f", count: 16) + ";upstream=12", complete: false),
+            event(66, type: "ArtifactApproved", kind: "artifact", id: ids[4], revision: 5, payload: "decision=APPROVE"),
+            event(67, type: "WorktreeReady", kind: "worktree_admin", id: ids[0], revision: 3),
+            event(68, type: "ArtifactApproved", kind: "review_document", id: ids[1], revision: 6, payload: "decision=APPROVE"),
+        ].compactMap(JournalEvent.init)
+    }
+
+    private func activity(query: String = "", hidden: Set<String> = [], selected: Int64? = nil) -> ActivityState {
+        ActivityState(connection: .ready(epoch: 7), admission: "Open", rows: inbox().rows, head: 68, events: journal(), load: .loaded,
+                      query: query, hidden: hidden, selected: selected)
+    }
+
+    func test_dw1_activity_shows_the_loaded_events_newest_first_grouped_by_epoch() {
+        let state = activity()
+        XCTAssertEqual(state.events.count, 9)
+        XCTAssertEqual(state.shown.map(\.seq), Array((60...68).reversed()))
+        XCTAssertEqual(state.groups.map(\.title), ["Epoch 7", "Epoch 6"], "the core reports no time to group by")
+        XCTAssertEqual(state.groups.map(\.events.count), [7, 2])
+        XCTAssertEqual(state.types.first, ActivityState.TypeCount(type: "ArtifactApproved", count: 2))
+        XCTAssertEqual(state.types.map(\.type), state.types.map(\.type).sorted())
+        XCTAssertEqual(state.chosen?.seq, 68, "without a choice, the newest shown event")
+        XCTAssertEqual(activity(selected: 63).chosen?.seq, 63)
+        XCTAssertEqual(state.range, "Events 60 to 68 are loaded, newest first.")
+        XCTAssertEqual(ActivityState.record(state.events[0]), "event 60")
+        XCTAssertEqual(ActivityState.subject(state.events[0]), "1a2b3c4d1a2b")
+        XCTAssertNil(ActivityState.subject(state.events[1]), "an event without an aggregate has no subject")
+        XCTAssertTrue(state.isDocument(state.events[4]) && state.isDocument(state.events[5]))
+        XCTAssertFalse(state.isDocument(state.events[0]) || state.isDocument(state.events[1]),
+                       "only a document the snapshot lists can be opened")
+        XCTAssertTrue(MainView.built.contains(.activity))
+    }
+
+    func test_dw1_activity_search_and_type_filters_cover_only_the_loaded_events() {
+        XCTAssertFalse(activity().filtered)
+        let approved = activity(hidden: ["ArtifactApproved", "EngineStopped"])
+        XCTAssertTrue(approved.filtered)
+        XCTAssertEqual(approved.shown.map(\.seq), [67, 65, 64, 63, 62, 60])
+        XCTAssertEqual(approved.range, "Events 60 to 68 are loaded, newest first; 6 of 9 shown.")
+        XCTAssertEqual(activity(hidden: ["ArtifactApproved"], selected: 68).chosen?.seq, 67, "a hidden event is not the chosen one")
+        XCTAssertFalse(activity(hidden: ["NoSuchType"]).filtered, "a type that is not loaded filters nothing")
+
+        XCTAssertEqual(activity(query: " approve ").shown.map(\.seq), [68, 66], "the payload is searched, without case")
+        XCTAssertEqual(activity(query: "worktree").shown.map(\.seq), [67], "and the type and the aggregate kind")
+        XCTAssertEqual(activity(query: Self.ids[1]).shown.map(\.seq), [68, 65], "and the subject")
+        XCTAssertEqual(activity(query: "event 63").shown.map(\.seq), [63], "and the record")
+        let none = activity(query: "09:42")
+        XCTAssertTrue(none.shown.isEmpty && none.groups.isEmpty, "a time is not reported and cannot be found")
+        XCTAssertNil(none.chosen)
+
+        var state = activity()
+        XCTAssertTrue(state.canLoadOlder)
+        state.load = .loading
+        XCTAssertFalse(state.canLoadOlder)
+        state.load = .loaded
+        state.connection = .channelLost("pipe closed")
+        XCTAssertFalse(state.canLoadOlder)
+        XCTAssertFalse(state.admissionClosed, "admission is stated only while the core is connected")
+        state.connection = .ready(epoch: 7)
+        state.admission = "Closed"
+        XCTAssertTrue(state.admissionClosed)
+        state.events = Array(journal().prefix(1)).compactMap { JournalEvent(event(1, payload: $0.payload)) }
+        XCTAssertFalse(state.canLoadOlder, "the journal starts at event 1")
+        XCTAssertEqual(state.range, "Event 1 is loaded.")
+    }
+
+    /// Review aid, as above: Activity & Audit with test events in two columns and in one,
+    /// and its filtered, unmatched, loading, empty, failed, closed and disconnected forms.
+    func test_dw1_activity_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        var loading = activity()
+        (loading.events, loading.load) = ([], .loading)
+        var none = loading
+        none.load = .loaded
+        var failed = loading
+        failed.load = .failed("Unavailable")
+        var stale = activity()
+        stale.load = .failed("Unavailable")
+        var lost = activity()
+        (lost.connection, lost.admission) = (.channelLost("pipe closed"), "Closed")
+        var closed = activity(selected: 61)
+        closed.admission = "Closed"
+        let opening = CGSize(width: 1120, height: 720), tall = CGSize(width: 1120, height: 1100), wide = CGSize(width: 1440, height: 1000)
+        let cases: [(String, ActivityState, CGSize)] = [
+            ("activity", activity(), opening), ("activity-tall", activity(selected: 65), tall),
+            ("activity-wide", activity(selected: 64), wide),
+            ("activity-narrow", activity(selected: 65), CGSize(width: 900, height: 1700)),
+            ("activity-filtered", activity(query: "approve", hidden: ["WorktreeReady", "EngineStopped"]), wide),
+            ("activity-unmatched", activity(query: "09:42"), wide),
+            ("activity-loading", loading, opening), ("activity-empty", none, opening),
+            ("activity-failed", failed, opening), ("activity-failed-loaded", stale, wide),
+            ("activity-closed", closed, wide), ("activity-disconnected", lost, wide),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, size) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.activity), showInspector: {}) {
+                        ActivityView(state: state)
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
+        }
+    }
 }
 
 /// Every status component and button kind on a card, for the snapshot.
@@ -1278,6 +1489,42 @@ private struct Gallery: View {
                                     TraceLine("event 12", "Bound upstream approval", last: true)
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            titled("Search field, filter chips, kind tags and record rows") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 12) {
+                        ListSearchField(prompt: "Search decisions, attempts, commits, record IDs…", text: .constant(""))
+                        ListSearchField(prompt: "Search", text: .constant("ADR-031"))
+                    }
+                    .environment(\.offscreen, true)
+                    HStack(spacing: 6) {
+                        FilterChip(title: "Decision", isOn: true)
+                        FilterChip(title: "Approval", count: 4, isOn: true)
+                        FilterChip(title: "Attempt", count: 2, isOn: false)
+                        FilterChip(title: "Recovery", isOn: false)
+                        Spacer(minLength: 12)
+                        KindTag("Approval", tone: .ok)
+                        KindTag("Validation")
+                        KindTag("Recovery", tone: .warn)
+                        KindTag("Error", tone: .danger)
+                        KindTag("ArtifactVersionCreated")
+                    }
+                    Card(.panelList) {
+                        VStack(spacing: 0) {
+                            RecordHeader()
+                            RecordGroup("Today")
+                            RecordRow(type: "Approval", tone: .ok, text: "Approval request a3 checked: still current",
+                                      subject: "Push c44e910", record: "rec_8812")
+                            RecordRow(type: "Recovery", tone: .warn, text: "Reinspected J2 · Attempt 1: confirmed dead",
+                                      subject: "J2 #1", record: "rec_8805", selected: true)
+                            RecordGroup("Epoch 7")
+                            RecordRow(type: "ArtifactVersionCreated", text: "content=c0dec0dec0dec0dec0dec0dec0dec0dec0de", mono: true,
+                                      subject: "e5f6a7b8e5f6", record: "event 64")
+                            RecordRow(type: "EngineStarted", text: "previous_epoch=6;previous_shutdown=CLEAN", mono: true,
+                                      record: "event 62", last: true)
                         }
                     }
                 }

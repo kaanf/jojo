@@ -20,6 +20,7 @@ struct MainView: View {
                         }
                         .padding(.horizontal, 20)
                         // A redesigned screen fills the content area and sets its own padding.
+                        shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
                         shown(.agentRuns) { AgentRunsScreen(model: model, open: { screen = $0 }) }
                         shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
@@ -41,8 +42,8 @@ struct MainView: View {
     }
 
     /// Destinations that have a screen today; the others show `NotBuiltYet`.
-    static let built: Set<Screen> = [.agentRuns, .approvalInbox, .recoveryCenter, .executionPlan, .sourceControl,
-                                     .specifications, .verification]
+    static let built: Set<Screen> = [.activity, .agentRuns, .approvalInbox, .recoveryCenter, .executionPlan,
+                                     .sourceControl, .specifications, .verification]
 
     private func shown(_ target: Screen, @ViewBuilder _ content: () -> some View) -> some View {
         content()

@@ -70,6 +70,37 @@ public struct SnapshotRow: Equatable, Sendable, Identifiable {
     public var subject: String { String(key.split(separator: ":", maxSplits: 1).last ?? "") }
 }
 
+/// One committed event as the `Events` answer gives it: its sequence, the engine epoch that
+/// committed it, its type, the aggregate it changed and the first 512 characters of its
+/// payload. The helper sends no time, no actor and no hash.
+public struct JournalEvent: Equatable, Sendable, Identifiable {
+    public let seq: Int64
+    public let epoch: Int64
+    public let type: String
+    public let aggregateKind: String?
+    public let aggregateID: String?
+    public let revision: Int64?
+    public let payload: String
+    /// False when the payload is longer than the excerpt the answer carries.
+    public let detailComplete: Bool
+    public var id: Int64 { seq }
+
+    public init?(_ row: JSON) {
+        guard let seq = row["seq"]?.integer, let epoch = row["epoch"]?.integer, let type = row["type"]?.string,
+              let payload = row["payload"]?.string, let complete = row["detail_complete"]?.boolean else { return nil }
+        (self.seq, self.epoch, self.type, self.payload, self.detailComplete) = (seq, epoch, type, payload, complete)
+        aggregateKind = row["aggregate_kind"]?.string
+        aggregateID = row["aggregate_id"]?.string
+        revision = row["revision"]?.integer
+    }
+}
+
+/// Where the read of the event journal stands.
+public enum JournalLoad: Equatable, Sendable {
+    case idle, loading, loaded
+    case failed(String)
+}
+
 public struct RecoveryRow: Equatable, Sendable, Identifiable {
     public let attempt: String
     public let assessment: String
@@ -146,11 +177,18 @@ public final class WorkspaceModel {
     public private(set) var agentLog: [String] = []
     public private(set) var validationReport = ""
     private var candidateLoad = 0
+    /// The events read for Activity & Audit, oldest first and without gaps. Read only when
+    /// that screen asks; `pollEvents` does not fill it.
+    public private(set) var events: [JournalEvent] = []
+    public private(set) var eventsLoad = JournalLoad.idle
     public var onChange: (() -> Void)?
 
     private let client: HelperClient
     private var loading = false
     static let maxPages = 32
+    /// The helper's largest page, and how far one read of the journal reaches back.
+    static let eventPage = 8
+    static let eventWindow: Int64 = 64
 
     public init(client: HelperClient) {
         self.client = client
@@ -216,6 +254,55 @@ public final class WorkspaceModel {
         guard let seq = snapshotSeq, !loading else { return }
         client.query(.Events, ["after": .int(seq), "limit": .int(1)]) { [weak self] reply in
             if case .list(let rows) = reply, !rows.isEmpty { self?.refresh() }
+        }
+    }
+
+    /// Brings the held events up to the journal's end: the newest `eventWindow` events the
+    /// first time, afterwards only the ones committed since.
+    public func loadEvents() {
+        guard eventsLoad != .loading, let head = snapshotSeq else { return }
+        eventsLoad = .loading
+        onChange?()
+        readEvents(after: events.last?.seq ?? max(0, head - Self.eventWindow), before: nil, collected: []) { [weak self] page in
+            self?.events += page
+        }
+    }
+
+    /// Reads the `eventWindow` events before the oldest held one.
+    public func loadOlderEvents() {
+        guard eventsLoad != .loading, let first = events.first?.seq, first > 1 else { return }
+        eventsLoad = .loading
+        onChange?()
+        readEvents(after: max(0, first - 1 - Self.eventWindow), before: first, collected: []) { [weak self] page in
+            guard let self else { return }
+            self.events = page + self.events
+        }
+    }
+
+    /// Pages of the existing `Events` query, in sequence order, up to `before` or the end.
+    private func readEvents(after: Int64, before: Int64?, collected: [JournalEvent], done: @escaping ([JournalEvent]) -> Void) {
+        client.query(.Events, ["after": .int(after), "limit": .int(Int64(Self.eventPage))]) { [weak self] reply in
+            guard let self else { return }
+            switch reply {
+            case .list(let rows):
+                let page = rows.compactMap(JournalEvent.init)
+                guard page.count == rows.count else {
+                    self.eventsLoad = .failed("malformed event")
+                    break
+                }
+                let wanted = page.filter { event in before.map { event.seq < $0 } ?? true }
+                let all = collected + wanted
+                if let last = page.last, page.count == Self.eventPage, wanted.count == page.count, all.count < Self.maxPages * Self.eventPage {
+                    return self.readEvents(after: last.seq, before: before, collected: all, done: done)
+                }
+                done(all)
+                self.eventsLoad = .loaded
+            case .error(let reason), .unanswered(let reason):
+                self.eventsLoad = .failed(reason)
+            default:
+                self.eventsLoad = .failed("unexpected answer")
+            }
+            self.onChange?()
         }
     }
 

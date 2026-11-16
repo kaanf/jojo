@@ -1121,3 +1121,164 @@ struct TraceLine: View {
         .overlay(alignment: .bottom) { if !last { Rectangle().fill(theme.hairline).frame(height: 1) } }
     }
 }
+
+// MARK: Audit surfaces (COMPONENTS.md, section 20)
+
+/// The search box above a list: a magnifier and a one-line field on `surface` with a ring.
+/// In the off-screen snapshot its text or prompt is drawn in place.
+struct ListSearchField: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.offscreen) private var offscreen
+    let prompt: String
+    @Binding var text: String
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 8)
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium)).foregroundStyle(theme.text3)
+                .accessibilityHidden(true)
+            Group {
+                if offscreen {
+                    Text(text.isEmpty ? prompt : text).foregroundStyle(text.isEmpty ? theme.text3 : theme.text).lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    TextField("", text: $text, prompt: Text(prompt).foregroundColor(theme.text3))
+                        .textFieldStyle(.plain).foregroundStyle(theme.text)
+                }
+            }
+            .font(.system(size: 13))
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .background(theme.surface, in: shape)
+        .overlay(shape.strokeBorder(theme.ringEmpty, lineWidth: 1))
+        .accessibilityLabel(prompt)
+    }
+}
+
+/// A filter that is on or off, as a capsule: on is `info` on `accent` at 16%, off is quiet.
+/// The chip is a plain view; the screen wraps it in a button.
+struct FilterChip: View {
+    @Environment(\.theme) private var theme
+    let title: String
+    var count: Int?
+    let isOn: Bool
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(title).font(.system(size: 12)).lineLimit(1)
+            if let count { Text("\(count)").font(.system(size: 11, design: .monospaced)).opacity(0.75) }
+        }
+        .foregroundStyle(isOn ? theme.info : theme.text3)
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .background(isOn ? theme.accent.opacity(0.16) : theme.fill2, in: Capsule())
+        .overlay(Capsule().strokeBorder(isOn ? .clear : theme.hairline, lineWidth: 1))
+        .contentShape(Capsule())
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// The type of a record as a small tag: 11 semibold in the tone's color on a quiet fill.
+struct KindTag: View {
+    @Environment(\.theme) private var theme
+    let text: String
+    var tone = Tone.neutral
+
+    init(_ text: String, tone: Tone = .neutral) {
+        self.text = text
+        self.tone = tone
+    }
+
+    var body: some View {
+        Text(text).font(.system(size: 11, weight: .semibold)).foregroundStyle(theme.foreground(tone))
+            .lineLimit(1).truncationMode(.middle)
+            .padding(.horizontal, 6)
+            .frame(height: 18)
+            .background(theme.hover, in: RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+/// The columns of a record table. The event column takes the width that is left.
+enum RecordColumns {
+    static let type: CGFloat = 150
+    static let subject: CGFloat = 92
+    static let record: CGFloat = 64
+    static let gap: CGFloat = 10
+}
+
+/// The column captions of a record table, with a hairline below.
+struct RecordHeader: View {
+    @Environment(\.theme) private var theme
+    var type = "Type"
+    var event = "Event"
+    var subject = "Subject"
+    var record = "Record"
+
+    var body: some View {
+        HStack(spacing: RecordColumns.gap) {
+            Text(type).frame(width: RecordColumns.type, alignment: .leading)
+            Text(event).frame(maxWidth: .infinity, alignment: .leading)
+            Text(subject).frame(width: RecordColumns.subject, alignment: .leading)
+            Text(record).frame(width: RecordColumns.record, alignment: .leading)
+        }
+        .font(.system(size: 11, weight: .semibold)).foregroundStyle(theme.text3).lineLimit(1)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .overlay(alignment: .bottom) { Rectangle().fill(theme.ringEmpty).frame(height: 1) }
+    }
+}
+
+/// The caption of a group of records inside the table ("Today" on the canvas).
+struct RecordGroup: View {
+    @Environment(\.theme) private var theme
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(theme.text3)
+            .padding(EdgeInsets(top: 10, leading: 14, bottom: 6, trailing: 14))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// One record of the table in one line: its type tag, what happened, the subject and the
+/// record's identifier; a hairline below unless last. The row is a plain view; the screen
+/// wraps it in a button.
+struct RecordRow: View {
+    @Environment(\.theme) private var theme
+    let type: String
+    var tone = Tone.neutral
+    let text: String
+    /// The text is the record's raw payload and is drawn monospaced.
+    var mono = false
+    var subject: String?
+    let record: String
+    var selected = false
+    var last = false
+
+    var body: some View {
+        HStack(spacing: RecordColumns.gap) {
+            HStack(spacing: 0) { KindTag(type, tone: tone) }.frame(width: RecordColumns.type, alignment: .leading)
+            Text(text).font(.system(size: mono ? 12 : 13, design: mono ? .monospaced : .default)).foregroundStyle(theme.text)
+                .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            Text(subject ?? "—").font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(subject == nil ? theme.text4 : theme.text2)
+                .lineLimit(1).truncationMode(.middle).frame(width: RecordColumns.subject, alignment: .leading)
+            Text(record).font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.text3)
+                .lineLimit(1).frame(width: RecordColumns.record, alignment: .leading)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .background(selected ? theme.accent.opacity(0.16) : .clear)
+        .overlay(alignment: .bottom) { if !last, !selected { Rectangle().fill(theme.hairline).frame(height: 1) } }
+        .overlay { if selected { Rectangle().strokeBorder(theme.info.opacity(0.4), lineWidth: 1) } }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
