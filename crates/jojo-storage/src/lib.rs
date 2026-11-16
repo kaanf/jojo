@@ -70,6 +70,8 @@ mod codex;
 pub use codex::*;
 mod slice;
 pub use slice::*;
+mod projects;
+
 mod turns;
 pub use turns::*;
 

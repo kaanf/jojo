@@ -108,7 +108,7 @@ fn second_helper_is_denied_and_a_replacement_after_sigkill_starts_a_new_closed_e
     let (mut first, ready) = start_owner(&root);
     assert!(
         ready.ends_with(
-            "engine ready epoch=1 schema=11 admission=closed previous=none quarantined_claims=0"
+            "engine ready epoch=1 schema=12 admission=closed previous=none quarantined_claims=0"
         ),
         "{ready}"
     );
@@ -146,7 +146,7 @@ fn second_helper_is_denied_and_a_replacement_after_sigkill_starts_a_new_closed_e
     let (third, ready) = start_owner(&root);
     assert!(
         ready.ends_with(
-            "engine ready epoch=2 schema=11 admission=closed previous=unclean quarantined_claims=0"
+            "engine ready epoch=2 schema=12 admission=closed previous=unclean quarantined_claims=0"
         ),
         "{ready}"
     );
@@ -159,7 +159,7 @@ fn second_helper_is_denied_and_a_replacement_after_sigkill_starts_a_new_closed_e
     let (fourth, ready) = start_owner(&root);
     assert!(
         ready.ends_with(
-            "engine ready epoch=3 schema=11 admission=closed previous=clean quarantined_claims=0"
+            "engine ready epoch=3 schema=12 admission=closed previous=clean quarantined_claims=0"
         ),
         "{ready}"
     );

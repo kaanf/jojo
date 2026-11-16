@@ -172,6 +172,7 @@ impl Service {
             RequestKind::AnswerQuestion => self.answer_question(request, p),
             RequestKind::CancelTurn => self.cancel_turn(request, p),
             RequestKind::RecoveryStart => self.recovery_start(request, p, origin),
+            RequestKind::SaveProject => self.save_project(request, p),
             _ => Err("UnknownType".into()),
         }
     }
@@ -388,6 +389,22 @@ impl Service {
             .execute(request, move |tx| {
                 tx.request_turn_stop(turn)?;
                 Ok("stop committed; the turn ends with its result".into())
+            })
+            .map(receipt)
+            .map_err(rejected)
+    }
+    /// M3 (protocol 1.3): a whole project record as its next revision. It also sets the
+    /// helper's parallel capacity (D4).
+    fn save_project(&mut self, request: CommandRequest, p: &Json) -> Result<Json, String> {
+        let protocol::SaveProjectCommand {
+            project,
+            revision,
+            record,
+        } = protocol::SaveProjectCommand::parse(p)?;
+        self.engine
+            .execute(request, move |tx| {
+                tx.save_project(project, revision, &record)
+                    .map(|next| format!("project revision={next}"))
             })
             .map(receipt)
             .map_err(rejected)

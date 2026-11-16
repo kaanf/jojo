@@ -757,3 +757,136 @@ fn m2_a_plan_turn_needs_approved_requirements_and_a_feature_question_stales_them
         "TurnRefused: a plan turn needs the approved requirements document"
     );
 }
+
+// ---- M3 (protocol 1.3): project records ----
+
+impl H {
+    fn ok3(&mut self, kind: &str, payload: Json) -> Json {
+        let r = self.at(3, kind, payload);
+        assert_eq!(r.kind, "Response", "{kind}: {:?}", r.payload);
+        r.payload
+    }
+
+    fn refused3(&mut self, kind: &str, payload: Json) -> String {
+        let r = self.at(3, kind, payload);
+        assert_eq!(r.kind, "Error", "{kind}: {:?}", r.payload);
+        string(get(&r.payload, "code").unwrap()).unwrap().to_owned()
+    }
+
+    /// The sample project: backend steps go to Claude Code, docs to Codex.
+    fn project_payload(&self, project: u128, revision: u64, repository: &str) -> Json {
+        let rule = |kind: &str, provider: &str| {
+            object([("kind", text(kind)), ("provider", text(provider))])
+        };
+        object([
+            ("project", identity(OpaqueId(project))),
+            ("revision", number(revision)),
+            ("name", text("Sample")),
+            ("repositories", Json::List(vec![text(repository)])),
+            ("instructions", text("Never touch the lock file.")),
+            ("test_command", Json::List(vec![text("/usr/bin/true")])),
+            ("ci_command", Json::List(vec![])),
+            (
+                "kinds",
+                Json::List(vec![rule("backend", "ClaudeCode"), rule("docs", "Codex")]),
+            ),
+            ("default_provider", text("ClaudeCode")),
+            ("capacity", number(2)),
+        ])
+    }
+
+    /// A plan turn under the project, then the ADR approved: the plan is drafted.
+    fn drafted_plan(&mut self, repository: &str, turn: u128, note: &str) -> Json {
+        let payload = self.plan_payload(repository, "Codex", note);
+        let r = self.frame(turn, 2, "ChatTurn", payload);
+        assert_eq!(r.kind, "Response", "{:?}", r.payload);
+        until(|| self.s().workers.reap());
+        let chat = self.chat(0);
+        items(field(&chat, &["turns"])).last().unwrap().clone()
+    }
+}
+
+#[test]
+fn m3_a_project_record_sets_capacity_and_decides_the_providers_of_a_lead_plan() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let missing = h.project_payload(3001, 0, &format!("{:032x}", 77));
+    assert_eq!(
+        h.refused3("SaveProject", missing),
+        "InvalidProject: a repository is not registered"
+    );
+    // The 1.2 vocabulary has no project request.
+    let early = h.project_payload(3001, 0, &repository);
+    assert_eq!(h.refused("SaveProject", early), "UnknownType");
+    let saved = h.ok3("SaveProject", h.project_payload(3001, 0, &repository));
+    assert_eq!(str_of(&saved, &["response"]), "project revision=1");
+    assert_eq!(
+        h.refused3("SaveProject", h.project_payload(3001, 0, &repository)),
+        "StaleProject: the project changed; read it again"
+    );
+    assert_eq!(
+        h.refused3("SaveProject", h.project_payload(3002, 0, &repository)),
+        "InvalidProject: a repository belongs to another project"
+    );
+    // D4: two in all, not split by provider, no limit per repository.
+    let cfg = h.read(|v| v.resource_config());
+    for key in ["global", "provider:claude", "provider:codex"] {
+        assert_eq!(cfg.capacities.get(key), Some(&2), "{key}");
+    }
+    assert_eq!(cfg.default_repository, 2);
+    // Saving the same capacity again writes no new configuration.
+    h.ok3("SaveProject", h.project_payload(3001, 1, &repository));
+    assert_eq!(h.read(|v| v.resource_config()).revision, cfg.revision);
+    let listed = h.ok3("Projects", object([]));
+    let projects = items(field(&listed, &["projects"])).to_vec();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(field(&projects[0], &["revision"]), &number(2));
+    assert_eq!(str_of(&projects[0], &["name"]), "Sample");
+    assert_eq!(field(&listed, &["capacity"]), &number(2));
+
+    // A plan turn is told about the project and keeps the revision it was accepted under.
+    h.approved_requirements(&repository);
+    let row = h.drafted_plan(&repository, 4003, "fixture: lead-kinds");
+    assert_eq!(str_of(&row, &["state"]), "Replied", "{row:?}");
+    let prompt = h.chat_text(identity(OpaqueId(4003)), "Prompt");
+    let prompt = str_of(&prompt, &["text"]);
+    assert!(prompt.contains("# Project \"Sample\""), "{prompt}");
+    assert!(prompt.contains("- backend: ClaudeCode"));
+    assert!(prompt.contains("Never touch the lock file."));
+    let plan = field(&row, &["plan"]).clone();
+    let (adr, plan_id) = (
+        field(&plan, &["adr"]).clone(),
+        field(&plan, &["plan"]).clone(),
+    );
+    let adr_id = ArtifactId(id(&adr).unwrap());
+    let adr_text = h.read(|v| v.review_document_content(adr_id)).unwrap();
+    assert!(adr_text.contains("## Project instructions"), "{adr_text}");
+    assert!(adr_text.contains("revision 2.\n\nNever touch the lock file."));
+    h.approve(&adr);
+    let plan_subject = ArtifactId(id(&plan_id).unwrap());
+    let stored = h
+        .read(|v| {
+            let revision = v.review_bundle(plan_subject)?.unwrap().revision;
+            v.execution_plan(plan_subject, revision)
+        })
+        .unwrap();
+    use jojo_domain::provider::ProviderKind::{ClaudeCode, Codex};
+    // The kind's rule wins over the lead's choice; no kind and no choice is the default.
+    let providers: Vec<_> = stored.plan.resources.iter().map(|r| r.provider).collect();
+    assert_eq!(providers, [ClaudeCode, Codex, ClaudeCode]);
+}
+
+#[test]
+fn m3_a_plan_with_a_task_kind_the_project_does_not_have_drafts_nothing() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h.ok3("SaveProject", h.project_payload(3001, 0, &repository));
+    h.approved_requirements(&repository);
+    let row = h.drafted_plan(&repository, 4003, "fixture: lead-kinds-unknown");
+    assert_eq!(str_of(&row, &["state"]), "Failed", "{row:?}");
+    assert!(
+        str_of(&row, &["detail"]).contains("\"frontend\" is not one of the project's"),
+        "{row:?}"
+    );
+    assert_eq!(field(&row, &["plan"]), &Json::Null);
+}

@@ -164,7 +164,7 @@ fn record(h: &mut H) {
     h.send("snapshot before hello", "Snapshot", object([]));
     h.at("hello 1.0", 0, "Hello", object([]));
     // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2).
-    h.at("hello 1.3", 3, "Hello", object([("junk", n(1))]));
+    h.at("hello 1.4", 4, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1063,7 +1063,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.3 => 1.2 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex","slice":true}
+hello 1.4 => 1.3 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}

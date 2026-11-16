@@ -54,6 +54,7 @@ use crate::process::{
 use crate::slice::{SLICE_ENVIRONMENT, SLICE_PERMISSION};
 use crate::sqlite::{Connection, Value};
 use crate::tx::Tx;
+use jojo_domain::project::ProjectRecord;
 
 /// A turn reads and thinks; ten minutes is far beyond what was observed (9 and 16 s).
 pub const TURN_TIMEOUT_MILLIS: u64 = 10 * 60 * 1000;
@@ -281,6 +282,7 @@ fn lead_plan(
     base: &str,
     validation: &str,
     approvals: Vec<ApprovalBinding>,
+    providers: &[ProviderKind],
 ) -> ExecutionPlan {
     let node = |id: OpaqueId| NodeRef {
         id,
@@ -357,10 +359,11 @@ fn lead_plan(
             .steps
             .iter()
             .zip(steps)
-            .map(|(step, id)| StepResources {
+            .zip(providers)
+            .map(|((_, id), provider)| StepResources {
                 step: node(*id),
                 repository,
-                provider: step.provider,
+                provider: *provider,
                 priority: 0,
                 additional: vec![],
                 repository_mode: ResourceMode::Shared,
@@ -376,6 +379,8 @@ fn plan_text(
     repository: RepositoryId,
     base: &str,
     validation: ArtifactId,
+    providers: &[ProviderKind],
+    project: Option<(&str, u64)>,
 ) -> String {
     let mut out = format!(
         "Execution plan: {} steps, drafted by the lead agent\nrepository: {}\nbase commit: {base}\n\
@@ -384,7 +389,10 @@ fn plan_text(
         id_to_text(repository.0),
         id_to_text(validation.0),
     );
-    for (step, id) in draft.steps.iter().zip(steps) {
+    if let Some((project, revision)) = project {
+        out.push_str(&format!("project: {project} revision {revision}\n"));
+    }
+    for ((step, id), provider) in draft.steps.iter().zip(steps).zip(providers) {
         let list = |paths: &[jojo_domain::validation::ScopePath]| {
             paths
                 .iter()
@@ -398,7 +406,7 @@ fn plan_text(
             step.key,
             id_to_text(*id),
             step.title,
-            step.provider,
+            provider,
             if step.depends_on.is_empty() {
                 "nothing".to_owned()
             } else {
@@ -409,8 +417,30 @@ fn plan_text(
             step.tests.join(", "),
             step.command.join(" "),
         ));
+        if let Some(kind) = &step.kind {
+            out.push_str(&format!("kind: {kind}\n"));
+        }
     }
     out
+}
+
+/// M3: the project revision a plan turn was accepted under, if its repository has one.
+fn turn_project(
+    conn: &Connection,
+    turn: OpaqueId,
+) -> Result<Option<(OpaqueId, u64, ProjectRecord)>, StorageError> {
+    let row = conn.query_optional(
+        "SELECT project,revision FROM lead_plan_projects WHERE turn=?1",
+        &[Value::Text(&id_to_text(turn))],
+        |r| Ok((r.text(0)?, r.int(1)?)),
+    )?;
+    let Some((project, revision)) = row else {
+        return Ok(None);
+    };
+    let (project, revision) = (id_from_text(&project)?, from_db(revision)?);
+    let record = crate::projects::revision(conn, project, revision)?
+        .ok_or_else(|| StorageError::corrupt("pinned project revision missing"))?;
+    Ok(Some((project, revision, record)))
 }
 
 /// One turn as a chat page shows it, with the questions it asked.
@@ -679,13 +709,24 @@ impl Tx<'_> {
             }
         };
         let list = exchanges(self.conn, request.feature)?;
+        // M3: what the project says goes into every turn; a plan turn keeps the revision.
+        let project = crate::projects::of_repository(self.conn, request.repository)?;
+        let section = project
+            .as_ref()
+            .map(|(_, _, record)| record.prompt_section());
         let prompt = match request.kind {
             TurnKind::Discover => {
                 let draft = match feature_prd(self.conn, request.feature)? {
                     Some(prd) => version(self.conn, prd, None)?.map(|v| v.content),
                     None => None,
                 };
-                discover_prompt(&objective, &list, draft.as_deref(), note)
+                discover_prompt(
+                    &objective,
+                    &list,
+                    draft.as_deref(),
+                    note,
+                    section.as_deref(),
+                )
             }
             TurnKind::Plan => {
                 let approved = match feature_prd(self.conn, request.feature)? {
@@ -699,7 +740,14 @@ impl Tx<'_> {
                         "TurnRefused: a plan turn needs the approved requirements document",
                     ));
                 };
-                plan_prompt(&objective, &list, prd.revision.0, &prd.rendered, note)
+                plan_prompt(
+                    &objective,
+                    &list,
+                    prd.revision.0,
+                    &prd.rendered,
+                    note,
+                    section.as_deref(),
+                )
             }
         };
         if prompt.len() > MAX_PROMPT_BYTES {
@@ -735,6 +783,16 @@ impl Tx<'_> {
                 Value::Int(to_db(event.0)?),
             ],
         )?;
+        if let (TurnKind::Plan, Some((project, revision, _))) = (request.kind, &project) {
+            self.conn.execute(
+                "INSERT INTO lead_plan_projects VALUES (?1,?2,?3)",
+                &[
+                    Value::Text(&id),
+                    Value::Text(&id_to_text(*project)),
+                    Value::Int(to_db(*revision)?),
+                ],
+            )?;
+        }
         Ok(format!("accepted turn={id}"))
     }
 
@@ -873,6 +931,12 @@ impl Tx<'_> {
                             crate::approvals::applicable(self.conn, *prd).is_ok_and(|d| d.is_some())
                         })
                         .ok_or_else(|| deny("the requirements are no longer approved"))?;
+                    // M3: every step must have a provider under the pinned project
+                    // before anything is drafted; a reply that cannot is refused.
+                    let project = turn_project(self.conn, id)?;
+                    draft
+                        .providers(project.as_ref().map(|(_, _, r)| r))
+                        .map_err(deny)?;
                     let (adr, plan, validation) = (
                         ArtifactId(next()?),
                         ArtifactId(next()?),
@@ -935,7 +999,13 @@ impl Tx<'_> {
                     }
                     // The ADR is a draft at once; the plan and its validation follow when
                     // the human has approved the ADR (`advance_lead_plans`).
-                    self.put_review_document(adr, None, prd, None, &draft.adr, &draft.adr)?;
+                    // The project's instructions are appended by the core, not the model,
+                    // so that they are approved with the ADR and reach every attempt.
+                    let mut body = draft.adr.clone();
+                    if let Some((project, revision, record)) = &project {
+                        body.push_str(&record.adr_section(&id_to_text(*project), *revision));
+                    }
+                    self.put_review_document(adr, None, prd, None, &body, &body)?;
                 }
             }
             Some(_) => return Err(deny("the reply is not of the turn's kind")),
@@ -1115,6 +1185,10 @@ impl Tx<'_> {
                 .iter()
                 .map(|id| id_from_text(id))
                 .collect::<Result<_, _>>()?;
+            let project = turn_project(self.conn, record.turn)?;
+            let providers = draft
+                .providers(project.as_ref().map(|(_, _, r)| r))
+                .map_err(deny)?;
             let checks = draft.validation(&steps).map_err(deny)?;
             let canonical = checks.canonical();
             self.put_review_document(validation, None, prd, Some(adr), &canonical, &canonical)?;
@@ -1125,8 +1199,18 @@ impl Tx<'_> {
                 &record.base,
                 &canonical,
                 vec![prd_approval, adr_approval],
+                &providers,
             );
-            let shown = plan_text(&draft, &steps, record.repository, &record.base, validation);
+            let pinned = project.as_ref().map(|(p, r, _)| (id_to_text(*p), *r));
+            let shown = plan_text(
+                &draft,
+                &steps,
+                record.repository,
+                &record.base,
+                validation,
+                &providers,
+                pinned.as_ref().map(|(p, r)| (p.as_str(), *r)),
+            );
             self.put_execution_plan(plan, None, prd, adr, &built, &shown)?;
             advanced += 1;
         }

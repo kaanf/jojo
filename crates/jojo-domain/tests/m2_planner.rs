@@ -642,8 +642,8 @@ fn m2_plan_reply_is_a_small_graph_with_scopes_and_a_check_per_step() {
     assert_eq!(p.adr, "# Decision\nOne module, one entry point.");
     let keys: Vec<&str> = p.steps.iter().map(|s| s.key.as_str()).collect();
     assert_eq!(keys, ["cli", "docs", "check"]);
-    assert_eq!(p.steps[0].provider, ProviderKind::Codex);
-    assert_eq!(p.steps[1].provider, ProviderKind::ClaudeCode);
+    assert_eq!(p.steps[0].provider, Some(ProviderKind::Codex));
+    assert_eq!(p.steps[1].provider, Some(ProviderKind::ClaudeCode));
     assert_eq!(p.steps[2].depends_on, ["cli", "docs"]);
     assert_eq!(p.steps[2].write_scope[0].as_str(), "tests/cli");
     assert_eq!(
@@ -838,7 +838,7 @@ fn m2_prompts_carry_only_the_humans_words_and_stored_content() {
         },
     ];
     let objective = "slugify should also be usable from the shell.";
-    let first = discover_prompt(objective, &[], None, None);
+    let first = discover_prompt(objective, &[], None, None, None);
     for part in [
         objective,
         "You may only read",
@@ -853,7 +853,7 @@ fn m2_prompts_carry_only_the_humans_words_and_stored_content() {
     }
     assert!(!first.contains("Note from the product owner"));
     assert!(!first.contains(PLAN_SCHEMA));
-    let later = discover_prompt(objective, &list, Some(PRD), Some("Keep it small."));
+    let later = discover_prompt(objective, &list, Some(PRD), Some("Keep it small."), None);
     for part in [
         "Q1 (blocking): From arguments, standard input, or both?\nAnswer: Arguments only.",
         "Q2 (deferred): Is packaging in scope?\nAnswer: (not answered)",
@@ -863,7 +863,14 @@ fn m2_prompts_carry_only_the_humans_words_and_stored_content() {
     ] {
         assert!(later.contains(part), "{part}");
     }
-    let planning = plan_prompt(objective, &list, 3, "# Slugify from the shell\n", None);
+    let planning = plan_prompt(
+        objective,
+        &list,
+        3,
+        "# Slugify from the shell\n",
+        None,
+        None,
+    );
     for part in [
         objective,
         "Answer: Arguments only.",
@@ -880,7 +887,7 @@ fn m2_prompts_carry_only_the_humans_words_and_stored_content() {
     // Same inputs, same bytes; and the fixed text leaves room for the largest inputs.
     assert_eq!(
         later,
-        discover_prompt(objective, &list, Some(PRD), Some("Keep it small."))
+        discover_prompt(objective, &list, Some(PRD), Some("Keep it small."), None)
     );
     let fixed = first.len().max(planning.len());
     assert!(

@@ -498,7 +498,8 @@ impl Service {
             | RequestKind::CandidateDecision
             | RequestKind::ChatTurn
             | RequestKind::AnswerQuestion
-            | RequestKind::CancelTurn => {
+            | RequestKind::CancelTurn
+            | RequestKind::SaveProject => {
                 drop(reader);
                 self.slice_command(kind, e)
             }

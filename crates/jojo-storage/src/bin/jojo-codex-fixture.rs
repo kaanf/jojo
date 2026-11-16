@@ -223,6 +223,11 @@ const LEAD_PLAN: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Three steps
 /// A plan reply that cannot be drafted yet: it asks about the feature as a whole.
 const LEAD_PLAN_ASKS: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Before cutting the work I need one answer.","adr":"# Decision\nPending.","steps":[{"key":"core","title":"Add the entry point","provider":"Codex","depends_on":[],"write_scope":["src/lib.rs"],"baseline":[],"tests":["unit"],"command":["/usr/bin/true"]}],"questions":[{"prompt":"Must the tool also run on Windows?","blocking":true,"step":null}]}"##;
 
+/// M3: a plan under a project record. Each step's title is its own attempt directive, so
+/// that every step of a run writes only its own path; kinds decide two providers.
+const LEAD_PLAN_KINDS: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Two independent steps, then one that needs both.","adr":"# Decision\nThree small files.","steps":[{"key":"api","title":"fixture: develop src/api.txt","kind":"backend","provider":"Codex","depends_on":[],"write_scope":["src/api.txt"],"baseline":[],"tests":["api"],"command":["/usr/bin/true"]},{"key":"usage","title":"fixture: develop src/usage.txt","kind":"docs","provider":null,"depends_on":[],"write_scope":["src/usage.txt"],"baseline":[],"tests":["usage"],"command":["/usr/bin/true"]},{"key":"join","title":"fixture: develop src/join.txt","kind":null,"provider":null,"depends_on":["api","usage"],"write_scope":["src/join.txt"],"baseline":[],"tests":["join"],"command":["/usr/bin/true"]}],"questions":[]}"##;
+const LEAD_PLAN_UNKNOWN_KIND: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"One step of a kind the project does not have.","adr":"# Decision\nOne file.","steps":[{"key":"ui","title":"Paint it","kind":"frontend","provider":"Codex","depends_on":[],"write_scope":["src/ui.txt"],"baseline":[],"tests":["ui"],"command":["/usr/bin/true"]}],"questions":[]}"##;
+
 /// What the stand-in lead agent does in a turn (M2).
 enum Lead {
     /// Reads, then ends with this last message.
@@ -243,6 +248,8 @@ fn lead(scenario: &str, prompt: &str, args: &[String]) -> Lead {
     match scenario {
         "lead" if planning => Lead::Reply(LEAD_PLAN.into()),
         "lead-plan-asks" => Lead::Reply(LEAD_PLAN_ASKS.into()),
+        "lead-kinds" if planning => Lead::Reply(LEAD_PLAN_KINDS.into()),
+        "lead-kinds-unknown" if planning => Lead::Reply(LEAD_PLAN_UNKNOWN_KIND.into()),
         "lead" if prompt.contains("# Questions and answers so far\nNone.") => {
             Lead::Reply(LEAD_QUESTIONS.into())
         }

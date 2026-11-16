@@ -281,6 +281,7 @@ pub fn discover_prompt(
     list: &[Exchange],
     draft: Option<&str>,
     note: Option<&str>,
+    project: Option<&str>,
 ) -> String {
     let mut out = String::from(
         "You are the lead engineer of this repository, in discovery for one feature. You \
@@ -308,6 +309,9 @@ pub fn discover_prompt(
             out.push('\n');
         }
         None => out.push_str("\n# Current requirements draft\nNone yet.\n"),
+    }
+    if let Some(project) = project {
+        out.push_str(project);
     }
     out.push_str(&format!(
         "\n# What to do\n\
@@ -349,6 +353,7 @@ pub fn plan_prompt(
     prd_revision: u64,
     prd: &str,
     note: Option<&str>,
+    project: Option<&str>,
 ) -> String {
     let mut out = String::from(
         "You are the lead engineer of this repository, planning one feature whose \
@@ -369,6 +374,9 @@ pub fn plan_prompt(
     out.push_str(&format!(
         "\n# Product requirements (approved revision {prd_revision})\n{prd}\n"
     ));
+    if let Some(project) = project {
+        out.push_str(project);
+    }
     out.push_str(&format!(
         "\n# What to do\n\
          1. Write the architecture decision as Markdown in \"adr\": which existing modules \
@@ -379,8 +387,10 @@ pub fn plan_prompt(
          one coding agent in its own copy of the repository and must be independently \
          mergeable and independently testable. Prefer a first step that proves the shape \
          end to end. Reference real paths of this repository.\n\
-         3. For each step give: a short unique \"key\"; a \"title\"; the \"provider\" \
-         that should do it, \"Codex\" or \"ClaudeCode\"; \"depends_on\", the keys of \
+         3. For each step give: a short unique \"key\"; a \"title\"; its task \"kind\", \
+         one of the project's task kinds or null (a kind decides the provider); the \
+         \"provider\" that should do it when the kind does not, \"Codex\", \
+         \"ClaudeCode\" or null for the project's default; \"depends_on\", the keys of \
          earlier steps whose result it needs (a step may only depend on steps listed \
          before it; steps without a common dependency run in parallel, so they must not \
          write the same paths); \"write_scope\", the repository-relative paths or \
@@ -396,7 +406,7 @@ pub fn plan_prompt(
          and why.\n\n\
          # Reply\n{REPLY_RULES}\n\
          {{\"schema\":\"{PLAN_SCHEMA}\",\"summary\":\"...\",\"adr\":\"...\",\
-         \"steps\":[{{\"key\":\"s1\",\"title\":\"...\",\"provider\":\"Codex\",\
+         \"steps\":[{{\"key\":\"s1\",\"title\":\"...\",\"kind\":null,\"provider\":\"Codex\",\
          \"depends_on\":[],\"write_scope\":[\"...\"],\"baseline\":[\"...\"],\
          \"tests\":[\"...\"],\"command\":[\"/usr/bin/...\",\"...\"]}}],\
          \"questions\":[{{\"prompt\":\"...\",\"blocking\":true,\"step\":null}}]}}\n"
@@ -423,7 +433,11 @@ pub struct Discovery {
 pub struct DraftStep {
     pub key: String,
     pub title: String,
-    pub provider: ProviderKind,
+    /// M3: one of the project's task kinds; a reply without the member has none.
+    pub kind: Option<String>,
+    /// The provider the lead named, if any. The step's provider is resolved against the
+    /// project record ([`PlanDraft::providers`]).
+    pub provider: Option<ProviderKind>,
     /// Keys of steps listed before this one.
     pub depends_on: Vec<String>,
     pub write_scope: Vec<ScopePath>,
@@ -441,7 +455,36 @@ pub struct PlanDraft {
     pub questions: Vec<LeadQuestion>,
 }
 
+fn value_of<'a>(value: &'a Json, key: &str) -> Option<&'a Json> {
+    match value {
+        Json::Object(members) => members.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+        _ => None,
+    }
+}
+
 impl PlanDraft {
+    /// M3: the provider of every step, in order, under the project the plan is drafted
+    /// in. Without a project a step must name its provider and no kind.
+    pub fn providers(
+        &self,
+        project: Option<&crate::project::ProjectRecord>,
+    ) -> Result<Vec<ProviderKind>, String> {
+        self.steps
+            .iter()
+            .map(|step| match project {
+                Some(project) => project
+                    .provider(step.kind.as_deref(), step.provider)
+                    .map_err(|why| format!("step {}: {why}", step.key)),
+                None if step.kind.is_some() => Err(format!(
+                    "step {}: a task kind needs a project record",
+                    step.key
+                )),
+                None => step.provider.ok_or_else(|| {
+                    format!("step {}: no provider and no project default", step.key)
+                }),
+            })
+            .collect()
+    }
     /// The validation plan of the draft, with `ids[i]` as the identity of step `i`.
     pub fn validation(&self, ids: &[OpaqueId]) -> Result<ValidationPlan, String> {
         if ids.len() != self.steps.len() {
@@ -652,6 +695,7 @@ fn discovery(root: &Json) -> Result<Discovery, LeadError> {
 }
 
 fn step(value: &Json, path: &str, earlier: &[DraftStep]) -> Result<DraftStep, LeadError> {
+    let has_kind = value_of(value, "kind").is_some();
     let mut members = Members::of(value, path)?;
     let (value, key_path) = members.take("key")?;
     let step_key = key(value, &key_path)?;
@@ -659,9 +703,20 @@ fn step(value: &Json, path: &str, earlier: &[DraftStep]) -> Result<DraftStep, Le
         return Err(bad(key_path, "repeated key"));
     }
     let title = members.text("title", MAX_TITLE_BYTES, false)?;
+    // M3: the member is optional so that a reply written before task kinds still reads.
+    let kind = if has_kind {
+        match members.take("kind")? {
+            (Json::Null, _) => None,
+            (Json::Text(kind), _) if crate::project::valid_kind(kind) => Some(kind.clone()),
+            (_, path) => return Err(bad(path, "malformed task kind")),
+        }
+    } else {
+        None
+    };
     let provider = match members.take("provider")? {
-        (Json::Text(name), _) if name == "Codex" => ProviderKind::Codex,
-        (Json::Text(name), _) if name == "ClaudeCode" => ProviderKind::ClaudeCode,
+        (Json::Text(name), _) if name == "Codex" => Some(ProviderKind::Codex),
+        (Json::Text(name), _) if name == "ClaudeCode" => Some(ProviderKind::ClaudeCode),
+        (Json::Null, _) => None,
         (_, path) => return Err(bad(path, "unknown provider")),
     };
     let depends_on = members.list("depends_on", MAX_STEPS, |v, p| {
@@ -697,6 +752,7 @@ fn step(value: &Json, path: &str, earlier: &[DraftStep]) -> Result<DraftStep, Le
     Ok(DraftStep {
         key: step_key,
         title,
+        kind,
         provider,
         depends_on,
         write_scope,

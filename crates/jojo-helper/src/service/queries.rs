@@ -115,6 +115,13 @@ impl Service {
                     .read(|v| v.ipc_chat_index())
                     .map_err(|e| e.to_string())
             }
+            // Protocol 1.3 (M3): project records.
+            RequestKind::Projects => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                reader.read(|v| v.ipc_projects()).map_err(|e| e.to_string())
+            }
             _ => unreachable!("not a snapshot query: {kind:?}"),
         }
     }

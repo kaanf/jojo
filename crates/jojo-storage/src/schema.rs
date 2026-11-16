@@ -84,6 +84,11 @@ impl MigrationPlan {
                 name: "lead agent turns, plan drafts and step questions",
                 sql: SCHEMA_V11,
             },
+            Migration {
+                version: 12,
+                name: "project records",
+                sql: SCHEMA_V12,
+            },
         ])
     }
 
@@ -1062,6 +1067,33 @@ CREATE TRIGGER step_answers_immutable BEFORE UPDATE ON step_answers BEGIN SELECT
 CREATE TRIGGER step_answers_keep BEFORE DELETE ON step_answers BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
 "#;
 
+/// M3: project records. A record is saved whole as a new, immutable revision; a
+/// repository belongs to at most one project; a lead plan draft keeps the revision it was
+/// drafted under, so that its providers and instructions are resolved the same way later.
+const SCHEMA_V12: &str = r#"
+CREATE TABLE project_revisions (
+ project TEXT NOT NULL CHECK(length(project)=32),
+ revision INTEGER NOT NULL CHECK(revision>0),
+ body TEXT NOT NULL CHECK(length(body)>0),
+ digest TEXT NOT NULL CHECK(length(digest)=64),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ PRIMARY KEY(project, revision));
+CREATE TRIGGER project_revision_sequence BEFORE INSERT ON project_revisions
+WHEN NEW.revision IS NOT (SELECT coalesce(max(revision),0)+1 FROM project_revisions WHERE project=NEW.project)
+BEGIN SELECT RAISE(ABORT,'project revisions are appended in order'); END;
+CREATE TRIGGER project_revisions_immutable BEFORE UPDATE ON project_revisions BEGIN SELECT RAISE(ABORT,'immutable project revision'); END;
+CREATE TRIGGER project_revisions_keep BEFORE DELETE ON project_revisions BEGIN SELECT RAISE(ABORT,'immutable project revision'); END;
+CREATE TABLE project_repositories (
+ repository TEXT PRIMARY KEY REFERENCES local_repositories(id),
+ project TEXT NOT NULL CHECK(length(project)=32));
+CREATE TABLE lead_plan_projects (
+ turn TEXT PRIMARY KEY REFERENCES lead_turns(turn),
+ project TEXT NOT NULL, revision INTEGER NOT NULL,
+ FOREIGN KEY(project, revision) REFERENCES project_revisions(project, revision));
+CREATE TRIGGER lead_plan_projects_immutable BEFORE UPDATE ON lead_plan_projects BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+CREATE TRIGGER lead_plan_projects_keep BEFORE DELETE ON lead_plan_projects BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -1073,7 +1105,7 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 11));
+        assert_eq!((report.from_version, report.to_version), (0, 12));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);

@@ -53,6 +53,8 @@ pub enum RequestKind {
     FeatureChat,
     ChatText,
     ChatIndex,
+    SaveProject,
+    Projects,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,7 +117,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 34] = [
+pub const SPECS: [Spec; 36] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -150,6 +152,8 @@ pub const SPECS: [Spec; 34] = [
     spec(K::FeatureChat, "FeatureChat", Query, 2, false, Exact, &["feature", "after"]),
     spec(K::ChatText, "ChatText", Query, 2, false, Exact, &["subject", "part", "offset"]),
     spec(K::ChatIndex, "ChatIndex", Query, 2, false, Exact, &[]),
+    spec(K::SaveProject, "SaveProject", Mutation, 3, false, Exact, &["project", "revision", "name", "repositories", "instructions", "test_command", "ci_command", "kinds", "default_provider", "capacity"]),
+    spec(K::Projects, "Projects", Query, 3, false, Exact, &[]),
 ];
 
 impl RequestKind {
@@ -541,6 +545,24 @@ impl ChatTurnCommand {
     }
 }
 
+/// M3 (protocol 1.3): the whole project record, saved as the revision after `revision`
+/// (0 for a new project).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SaveProjectCommand {
+    pub project: OpaqueId,
+    pub revision: u64,
+    pub record: crate::project::ProjectRecord,
+}
+impl SaveProjectCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            project: id(get(p, "project")?)?,
+            revision: uint(get(p, "revision")?)?,
+            record: crate::project::ProjectRecord::from_json(p)?,
+        })
+    }
+}
+
 /// What the human does with one question the lead asked.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QuestionAction {
@@ -869,16 +891,19 @@ mod tests {
         assert_eq!(names(Mutation, 1), v11_commands);
         assert_eq!(names(Query, 1), v11_queries);
         // M2 (1.2): Feature Chat, listed after everything a 1.1 client knows.
-        for minor in [2, 9] {
+        let v12_commands = format!("{v11_commands} ChatTurn AnswerQuestion CancelTurn");
+        let v12_queries = format!("{v11_queries} FeatureChat ChatText ChatIndex");
+        assert_eq!(names(Mutation, 2), v12_commands);
+        assert_eq!(names(Query, 2), v12_queries);
+        // M3 (1.3): project records and the plan runner, after everything 1.2 knows.
+        for minor in [3, 9] {
             assert_eq!(
                 names(Mutation, minor),
-                format!("{v11_commands} ChatTurn AnswerQuestion CancelTurn")
+                format!("{v12_commands} SaveProject")
             );
-            assert_eq!(
-                names(Query, minor),
-                format!("{v11_queries} FeatureChat ChatText ChatIndex")
-            );
+            assert_eq!(names(Query, minor), format!("{v12_queries} Projects"));
         }
+        assert_eq!(RequestKind::of_frame("SaveProject", 2), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 1), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 2), Some(K::ChatTurn));
         assert_eq!(names(Handshake, 0), "Hello");

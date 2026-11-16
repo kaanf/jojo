@@ -101,6 +101,9 @@ impl ReadView<'_> {
     }
 }
 impl Tx<'_> {
+    pub(crate) fn resource_config_now(&self) -> Result<ResourceConfig, StorageError> {
+        config(self.conn)
+    }
     /// Full immutable configuration snapshot; the writer receipt supplies command CAS/idempotency.
     pub fn configure_resources(
         &mut self,

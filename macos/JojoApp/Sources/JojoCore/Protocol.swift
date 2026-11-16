@@ -12,6 +12,7 @@ public enum Request: String, CaseIterable, Sendable {
     case RecoveryInspect, Candidate, CandidateChanges, CandidateDiff, ValidationReport
     case ApprovedPlan
     case ChatTurn, AnswerQuestion, CancelTurn, FeatureChat, ChatText, ChatIndex
+    case SaveProject, Projects
 
     public var fields: [String] {
         switch self {
@@ -45,14 +46,19 @@ public enum Request: String, CaseIterable, Sendable {
         case .FeatureChat: return ["feature", "after"]
         case .ChatText: return ["subject", "part", "offset"]
         case .ChatIndex: return []
+        case .SaveProject: return ["project", "revision", "name", "repositories", "instructions", "test_command", "ci_command", "kinds", "default_provider", "capacity"]
+        case .Projects: return []
         }
     }
 
     /// The protocol minor a frame of this request carries. M2's Feature Chat requests exist
     /// only from 1.2; every other request keeps the 1.1 frames it always had, so a helper
-    /// that does not know 1.2 answers those as before and the chat ones as unknown.
+    /// that does not know 1.2 answers those as before and the chat ones as unknown. M3's
+    /// project and plan-runner requests exist only from 1.3, in the same way.
     public var minor: Int64 {
         let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText, .ChatIndex]
+        let runner: [Request] = [.SaveProject, .Projects]
+        if runner.contains(self) { return 3 }
         return chat.contains(self) ? 2 : Envelope.minor
     }
 

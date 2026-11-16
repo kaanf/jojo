@@ -14,6 +14,7 @@ pub mod paths;
 pub mod planner;
 pub mod policy;
 pub mod prd;
+pub mod project;
 pub mod provider;
 pub mod recovery;
 pub mod shutdown;
