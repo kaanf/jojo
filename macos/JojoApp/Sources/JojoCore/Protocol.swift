@@ -11,6 +11,7 @@ public enum Request: String, CaseIterable, Sendable {
     case Snapshot, Events, Log, Receipt, CloseStatus, ReviewBundle, Recovery
     case RecoveryInspect, Candidate, CandidateChanges, CandidateDiff, ValidationReport
     case ApprovedPlan
+    case ChatTurn, AnswerQuestion, CancelTurn, FeatureChat, ChatText
 
     public var fields: [String] {
         switch self {
@@ -38,6 +39,11 @@ public enum Request: String, CaseIterable, Sendable {
         case .CandidateDiff: return ["attempt", "candidate", "offset"]
         case .ValidationReport: return ["attempt", "receipt", "offset"]
         case .ApprovedPlan: return ["after"]
+        case .ChatTurn: return ["feature", "kind", "repository", "provider", "message"]
+        case .AnswerQuestion: return ["question", "revision", "action", "answer"]
+        case .CancelTurn: return ["turn"]
+        case .FeatureChat: return ["feature", "after"]
+        case .ChatText: return ["subject", "part", "offset"]
         }
     }
 

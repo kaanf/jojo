@@ -20,9 +20,12 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::RecvTimeoutError;
 
 use jojo_domain::identity::{ArtifactId, FeatureId, OpaqueId, QuestionId, RepositoryId, Revision};
+use jojo_domain::ipc::{identity, number, object, text};
+use jojo_domain::json::Json;
 use jojo_domain::planner::{
     self, Exchange, LeadReply, MAX_HUMAN_TEXT_BYTES, TurnKind, TurnSpec, discover_prompt,
 };
+use jojo_domain::protocol::{ChatPart, QuestionAction};
 use jojo_domain::provider::{
     EventPayload, MAX_PROMPT_BYTES, ProviderFingerprint, ProviderKind, Stream, TerminalStatus,
 };
@@ -50,6 +53,12 @@ pub const TURN_MAX_FRAME_BYTES: u64 = 1024 * 1024;
 /// Identities a reply may need: a PRD, five questions, six steps, three plan subjects.
 pub const TURN_REPLY_IDS: usize = 16;
 const MAX_DETAIL_BYTES: usize = 1024;
+/// Bytes of turn rows one chat page carries before it stops (one row always fits).
+pub const CHAT_PAGE_BYTES: usize = 40 * 1024;
+/// Characters of a message or answer a chat page carries before it cuts them.
+pub const CHAT_EXCERPT_CHARS: usize = 1024;
+/// Characters one chat text chunk carries: at most 32 KiB of UTF-8.
+pub const CHAT_TEXT_CHARS: usize = 8192;
 
 fn deny(s: impl Into<String>) -> TxError {
     TxError::Rejected(s.into())
@@ -226,6 +235,91 @@ fn feature_turns(conn: &Connection, feature: FeatureId) -> Result<Vec<TurnRecord
     .into_iter()
     .map(turn_record)
     .collect()
+}
+
+fn excerpt(body: &str) -> (Json, Json) {
+    let cut: String = body.chars().take(CHAT_EXCERPT_CHARS).collect();
+    let complete = cut.len() == body.len();
+    (text(cut), Json::Bool(complete))
+}
+
+/// One turn as a chat page shows it, with the questions it asked.
+fn chat_row(conn: &Connection, record: &TurnRecord) -> Result<Json, StorageError> {
+    let questions = conn
+        .query(
+            "SELECT q.question_id, a.revision, q.prompt, a.state,
+                    (SELECT answer.body FROM clarification_answers answer
+                     WHERE answer.question_id=q.question_id ORDER BY answer.ordinal DESC LIMIT 1),
+                    (SELECT answer.author FROM clarification_answers answer
+                     WHERE answer.question_id=q.question_id ORDER BY answer.ordinal DESC LIMIT 1)
+             FROM lead_turn_questions l
+             JOIN clarification_questions q ON q.question_id=l.question
+             JOIN aggregates a ON a.kind=q.question_kind AND a.id=q.question_id
+             WHERE l.turn=?1 ORDER BY q.created_event_seq",
+            &[Value::Text(&id_to_text(record.turn))],
+            |r| {
+                Ok((
+                    r.text(0)?,
+                    r.int(1)?,
+                    r.text(2)?,
+                    r.text(3)?,
+                    r.optional_text(4)?,
+                    r.optional_text(5)?,
+                ))
+            },
+        )?
+        .into_iter()
+        .map(|(id, revision, prompt, state, answer, author)| {
+            let (answer, complete) = match &answer {
+                Some(body) => excerpt(body),
+                None => (Json::Null, Json::Bool(true)),
+            };
+            Ok(object([
+                ("question", identity(id_from_text(&id)?)),
+                ("revision", number(from_db(revision)?)),
+                ("prompt", text(prompt)),
+                ("blocking", Json::Bool(state == "BLOCKING")),
+                ("answer", answer),
+                ("answer_complete", complete),
+                ("answered_by", author.map_or(Json::Null, text)),
+            ]))
+        })
+        .collect::<Result<Vec<_>, StorageError>>()?;
+    let (message, message_complete) = excerpt(&record.message);
+    let (state, detail, summary, prd) = match &record.result {
+        None if record.stop_requested => ("Stopping", String::new(), String::new(), Json::Null),
+        None => ("Running", String::new(), String::new(), Json::Null),
+        Some(result) => (
+            match result.outcome {
+                TurnOutcome::Replied => "Replied",
+                TurnOutcome::Failed => "Failed",
+                TurnOutcome::Cancelled => "Cancelled",
+                TurnOutcome::Interrupted => "Interrupted",
+            },
+            result.detail.clone(),
+            result.summary.clone(),
+            result.prd.map_or(Json::Null, |(prd, revision)| {
+                object([
+                    ("document", identity(prd.0)),
+                    ("revision", number(revision.0)),
+                ])
+            }),
+        ),
+    };
+    Ok(object([
+        ("turn", identity(record.turn)),
+        ("ordinal", number(record.ordinal)),
+        ("kind", text(record.kind.name())),
+        ("provider", text(provider_text(record.provider))),
+        ("base", text(record.base.clone())),
+        ("message", message),
+        ("message_complete", message_complete),
+        ("state", text(state)),
+        ("detail", text(detail)),
+        ("summary", text(summary)),
+        ("prd", prd),
+        ("questions", Json::List(questions)),
+    ]))
 }
 
 fn unfinished(conn: &Connection) -> Result<Option<String>, StorageError> {
@@ -517,6 +611,41 @@ impl Tx<'_> {
         Ok(outcome.as_db().to_owned())
     }
 
+    /// M2: the human's answer to, or disposition of, one question a lead turn asked, at
+    /// the revision the human was shown. Questions not asked in a Feature Chat are not
+    /// reachable here.
+    pub fn answer_chat_question(
+        &mut self,
+        question: QuestionId,
+        revision: Revision,
+        action: &QuestionAction,
+    ) -> Result<String, TxError> {
+        if self
+            .conn
+            .query_optional(
+                "SELECT 1 FROM lead_turn_questions WHERE question=?1",
+                &[Value::Text(&id_to_text(question.0))],
+                |r| r.int(0),
+            )?
+            .is_none()
+        {
+            return Err(deny("UnknownQuestion: not asked in a Feature Chat"));
+        }
+        let revision = match action {
+            QuestionAction::Answer(body) => {
+                let human = Provenance::new(Author::Human, "answered in Feature Chat");
+                self.answer_question(question, revision, body, &human)?
+            }
+            QuestionAction::Defer => {
+                self.set_question_disposition(question, revision, QuestionDisposition::Deferred)?
+            }
+            QuestionAction::Block => {
+                self.set_question_disposition(question, revision, QuestionDisposition::Blocking)?
+            }
+        };
+        Ok(format!("question revision={}", revision.0))
+    }
+
     /// Closes every turn an earlier helper left unfinished. Such a turn held no worktree,
     /// claim or effect; its process was the earlier helper's to stop.
     pub fn close_interrupted_turns(&mut self) -> Result<u64, TxError> {
@@ -556,6 +685,131 @@ impl ReadView<'_> {
             &[Value::Text(&id_to_text(id))],
             |r| r.text(0),
         )?)
+    }
+
+    /// The path a repository was registered with.
+    pub fn local_repository_path(&self, id: RepositoryId) -> Result<Option<PathBuf>, StorageError> {
+        Ok(self
+            .conn
+            .query_optional(
+                "SELECT path FROM local_repositories WHERE id=?1",
+                &[Value::Text(&id_to_text(id.0))],
+                |r| r.text(0),
+            )?
+            .map(PathBuf::from))
+    }
+
+    /// M2 (protocol 1.2): one page of a feature's chat. Turns after the ordinal `after`,
+    /// oldest first, as many as fit in a bounded page (at least one); each with the
+    /// questions it asked and their newest answers. Long texts are cut and say so; the
+    /// whole text is read with [`Self::ipc_chat_text`]. Also the feature's requirements
+    /// document as the core stores it, and the turn that is running, if any.
+    pub fn ipc_feature_chat(&self, feature: FeatureId, after: u64) -> Result<Json, StorageError> {
+        let turns = feature_turns(self.conn, feature)?;
+        let mut rows = Vec::new();
+        let mut used = 0usize;
+        let mut next = Json::Null;
+        for record in turns.iter().filter(|t| t.ordinal > after) {
+            let row = chat_row(self.conn, record)?;
+            let size = jojo_domain::ipc::encode(&row).len();
+            if !rows.is_empty() && used + size > CHAT_PAGE_BYTES {
+                next = number(record.ordinal - 1);
+                break;
+            }
+            used += size;
+            rows.push(row);
+        }
+        let running = turns
+            .iter()
+            .find(|t| t.result.is_none())
+            .map_or(Json::Null, |t| {
+                object([
+                    ("turn", identity(t.turn)),
+                    ("stop_requested", Json::Bool(t.stop_requested)),
+                ])
+            });
+        let prd = match feature_prd(self.conn, feature).map_err(|e| match e {
+            TxError::Storage(e) => e,
+            other => StorageError::corrupt(format!("{other:?}")),
+        })? {
+            None => Json::Null,
+            Some(prd) => {
+                let head = version(self.conn, prd, None)?
+                    .ok_or_else(|| StorageError::corrupt("document without a version"))?;
+                let readiness = crate::artifacts::review_readiness(self.conn, prd)?
+                    .ok_or_else(|| StorageError::corrupt("document without readiness"))?;
+                let approved = crate::approvals::applicable(self.conn, prd)?.is_some();
+                object([
+                    ("document", identity(prd.0)),
+                    ("revision", number(head.revision.0)),
+                    ("author", text(head.provenance.author.as_db())),
+                    ("ready", Json::Bool(readiness.is_ready())),
+                    ("blockers", number(readiness.blockers.len() as u64)),
+                    ("approved", Json::Bool(approved)),
+                    ("length", number(head.rendered.chars().count() as u64)),
+                ])
+            }
+        };
+        Ok(object([
+            ("feature", identity(feature.0)),
+            ("turns", Json::List(rows)),
+            ("next", next),
+            ("running", running),
+            ("prd", prd),
+        ]))
+    }
+
+    /// M2 (protocol 1.2): one chunk of a long chat text from a character offset, or
+    /// `null` when the subject has no such text.
+    pub fn ipc_chat_text(
+        &self,
+        subject: OpaqueId,
+        part: ChatPart,
+        offset: u64,
+    ) -> Result<Json, StorageError> {
+        let id = Value::Text(&id_to_text(subject));
+        let body = match part {
+            ChatPart::Message | ChatPart::Prompt => self.conn.query_optional(
+                if part == ChatPart::Message {
+                    "SELECT message FROM lead_turns WHERE turn=?1"
+                } else {
+                    "SELECT prompt FROM lead_turns WHERE turn=?1"
+                },
+                &[id],
+                |r| r.text(0),
+            )?,
+            ChatPart::Reply => self.conn.query_optional(
+                "SELECT reply FROM lead_turn_results WHERE turn=?1 AND reply<>''",
+                &[id],
+                |r| r.text(0),
+            )?,
+            ChatPart::Answer => self.conn.query_optional(
+                "SELECT a.body FROM clarification_answers a
+                 JOIN lead_turn_questions l ON l.question=a.question_id
+                 WHERE a.question_id=?1 ORDER BY a.ordinal DESC LIMIT 1",
+                &[id],
+                |r| r.text(0),
+            )?,
+            ChatPart::Prd => version(self.conn, ArtifactId(subject), None)?.map(|v| v.rendered),
+        };
+        let Some(body) = body else {
+            return Ok(Json::Null);
+        };
+        let total = body.chars().count() as u64;
+        let chunk: String = body
+            .chars()
+            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+            .take(CHAT_TEXT_CHARS)
+            .collect();
+        let next = offset.saturating_add(chunk.chars().count() as u64);
+        Ok(object([
+            ("subject", identity(subject)),
+            ("offset", number(offset)),
+            ("next", number(next)),
+            ("total", number(total)),
+            ("complete", Json::Bool(next >= total)),
+            ("text", text(chunk)),
+        ]))
     }
 
     /// The one turn that has no result yet, if there is one.
@@ -815,7 +1069,7 @@ pub fn run_turn(
             if now() >= deadline {
                 stop_reason = Some("deadline exceeded".into());
             } else if emergency() {
-                stop_reason = Some("shutdown persistence failure: emergency stop".into());
+                stop_reason = Some("the helper is closing".into());
             } else if now() >= next_stop_check {
                 next_stop_check = now().saturating_add(nanos(ctx.poll));
                 match stop_requested(&mut reader) {

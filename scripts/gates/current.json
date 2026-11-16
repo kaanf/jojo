@@ -3,7 +3,7 @@
   "scope": "Tree after design wave 1, app shell (theme tokens for dark and light, sidebar, toolbar, status components; Swift app only), on top of M1 (Claude Code adapter, production stream profile for claude 2.1.311, helper --claude-* options, Start dispatch by provider). Offline; fixture agents only; no live provider execution, credential access, push or merge.",
   "boundary_tests_min": 105,
   "rust": {
-    "passed_min": 437,
+    "passed_min": 440,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -42,7 +42,10 @@
       "m2_a_running_turn_is_stopped_by_the_human_or_the_deadline_and_leaves_no_process",
       "m2_acceptance_holds_admission_capacity_and_the_shape_of_a_feature",
       "m2_a_turn_left_by_a_dead_helper_is_closed_as_interrupted_and_holds_nothing",
-      "m2_a_turn_request_is_refused_before_spawn_unless_it_is_exactly_the_turn_contract"
+      "m2_a_turn_request_is_refused_before_spawn_unless_it_is_exactly_the_turn_contract",
+      "m2_feature_chat_over_the_protocol_asks_answers_drafts_and_leaves_approval_to_the_human",
+      "m2_a_running_turn_holds_capacity_and_is_stopped_by_cancel_or_close",
+      "m2_a_turn_left_by_a_dead_helper_is_closed_when_the_next_helper_starts"
     ],
     "ignored": [
       "child_fixture",

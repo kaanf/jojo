@@ -8,9 +8,10 @@
 //!
 //! The table in [`SPECS`] is also what the macOS client's field lists are checked against
 //! (`scripts/tests/test_protocol_fields.py`); keep one request per `spec(...)` entry.
-use crate::identity::{ArtifactId, FeatureId, OpaqueId, RepositoryId, Revision};
+use crate::identity::{ArtifactId, FeatureId, OpaqueId, QuestionId, RepositoryId, Revision};
 use crate::ipc::{MAX_PAGE, get, id, string, text, uint};
 use crate::json::Json;
+use crate::planner::TurnKind;
 use crate::prd::PrdDocument;
 use crate::provider::ProviderKind;
 use crate::recovery::{Assessment, RecoveryChoice};
@@ -46,6 +47,11 @@ pub enum RequestKind {
     CandidateDiff,
     ValidationReport,
     ApprovedPlan,
+    ChatTurn,
+    AnswerQuestion,
+    CancelTurn,
+    FeatureChat,
+    ChatText,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,7 +114,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 28] = [
+pub const SPECS: [Spec; 33] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -137,6 +143,11 @@ pub const SPECS: [Spec; 28] = [
     spec(K::CandidateDiff, "CandidateDiff", Query, 1, false, Exact, &["attempt", "candidate", "offset"]),
     spec(K::ValidationReport, "ValidationReport", Query, 1, false, Exact, &["attempt", "receipt", "offset"]),
     spec(K::ApprovedPlan, "ApprovedPlan", Query, 1, false, Exact, &["after"]),
+    spec(K::ChatTurn, "ChatTurn", Mutation, 2, false, Exact, &["feature", "kind", "repository", "provider", "message"]),
+    spec(K::AnswerQuestion, "AnswerQuestion", Mutation, 2, false, Exact, &["question", "revision", "action", "answer"]),
+    spec(K::CancelTurn, "CancelTurn", Mutation, 2, true, Exact, &["turn"]),
+    spec(K::FeatureChat, "FeatureChat", Query, 2, false, Exact, &["feature", "after"]),
+    spec(K::ChatText, "ChatText", Query, 2, false, Exact, &["subject", "part", "offset"]),
 ];
 
 impl RequestKind {
@@ -497,6 +508,152 @@ impl ImportBundleCommand {
     }
 }
 
+/// M2 (protocol 1.2): one lead agent turn of a Feature Chat. The turn's identity is the
+/// command identity. Like a Start, nothing here names an executable, argument or variable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChatTurnCommand {
+    pub feature: FeatureId,
+    pub kind: TurnKind,
+    pub repository: RepositoryId,
+    pub provider: ProviderKind,
+    /// The objective of the first turn of a feature; a note, possibly empty, after it.
+    pub message: String,
+}
+impl ChatTurnCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        let feature = FeatureId(id(get(p, "feature")?)?);
+        let kind = TurnKind::named(string(get(p, "kind")?)?).ok_or("UnknownTurnKind")?;
+        let repository = RepositoryId(id(get(p, "repository")?)?);
+        let provider = match string(get(p, "provider")?)? {
+            "Codex" => ProviderKind::Codex,
+            "ClaudeCode" => ProviderKind::ClaudeCode,
+            _ => return Err("UnknownProvider".into()),
+        };
+        Ok(Self {
+            feature,
+            kind,
+            repository,
+            provider,
+            message: string(get(p, "message")?)?.to_owned(),
+        })
+    }
+}
+
+/// What the human does with one question the lead asked.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum QuestionAction {
+    /// A new answer, which supersedes an earlier one.
+    Answer(String),
+    /// Set the question aside: it no longer blocks review.
+    Defer,
+    /// Make a deferred question blocking again.
+    Block,
+}
+
+/// M2 (protocol 1.2): the human's answer to, or disposition of, one question at the
+/// revision the human was shown.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnswerQuestionCommand {
+    pub question: QuestionId,
+    pub revision: Revision,
+    pub action: QuestionAction,
+}
+impl AnswerQuestionCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        let question = QuestionId(id(get(p, "question")?)?);
+        let revision = Revision(uint(get(p, "revision")?)?);
+        let answer = get(p, "answer")?;
+        let action = match (string(get(p, "action")?)?, answer) {
+            ("Answer", Json::Text(body)) => QuestionAction::Answer(body.clone()),
+            ("Defer", Json::Null) => QuestionAction::Defer,
+            ("Block", Json::Null) => QuestionAction::Block,
+            ("Answer" | "Defer" | "Block", _) => {
+                return Err(
+                    "InvalidAnswer: an answer is text exactly when the action is Answer".into(),
+                );
+            }
+            _ => return Err("UnknownAction".into()),
+        };
+        Ok(Self {
+            question,
+            revision,
+            action,
+        })
+    }
+}
+
+/// M2 (protocol 1.2): the human's stop of a running turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CancelTurnCommand {
+    pub turn: OpaqueId,
+}
+impl CancelTurnCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            turn: id(get(p, "turn")?)?,
+        })
+    }
+}
+
+/// M2 (protocol 1.2): one page of a feature's chat, the turns after `after` (an ordinal).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeatureChatQuery {
+    pub feature: FeatureId,
+    pub after: u64,
+}
+impl FeatureChatQuery {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            feature: FeatureId(id(get(p, "feature")?)?),
+            after: uint(get(p, "after")?)?,
+        })
+    }
+}
+
+/// The long texts of a chat that a page carries only in part.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChatPart {
+    /// What the human typed for a turn (subject: the turn).
+    Message,
+    /// The lead's last message, the raw reply (subject: the turn).
+    Reply,
+    /// The prompt the turn was run with (subject: the turn).
+    Prompt,
+    /// The newest answer to a question (subject: the question).
+    Answer,
+    /// The newest version of a requirements document, rendered (subject: the document).
+    Prd,
+}
+impl ChatPart {
+    pub fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "Message" => Self::Message,
+            "Reply" => Self::Reply,
+            "Prompt" => Self::Prompt,
+            "Answer" => Self::Answer,
+            "Prd" => Self::Prd,
+            _ => return None,
+        })
+    }
+}
+
+/// M2 (protocol 1.2): one chunk of a long chat text, from a character offset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChatTextQuery {
+    pub subject: OpaqueId,
+    pub part: ChatPart,
+    pub offset: u64,
+}
+impl ChatTextQuery {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            subject: id(get(p, "subject")?)?,
+            part: ChatPart::named(string(get(p, "part")?)?).ok_or("UnknownPart")?,
+            offset: uint(get(p, "offset")?)?,
+        })
+    }
+}
+
 /// The five identities a Start names. Nothing else can be sent: no executable, argument
 /// or environment value exists in this type or in the command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -701,20 +858,27 @@ mod tests {
             "Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt \
              Recovery"
         );
-        for minor in [1, 2, 9] {
+        let v11_commands = "PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision \
+             RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate \
+             CandidateDecision";
+        let v11_queries = "Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle \
+             ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff \
+             ValidationReport ApprovedPlan";
+        assert_eq!(names(Mutation, 1), v11_commands);
+        assert_eq!(names(Query, 1), v11_queries);
+        // M2 (1.2): Feature Chat, listed after everything a 1.1 client knows.
+        for minor in [2, 9] {
             assert_eq!(
                 names(Mutation, minor),
-                "PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision \
-                 RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate \
-                 CandidateDecision"
+                format!("{v11_commands} ChatTurn AnswerQuestion CancelTurn")
             );
             assert_eq!(
                 names(Query, minor),
-                "Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle \
-                 ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges \
-                 CandidateDiff ValidationReport ApprovedPlan"
+                format!("{v11_queries} FeatureChat ChatText")
             );
         }
+        assert_eq!(RequestKind::of_frame("ChatTurn", 1), None);
+        assert_eq!(RequestKind::of_frame("ChatTurn", 2), Some(K::ChatTurn));
         assert_eq!(names(Handshake, 0), "Hello");
         assert_eq!(RequestKind::of_frame("Start", 0), None);
         assert_eq!(RequestKind::of_frame("Start", 1), Some(K::Start));
@@ -723,7 +887,7 @@ mod tests {
         assert_eq!(
             control.join(" "),
             "Hello PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision Start \
-             RecoveryResolve RecoveryStart Validate CandidateDecision"
+             RecoveryResolve RecoveryStart Validate CandidateDecision CancelTurn"
         );
     }
 

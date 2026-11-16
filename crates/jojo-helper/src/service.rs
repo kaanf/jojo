@@ -13,6 +13,7 @@ use jojo_domain::identity::{IdGenerationError, IdGenerator, OpaqueId};
 use jojo_domain::ipc::*;
 use jojo_domain::json::Json;
 use jojo_domain::paths::LocalRoots;
+use jojo_domain::planner::TurnSpec;
 use jojo_domain::protocol::{
     self, CandidateVerdict, Class, CloseCommand, DecisionVerb, RequestKind,
 };
@@ -119,6 +120,35 @@ impl Workers {
         self.handles.push(handle);
         Ok(())
     }
+    /// M2: one lead agent turn. It is not an attempt and is not settled like one; capacity,
+    /// close and drop wait for it exactly as for a launch. `stop` ends it early.
+    pub fn turn(
+        &mut self,
+        runtime: WorkerRuntime,
+        spec: TurnSpec,
+        launch: ProcessLaunch,
+        plan: StopPlan,
+        mut hooks: LaunchHooks,
+        stop: Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        hooks.emergency_stop = Some(stop);
+        let WorkerRuntime { engine, ids, clock } = runtime;
+        let handle = std::thread::Builder::new()
+            .name("jojo-turn".into())
+            .spawn(move || {
+                let ctx = LaunchContext {
+                    engine: &engine,
+                    ids: ids.as_ref(),
+                    clock: clock.as_ref(),
+                    poll: Duration::from_millis(10),
+                };
+                let run = run_turn(&ctx, &spec, &launch, &plan, hooks);
+                settle_turn(&ctx, &spec, &run).map(drop)
+            })
+            .map_err(|e| e.to_string())?;
+        self.handles.push(handle);
+        Ok(())
+    }
     /// P2-03: a host validation run. It is not a provider attempt, but it is work this
     /// helper owns: capacity, close and drop wait for it exactly as for a launch.
     pub fn validate(
@@ -213,6 +243,8 @@ pub struct Service {
     pub claude: Option<ClaudeAdapterConfig>,
     /// Stop flag of the latest validation run, set on close, emergency and drop.
     validation_stop: Arc<AtomicBool>,
+    /// M2: stop flag of the latest lead agent turn, set on close, emergency and drop.
+    turn_stop: Arc<AtomicBool>,
 }
 
 /// The launcher's flags as the adapter's configuration.
@@ -263,6 +295,22 @@ impl Adapter {
             Self::Claude(a) => a.capabilities(),
         }
     }
+    fn turn_fingerprint(&self) -> jojo_domain::provider::ProviderFingerprint {
+        match self {
+            Self::Codex(a) => a.turn_fingerprint(),
+            Self::Claude(a) => a.turn_fingerprint(),
+        }
+    }
+    fn prepare_turn(&self, spec: &TurnSpec) -> Result<ProcessLaunch, String> {
+        match self {
+            Self::Codex(a) => a
+                .prepare_turn(spec)
+                .map_err(|e| format!("AdapterRejected: {e:?}")),
+            Self::Claude(a) => a
+                .prepare_turn(spec)
+                .map_err(|e| format!("AdapterRejected: {e:?}")),
+        }
+    }
 }
 impl Service {
     pub fn new(engine: Arc<Engine>) -> Result<Self, String> {
@@ -292,7 +340,41 @@ impl Service {
             guard: None,
             claude: None,
             validation_stop: Arc::new(AtomicBool::new(false)),
+            turn_stop: Arc::new(AtomicBool::new(false)),
         })
+        .and_then(|service| {
+            // M2: a turn an earlier helper left unfinished held no worktree, claim or
+            // effect; it is closed as interrupted before anything is served.
+            let stale = service
+                .engine
+                .reader()
+                .and_then(|mut r| r.read(|v| v.unfinished_turn()))
+                .map_err(|e| e.to_string())?;
+            if let Some(turn) = stale {
+                service.command("CloseInterruptedTurns", turn, |tx| {
+                    tx.close_interrupted_turns().map(|n| format!("closed {n}"))
+                })?;
+            }
+            Ok(service)
+        })
+    }
+    /// One internal command under a runtime identity.
+    fn command<F>(&self, kind: &str, subject: OpaqueId, f: F) -> Result<String, String>
+    where
+        F: FnOnce(&mut Tx<'_>) -> Result<String, TxError> + Send + 'static,
+    {
+        let id = self.ids.next_id().map_err(|_| "IDs exhausted")?;
+        let request = CommandRequest::new(
+            CommandId(id),
+            self.engine.epoch(),
+            kind,
+            format!("{:032x}", subject.0),
+        );
+        match self.engine.execute(request, f) {
+            Ok(r) => Ok(r.response),
+            Err(CommandError::Rejected(TxError::Rejected(why))) => Err(why),
+            Err(e) => Err(format!("{e:?}")),
+        }
     }
     /// A fresh read-only inspection. Resolution and the reviewed start bind its digest.
     fn reinspect(&mut self) -> Result<(), String> {
@@ -332,6 +414,7 @@ impl Service {
     }
     pub fn emergency(&mut self) -> Result<(), String> {
         self.validation_stop.store(true, Ordering::SeqCst);
+        self.turn_stop.store(true, Ordering::SeqCst);
         self.finalized = false;
         let result = emergency_stop(&self.ctx()).map(|_| ());
         if result.is_err() {
@@ -612,6 +695,29 @@ impl Service {
                     ),
                 ]))
             }
+            // Protocol 1.2 (M2): Feature Chat.
+            RequestKind::FeatureChat => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let q = protocol::FeatureChatQuery::parse(p)?;
+                reader
+                    .read(|v| v.ipc_feature_chat(q.feature, q.after))
+                    .map_err(|e| e.to_string())
+            }
+            RequestKind::ChatText => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let q = protocol::ChatTextQuery::parse(p)?;
+                reader
+                    .read(|v| v.ipc_chat_text(q.subject, q.part, q.offset))
+                    .map_err(|e| e.to_string())
+            }
+            RequestKind::ChatTurn | RequestKind::AnswerQuestion | RequestKind::CancelTurn => {
+                drop(reader);
+                self.slice_command(kind, e)
+            }
             RequestKind::RegisterRepository
             | RequestKind::ImportBundle
             | RequestKind::Start
@@ -681,6 +787,10 @@ impl Service {
             }
             if kind == RequestKind::Validate {
                 fields.push(("validation".into(), text("not repeated")));
+            }
+            if kind == RequestKind::ChatTurn {
+                fields.push(("turn".into(), identity(e.request)));
+                fields.push(("dispatch".into(), text("not repeated")));
             }
             return Ok(Json::Object(fields));
         }
@@ -844,6 +954,33 @@ impl Service {
                         .map(receipt)
                         .map_err(rejected),
                 }
+            }
+            RequestKind::ChatTurn => {
+                let c = protocol::ChatTurnCommand::parse(p)?;
+                self.chat_turn(request, e.request, c)
+            }
+            RequestKind::AnswerQuestion => {
+                let protocol::AnswerQuestionCommand {
+                    question,
+                    revision,
+                    action,
+                } = protocol::AnswerQuestionCommand::parse(p)?;
+                self.engine
+                    .execute(request, move |tx| {
+                        tx.answer_chat_question(question, revision, &action)
+                    })
+                    .map(receipt)
+                    .map_err(rejected)
+            }
+            RequestKind::CancelTurn => {
+                let protocol::CancelTurnCommand { turn } = protocol::CancelTurnCommand::parse(p)?;
+                self.engine
+                    .execute(request, move |tx| {
+                        tx.request_turn_stop(turn)?;
+                        Ok("stop committed; the turn ends with its result".into())
+                    })
+                    .map(receipt)
+                    .map_err(rejected)
             }
             RequestKind::RecoveryStart => {
                 protocol::reviewed_inspection(p, self.recovery.digest())?;
@@ -1021,29 +1158,7 @@ impl Service {
             .map_err(|e| e.to_string())?
             .map_err(|why| format!("StartRefused: {why}"))?;
         drop(reader);
-        // The two production adapters. A provider whose executable the launcher did not
-        // configure cannot be launched by Start.
-        let adapter = match step.provider {
-            ProviderKind::Codex => {
-                let codex = slice
-                    .codex
-                    .ok_or("NoProductionAdapter: Codex is not configured")?;
-                CodexAdapter::new(codex)
-                    .and_then(|adapter| adapter.ready().map(|()| adapter))
-                    .map(Adapter::Codex)
-                    .map_err(|e| format!("AdapterRejected: {e:?}"))?
-            }
-            ProviderKind::ClaudeCode => {
-                let claude = self
-                    .claude
-                    .clone()
-                    .ok_or_else(|| format!("NoProductionAdapter: {:?}", step.provider))?;
-                ClaudeAdapter::new(claude)
-                    .and_then(|adapter| adapter.ready().map(|()| adapter))
-                    .map(Adapter::Claude)
-                    .map_err(|e| format!("AdapterRejected: {e:?}"))?
-            }
-        };
+        let adapter = self.adapter(step.provider, &slice)?;
         let repository =
             DisposableRoot::inspect(&slice.disposable_root)?.repository(&step.repository_path)?;
         if repository.id() != step.repository {
@@ -1068,6 +1183,139 @@ impl Service {
                 start.attempt.0
             )),
         }
+    }
+    /// The two production adapters. A provider whose executable the launcher did not
+    /// configure cannot be launched by Start or by a turn.
+    fn adapter(&self, provider: ProviderKind, slice: &SliceConfig) -> Result<Adapter, String> {
+        match provider {
+            ProviderKind::Codex => {
+                let codex = slice
+                    .codex
+                    .clone()
+                    .ok_or("NoProductionAdapter: Codex is not configured")?;
+                CodexAdapter::new(codex)
+                    .and_then(|adapter| adapter.ready().map(|()| adapter))
+                    .map(Adapter::Codex)
+                    .map_err(|e| format!("AdapterRejected: {e:?}"))
+            }
+            ProviderKind::ClaudeCode => {
+                let claude = self
+                    .claude
+                    .clone()
+                    .ok_or_else(|| format!("NoProductionAdapter: {provider:?}"))?;
+                ClaudeAdapter::new(claude)
+                    .and_then(|adapter| adapter.ready().map(|()| adapter))
+                    .map(Adapter::Claude)
+                    .map_err(|e| format!("AdapterRejected: {e:?}"))
+            }
+        }
+    }
+    /// M2: one lead agent turn. Accepted durably with its prompt, then run read-only in
+    /// the registered repository through the configured adapter. A turn that cannot be
+    /// launched after acceptance is sealed as failed at once, so it never holds capacity.
+    fn chat_turn(
+        &mut self,
+        request: CommandRequest,
+        turn: OpaqueId,
+        c: protocol::ChatTurnCommand,
+    ) -> Result<Json, String> {
+        let with = |r: Receipt, dispatch: &str| {
+            let Json::Object(mut fields) = receipt(r) else {
+                unreachable!("receipt is an object")
+            };
+            fields.push(("turn".into(), identity(turn)));
+            fields.push(("dispatch".into(), text(dispatch)));
+            Json::Object(fields)
+        };
+        let rejected = |e: CommandError| match e {
+            CommandError::Rejected(TxError::Rejected(why)) => why,
+            other => format!("{other:?}"),
+        };
+        let slice = self.config.slice.clone().ok_or("SliceNotConfigured")?;
+        if !self.workers.reap() {
+            return Err("CapacityOne: a run is active".into());
+        }
+        let adapter = self.adapter(c.provider, &slice)?;
+        let path = self
+            .engine
+            .reader()
+            .and_then(|mut r| r.read(|v| v.local_repository_path(c.repository)))
+            .map_err(|e| e.to_string())?
+            .ok_or("TurnRefused: the repository is not registered")?;
+        let repository = DisposableRoot::inspect(&slice.disposable_root)?.repository(&path)?;
+        if repository.id() != c.repository {
+            return Err("TurnRefused: repository identity changed".into());
+        }
+        let base = repository_head(&repository).map_err(|e| format!("TurnRefused: {e}"))?;
+        let accepted = TurnRequest {
+            turn,
+            feature: c.feature,
+            kind: c.kind,
+            repository: c.repository,
+            provider: c.provider,
+            message: c.message,
+        };
+        let r = self
+            .engine
+            .execute(request, move |tx| tx.accept_turn(&accepted, &base))
+            .map_err(rejected)?;
+        if r.replayed {
+            return Ok(with(r, "not repeated"));
+        }
+        self.finalized = false;
+        match self.dispatch_turn(turn, &repository, &adapter) {
+            Ok(()) => Ok(with(r, "launched")),
+            Err(why) => {
+                let detail = format!("not spawned: {why}");
+                self.command("FinishLeadTurn", turn, move |tx| {
+                    tx.finish_turn(turn, TurnOutcome::Failed, &detail, None, &[])
+                })?;
+                Err(format!(
+                    "TurnFailed: {why}; command {:032x} is committed and nothing was launched",
+                    turn.0
+                ))
+            }
+        }
+    }
+    fn dispatch_turn(
+        &mut self,
+        turn: OpaqueId,
+        repository: &LocalRepository,
+        adapter: &Adapter,
+    ) -> Result<(), String> {
+        let spec = turn_spec(
+            &self.engine,
+            turn,
+            repository,
+            &adapter.turn_fingerprint(),
+            adapter.variables(),
+        )?;
+        let launch = adapter.prepare_turn(&spec)?;
+        let mut hooks = self
+            .config
+            .launch_hooks
+            .as_mut()
+            .map_or_else(LaunchHooks::default, |make| make());
+        if hooks.inspector.is_none() {
+            hooks.inspector = self.config.inspector.clone();
+        }
+        if hooks.guard.is_none() {
+            hooks.guard = self.guard.clone();
+        }
+        let plan = StopPlan::new(adapter.capabilities(), StopBudgets::ACCEPTED);
+        self.turn_stop = Arc::new(AtomicBool::new(false));
+        self.workers.turn(
+            WorkerRuntime {
+                engine: self.engine.clone(),
+                ids: self.ids.clone(),
+                clock: self.clock.clone(),
+            },
+            spec,
+            launch,
+            plan,
+            hooks,
+            self.turn_stop.clone(),
+        )
     }
     fn dispatch(&mut self, start: &StartRequest, adapter: &Adapter) -> Result<(), String> {
         provision_and_reserve(&self.ctx(), start)?;
@@ -1101,8 +1349,10 @@ impl Service {
         self.launch(spec, launch, plan, hooks)
     }
     pub fn finish(&mut self, disconnected: bool) -> Result<Option<ShutdownReceipt>, String> {
-        // Closing: an active validator is stopped; it records no verdict.
+        // Closing: an active validator is stopped; it records no verdict. A running lead
+        // turn is stopped too and sealed as failed.
         self.validation_stop.store(true, Ordering::SeqCst);
+        self.turn_stop.store(true, Ordering::SeqCst);
         if !self.workers.reap() {
             return Ok(None);
         }

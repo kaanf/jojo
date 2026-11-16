@@ -5,7 +5,9 @@ use crate::json::{self, Json};
 pub const MAJOR: i64 = 1;
 /// 1.1 (P2-02) adds repository registration, bundle import, Start and recovery
 /// resolution. A 1.0 client is unaffected: the additions answer only to minor >= 1.
-pub const MINOR: i64 = 1;
+/// 1.2 (M2) adds Feature Chat: lead agent turns, answers to their questions and the chat
+/// queries. A 1.1 client is unaffected: the additions answer only to minor >= 2.
+pub const MINOR: i64 = 2;
 pub const MAX_FRAME: usize = 64 * 1024;
 pub const MAX_PAGE: u32 = 8;
 

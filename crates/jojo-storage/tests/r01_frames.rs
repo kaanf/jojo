@@ -163,7 +163,8 @@ fn record(h: &mut H) {
     // Before and around the handshake.
     h.send("snapshot before hello", "Snapshot", object([]));
     h.at("hello 1.0", 0, "Hello", object([]));
-    h.at("hello 1.2", 2, "Hello", object([("junk", n(1))]));
+    // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2).
+    h.at("hello 1.3", 3, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -909,6 +910,136 @@ fn record(h: &mut H) {
         "ApprovedPlan",
         object([("after", hex(9))]),
     );
+
+    // Feature Chat (protocol 1.2, M2), recorded last for the same reason. No provider is
+    // configured, so no turn can be launched; every refusal before that is pinned.
+    let at2 = |h: &mut H, label: &str, kind: &str, payload: Json| {
+        h.at(label, 2, kind, payload);
+    };
+    h.send(
+        "1.1 frame names FeatureChat",
+        "FeatureChat",
+        object([("feature", hex(7)), ("after", n(0))]),
+    );
+    h.send(
+        "1.1 frame names CancelTurn",
+        "CancelTurn",
+        object([("turn", hex(7))]),
+    );
+    at2(
+        h,
+        "feature chat empty",
+        "FeatureChat",
+        object([("feature", hex(7)), ("after", n(0))]),
+    );
+    at2(
+        h,
+        "feature chat extra field",
+        "FeatureChat",
+        object([("feature", hex(7)), ("after", n(0)), ("limit", n(8))]),
+    );
+    at2(
+        h,
+        "feature chat bad after",
+        "FeatureChat",
+        object([("feature", hex(7)), ("after", bad())]),
+    );
+    at2(
+        h,
+        "chat text none",
+        "ChatText",
+        object([
+            ("subject", hex(7)),
+            ("part", text("Reply")),
+            ("offset", n(0)),
+        ]),
+    );
+    at2(
+        h,
+        "chat text unknown part",
+        "ChatText",
+        object([
+            ("subject", hex(7)),
+            ("part", text("Diff")),
+            ("offset", n(0)),
+        ]),
+    );
+    let turn = |provider: &str, kind: &str| {
+        object([
+            ("feature", hex(7)),
+            ("kind", text(kind)),
+            ("repository", hex(8)),
+            ("provider", text(provider)),
+            ("message", text("make it so")),
+        ])
+    };
+    let Json::Object(mut extra) = turn("Codex", "Discover") else {
+        unreachable!()
+    };
+    extra.push(("executable".into(), text("/bin/sh")));
+    at2(h, "chat turn extra field", "ChatTurn", Json::Object(extra));
+    at2(
+        h,
+        "chat turn unknown provider",
+        "ChatTurn",
+        turn("Gemini", "Discover"),
+    );
+    at2(
+        h,
+        "chat turn unknown kind",
+        "ChatTurn",
+        turn("Codex", "Build"),
+    );
+    at2(
+        h,
+        "chat turn codex not configured",
+        "ChatTurn",
+        turn("Codex", "Discover"),
+    );
+    at2(
+        h,
+        "chat turn claude not configured",
+        "ChatTurn",
+        turn("ClaudeCode", "Discover"),
+    );
+    let answer = |action: &str, body: Json| {
+        object([
+            ("question", hex(7)),
+            ("revision", n(1)),
+            ("action", text(action)),
+            ("answer", body),
+        ])
+    };
+    at2(
+        h,
+        "answer unknown question",
+        "AnswerQuestion",
+        answer("Answer", text("yes")),
+    );
+    at2(
+        h,
+        "answer defer with text",
+        "AnswerQuestion",
+        answer("Defer", text("yes")),
+    );
+    at2(
+        h,
+        "answer without text",
+        "AnswerQuestion",
+        answer("Answer", Json::Null),
+    );
+    at2(
+        h,
+        "answer unknown action",
+        "AnswerQuestion",
+        answer("Approve", Json::Null),
+    );
+    at2(
+        h,
+        "cancel unknown turn",
+        "CancelTurn",
+        object([("turn", hex(7))]),
+    );
 }
 
 #[test]
@@ -925,7 +1056,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.2 => 1.1 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan","slice":true}
+hello 1.3 => 1.2 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1097,4 +1228,21 @@ approved plan bad => 1.1 Error {"code":"expected 32 lowercase hex identity"}
 approved plan extra field => 1.1 Error {"code":"InvalidPayload: unexpected or missing fields"}
 approved plan none => 1.1 Response null
 approved plan none after => 1.1 Response null
+1.1 frame names FeatureChat => 1.1 Error {"code":"UnknownType"}
+1.1 frame names CancelTurn => 1.1 Error {"code":"UnknownType"}
+feature chat empty => 1.2 Response {"feature":"00000000000000000000000000000007","next":null,"prd":null,"running":null,"turns":[]}
+feature chat extra field => 1.2 Error {"code":"InvalidPayload: unexpected or missing fields"}
+feature chat bad after => 1.2 Error {"code":"expected integer"}
+chat text none => 1.2 Response null
+chat text unknown part => 1.2 Error {"code":"UnknownPart"}
+chat turn extra field => 1.2 Error {"code":"InvalidPayload: unexpected or missing fields"}
+chat turn unknown provider => 1.2 Error {"code":"UnknownProvider"}
+chat turn unknown kind => 1.2 Error {"code":"UnknownTurnKind"}
+chat turn codex not configured => 1.2 Error {"code":"NoProductionAdapter: Codex is not configured"}
+chat turn claude not configured => 1.2 Error {"code":"NoProductionAdapter: ClaudeCode"}
+answer unknown question => 1.2 Error {"code":"UnknownQuestion: not asked in a Feature Chat"}
+answer defer with text => 1.2 Error {"code":"InvalidAnswer: an answer is text exactly when the action is Answer"}
+answer without text => 1.2 Error {"code":"InvalidAnswer: an answer is text exactly when the action is Answer"}
+answer unknown action => 1.2 Error {"code":"UnknownAction"}
+cancel unknown turn => 1.2 Error {"code":"UnknownTurn"}
 "#;
