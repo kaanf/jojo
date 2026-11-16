@@ -1068,7 +1068,7 @@ fn m3_a_started_plan_runs_its_ready_steps_validates_them_and_waits_for_the_human
     assert_eq!(str_of(&run, &["state"]), "RUNNING");
     assert_eq!(
         str_of(&run, &["branch"]),
-        format!("jojo/plan/{}", &str_of(&plan, &[])[..12])
+        format!("jojo/plan/{}", str_of(&plan, &[]))
     );
     assert_eq!(h.step_states(&plan), ["Ready", "Ready", "Waiting"]);
     assert_eq!(

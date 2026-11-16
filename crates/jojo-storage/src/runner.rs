@@ -126,9 +126,10 @@ pub struct PlanRunView {
     pub steps: Vec<RunStep>,
 }
 
-/// The plan branch of a run: local, under `jojo/`, never pushed by the runner.
+/// The plan branch of a run: local, under `jojo/`, never pushed by the runner. The whole
+/// identity: identities the helper makes share their first half.
 pub fn plan_branch(plan: ArtifactId) -> String {
-    format!("jojo/plan/{}", &id_to_text(plan.0)[..12])
+    format!("jojo/plan/{}", id_to_text(plan.0))
 }
 
 fn scopes_overlap(a: &str, b: &str) -> bool {

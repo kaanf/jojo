@@ -226,6 +226,9 @@ const LEAD_PLAN_ASKS: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Before
 /// M3: a plan under a project record. Each step's title is its own attempt directive, so
 /// that every step of a run writes only its own path; kinds decide two providers.
 const LEAD_PLAN_KINDS: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Two independent steps, then one that needs both.","adr":"# Decision\nThree small files.","steps":[{"key":"api","title":"fixture: develop-after 2 src/api.txt","kind":"backend","provider":"Codex","depends_on":[],"write_scope":["src/api.txt"],"baseline":[],"tests":["api"],"command":["/usr/bin/true"]},{"key":"usage","title":"fixture: develop-after 2 src/usage.txt","kind":"docs","provider":null,"depends_on":[],"write_scope":["src/usage.txt"],"baseline":[],"tests":["usage"],"command":["/usr/bin/true"]},{"key":"join","title":"fixture: develop src/join.txt","kind":null,"provider":null,"depends_on":["api","usage"],"write_scope":["src/join.txt"],"baseline":[],"tests":["join"],"command":["/usr/bin/true"]}],"questions":[]}"##;
+/// M3 live run: a plan a real agent can do on the generated sample repository. Only the
+/// lead is the fixture; each step goes to the provider its kind names.
+const LEAD_PLAN_LIVE: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"An entry point and its usage text in parallel, then a test of the entry point.","adr":"# Decision\nA thin command-line entry point beside slugify.py, a usage text, then a unittest of the entry point. No new dependency; slugify.py and its tests stay as they are.","steps":[{"key":"cli","title":"Add cli.py: a command-line entry point that prints slugify of its arguments joined by spaces","kind":"backend","provider":null,"depends_on":[],"write_scope":["cli.py"],"baseline":["slugify.py","test_slugify.py"],"tests":["cli"],"command":["/usr/bin/python3","-c","import ast; ast.parse(open('cli.py').read())"]},{"key":"usage","title":"Write USAGE.md: how to run cli.py, with one example","kind":"docs","provider":null,"depends_on":[],"write_scope":["USAGE.md"],"baseline":["slugify.py"],"tests":["usage"],"command":["/bin/test","-s","USAGE.md"]},{"key":"clitest","title":"Add test_cli.py: a unittest that runs cli.py with two words and checks the output","kind":null,"provider":null,"depends_on":["cli","usage"],"write_scope":["test_cli.py"],"baseline":["cli.py","slugify.py"],"tests":["clitest"],"command":["/usr/bin/python3","-c","import ast; ast.parse(open('test_cli.py').read())"]}],"questions":[]}"##;
 const LEAD_PLAN_UNKNOWN_KIND: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"One step of a kind the project does not have.","adr":"# Decision\nOne file.","steps":[{"key":"ui","title":"Paint it","kind":"frontend","provider":"Codex","depends_on":[],"write_scope":["src/ui.txt"],"baseline":[],"tests":["ui"],"command":["/usr/bin/true"]}],"questions":[]}"##;
 
 /// What the stand-in lead agent does in a turn (M2).
@@ -249,6 +252,7 @@ fn lead(scenario: &str, prompt: &str, args: &[String]) -> Lead {
         "lead" if planning => Lead::Reply(LEAD_PLAN.into()),
         "lead-plan-asks" => Lead::Reply(LEAD_PLAN_ASKS.into()),
         "lead-kinds" if planning => Lead::Reply(LEAD_PLAN_KINDS.into()),
+        "lead-live" if planning => Lead::Reply(LEAD_PLAN_LIVE.into()),
         "lead-kinds-unknown" if planning => Lead::Reply(LEAD_PLAN_UNKNOWN_KIND.into()),
         "lead" if prompt.contains("# Questions and answers so far\nNone.") => {
             Lead::Reply(LEAD_QUESTIONS.into())

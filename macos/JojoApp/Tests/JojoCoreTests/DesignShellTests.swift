@@ -1452,7 +1452,7 @@ final class DesignShellTests: XCTestCase {
                          commit: index == 0 ? String(repeating: "c", count: 40) : nil)
         }
         return PlanRun(plan: plan.plan, revision: plan.revision, state: "RUNNING", control: "RUNNING", repository: ids[4],
-                       base: String(repeating: "b", count: 40), branch: "jojo/plan/\(plan.plan.prefix(12))",
+                       base: String(repeating: "b", count: 40), branch: "jojo/plan/\(plan.plan)",
                        head: String(repeating: "c", count: 40), steps: steps)
     }
     private static let repositories = ["a1", "b2"].map { String(repeating: $0, count: 16) }

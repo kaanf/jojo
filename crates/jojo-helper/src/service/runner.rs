@@ -117,7 +117,7 @@ impl Service {
         );
         let name = format!(
             "{}-{:032x}",
-            run.branch.trim_start_matches("jojo/plan/"),
+            &run.branch.trim_start_matches("jojo/plan/")[..16],
             self.ids.next_id().map_err(|_| "IDs exhausted")?.0
         );
         // A failure that is not a clean conflict is recorded as one too: nothing moved,
