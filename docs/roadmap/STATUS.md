@@ -14,9 +14,11 @@ Read this first in a new session. Updated 2026-11-16. Update it whenever a step 
 | Refactor R-02 (split the long functions) | Optional, not started. Needs its own GO |
 | Design wave 1, M1 … M6 | Not started |
 
-## Next step: design wave 1 and M1, or Refactor R-02 first
+## Next step: M1 (Claude Code adapter)
 
-The human chooses. The roadmap order is design wave 1 and M1 (Claude Code adapter) in parallel, then M2 (Feature Chat lead agent), M3 (project record and plan runner), M4 (validation, review, repair), M5 (push and draft PR). The order and the reasons are in [SOURCE_FIRST_REUSE_MAP.md](SOURCE_FIRST_REUSE_MAP.md), section 3.
+Chosen by the human on 2026-11-16: M1 next; R-02 stays optional. Before any design is implemented, the design system was written down in `docs/design/` (done). Its open decisions (font, light values of some components) are listed in `docs/design/README.md`.
+
+Background: The roadmap order is design wave 1 and M1 (Claude Code adapter) in parallel, then M2 (Feature Chat lead agent), M3 (project record and plan runner), M4 (validation, review, repair), M5 (push and draft PR). The order and the reasons are in [SOURCE_FIRST_REUSE_MAP.md](SOURCE_FIRST_REUSE_MAP.md), section 3.
 
 Refactor R-02 ([REFACTOR_PLAN.md](../planning/REFACTOR_PLAN.md)) splits `supervise`, `spawn_guarded`, `handle` and `slice_command`. R-01 made the helper part cheap (`service.rs` now matches on `RequestKind`, one arm per request). It is not required for M1. Ask before starting it.
 
@@ -29,6 +31,7 @@ What R-01 left for a later step: the Recovery tab still shows the `assessment` d
 | [SOURCE_FIRST_REUSE_MAP.md](SOURCE_FIRST_REUSE_MAP.md) | Jojo inventory, upstream code per capability (repository, pinned SHA, files, license), roadmap M0–M6 and its order |
 | [DESIGN_ROADMAP_DIFFERENCES.md](DESIGN_ROADMAP_DIFFERENCES.md) | Every decision where the Claude Design canvas and the roadmap disagreed (D1–D4), engineering decisions (E1–E3), how to reverse each, and the change log |
 | This file | Current state and next step |
+| [docs/design/](../design/README.md) | The design system as text, transcribed from the canvas on 2026-11-16: tokens, components, states. Read before any SwiftUI design work |
 
 Design canvas: "Jojo macOS", https://claude.ai/artifact/UuyW4DFxPEciFKZm8ZGM24
 
