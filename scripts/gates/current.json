@@ -1,0 +1,43 @@
+{
+  "artifact": "gate-m0",
+  "scope": "Tree after M0 (escaped-descendant stop, real Codex 0.169.0 parser test, ownership lock release). Offline; fixture agents only; no live provider execution, credential access, push or merge.",
+  "boundary_tests_min": 87,
+  "rust": {
+    "passed_min": 396,
+    "required": [
+      "m0_real_0_169_0_stream_normalizes_to_one_successful_turn",
+      "t09_known_escaped_child_is_signalled_after_an_identity_check_and_confirmed_absent",
+      "p2_04_1_a_descendant_that_left_the_group_is_stopped_by_the_guard_through_the_parent_chain",
+      "t09_escaped_descendant_holding_output_produces_unconfirmed_stop",
+      "t09_wrong_start_time_or_boot_is_never_signalled",
+      "p2_03_closing_while_validation_is_active_stops_the_validator_and_leaves_no_verdict",
+      "p2_03_real_helper_runs_start_to_settlement_validation_and_acceptance_over_pipes"
+    ],
+    "ignored": [
+      "child_fixture",
+      "p2_01_canary_child",
+      "p2_03_real_helper_runs_start_to_settlement_validation_and_acceptance_over_pipes",
+      "p2_04_1_role",
+      "t16_helper_role"
+    ],
+    "unsandboxed_ignored": [
+      {
+        "package": "jojo-storage",
+        "target": "p2_03_real_helper",
+        "test": "p2_03_real_helper_runs_start_to_settlement_validation_and_acceptance_over_pipes"
+      }
+    ]
+  },
+  "swift": {
+    "tests_min": 35
+  },
+  "gui": {
+    "scripts/gui_p1_14.py": 9,
+    "scripts/gui_p2_02.py": 3,
+    "scripts/gui_p2_03.py": 5
+  },
+  "not_covered": [
+    "The twelve P2-04 rehearsal scenarios (scripts/gui_p2_04.py) are not run by this gate yet.",
+    "The per-milestone coverage maps, launch-site inventory and allowed-changed-files lists of the verify_p*.py scripts are not carried over."
+  ]
+}
