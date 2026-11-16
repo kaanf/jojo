@@ -205,14 +205,14 @@ struct SettingsState: Equatable {
             return SettingsPage(
                 groups: [
                     SettingsGroup(title: "Default providers", lines: [
-                        .missing("Provider per task", "Not reported. Nothing assigns a provider to a kind of task yet."),
+                        .missing("Provider per task", "Set per project: a project record maps task kinds to a provider. Shown on Projects."),
                         SettingsLine(label: "Validator", value: "The core's host validation of a candidate. No reviewing agent yet."),
                         .missing("Repair", "Decided, not built: automatic, at most two tries, then a human hold."),
                     ]),
                     SettingsGroup(title: "Concurrency", lines: [
-                        .missing("Parallel attempts", "Not reported, and not decided. The limit is a value in the core's scheduler; no request reads it."),
-                        .missing("Per repository"),
-                        .missing("Per provider"),
+                        .missing("Parallel attempts", "Decided (D4): one number for the whole core, set in a project record. Shown on Projects."),
+                        .missing("Per repository", "No limit (D4)."),
+                        .missing("Per provider", "Not split by provider (D4)."),
                     ]),
                 ])
         case .git:

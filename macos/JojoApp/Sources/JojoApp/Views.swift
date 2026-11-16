@@ -29,6 +29,7 @@ struct MainView: View {
                         shown(.sourceControl) { SourceControlScreen(model: model, open: { screen = $0 }) }
                         shown(.specifications) { SpecificationsScreen(model: model, open: { screen = $0 }) }
                         shown(.verification) { VerificationScreen(model: model, open: { screen = $0 }) }
+                        shown(.projects) { ProjectsScreen(model: model, visible: screen == .projects) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     if !model.workspace.status.isEmpty {
@@ -45,7 +46,7 @@ struct MainView: View {
 
     /// Destinations that have a screen today; the others show `NotBuiltYet`.
     static let built: Set<Screen> = [.activity, .agentRuns, .approvalInbox, .recoveryCenter, .executionPlan,
-                                     .featureChat, .settings, .sourceControl, .specifications, .verification]
+                                     .featureChat, .projects, .settings, .sourceControl, .specifications, .verification]
 
     private func shown(_ target: Screen, @ViewBuilder _ content: () -> some View) -> some View {
         content()

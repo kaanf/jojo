@@ -1366,10 +1366,10 @@ final class DesignShellTests: XCTestCase {
                        ["Claude Code", "Codex", "Core", "Executable discovery", "Defaults & concurrency", "Git & GitHub", "Workspace storage",
                         "Evidence retention", "Security & approvals", "Keyboard shortcuts", "Appearance"])
 
-        // D4 is open: no capacity is shown, neither the board's nor the roadmap's.
+        // D4 is decided (M3); the number lives in a project record and is shown on Projects, not here.
         let concurrency = state.page(.defaults).groups[1].lines
         XCTAssertTrue(concurrency.allSatisfy { $0.form == .missing })
-        XCTAssertNil(concurrency.map(\.value).joined().rangeOfCharacter(from: .decimalDigits))
+        XCTAssertEqual(concurrency.first?.value, "Decided (D4): one number for the whole core, set in a project record. Shown on Projects.")
         // D2: the board's validator line no longer holds.
         XCTAssertFalse(values(state.page(.defaults))["Validator"]!.contains("no agent"))
         XCTAssertEqual(values(state.page(.defaults))["Repair"], "Decided, not built: automatic, at most two tries, then a human hold.")
@@ -1440,6 +1440,21 @@ final class DesignShellTests: XCTestCase {
     }
 
     private static func step(_ n: Int) -> String { String(repeating: String(format: "%x7%xd", n, 15 - n), count: 8) }
+
+    /// M3: a run of `plan` with one step in each kind of state the board draws.
+    static func run(_ plan: ApprovedPlan) -> PlanRun {
+        let states = ["Integrated", "Review", "Running", "Waiting", "Failed"]
+        let details = ["", "", "", "waits for s3", "host validation failed"]
+        let steps = plan.steps.enumerated().map { index, step in
+            PlanRun.Step(id: step.id, key: "s\(index + 1)", title: "Step title \(index + 1)", kind: index == 0 ? "backend" : nil,
+                         provider: step.provider ?? "Codex", state: states[index % states.count],
+                         detail: details[index % details.count], attempt: index < 3 ? ids[index] : nil,
+                         commit: index == 0 ? String(repeating: "c", count: 40) : nil)
+        }
+        return PlanRun(plan: plan.plan, revision: plan.revision, state: "RUNNING", control: "RUNNING", repository: ids[4],
+                       base: String(repeating: "b", count: 40), branch: "jojo/plan/\(plan.plan.prefix(12))",
+                       head: String(repeating: "c", count: 40), steps: steps)
+    }
     private static let repositories = ["a1", "b2"].map { String(repeating: $0, count: 16) }
 
     /// One step of an `ApprovedPlan` answer, as the helper sends it.
@@ -1675,11 +1690,11 @@ final class DesignShellTests: XCTestCase {
         XCTAssertEqual(plan(connection: .ended(status: 1)).sliceLine.value, "Unknown: the core is not connected.")
         XCTAssertEqual(plan(connection: .ended(status: 1)).status.admission, "Admission unknown")
 
-        // D4 is open: no number anywhere. D2: the decision in force, marked as not built.
+        // D4 is decided (M3): no number on this screen; it is the project's. D2: decided, not built.
         let missing = ExecutionPlanState.missing
-        XCTAssertNil(missing.map(\.value).joined().rangeOfCharacter(from: .decimalDigits))
         XCTAssertEqual(missing.first { $0.label == "Repair" }?.value, "Decided, not built: automatic, at most two tries, then a human hold.")
-        XCTAssertEqual(missing.first { $0.label == "Parallel capacity" }?.value, "Not reported, and not decided.")
+        XCTAssertEqual(missing.first { $0.label == "Parallel capacity" }?.value,
+                       "Decided (D4): one number for the whole core, set in the project record. Shown on Projects.")
         XCTAssertEqual(Set(missing.map(\.label)).count, missing.count)
 
         // M3: the approved plan, its run and the control of a run; nothing pauses admission. No counter.
@@ -1705,12 +1720,16 @@ final class DesignShellTests: XCTestCase {
         chosen.subjects = picked
         var second = plan(filled: false, plans: [five, one])
         second.chosenPlan = one.plan
+        var running = plan(filled: false, plans: [five], selected: Self.step(3))
+        running.runs = [five.plan: Self.run(five)]
         var lost = plan(connection: .channelLost("pipe closed"), plans: [five], selected: Self.step(5))
         lost.subjects = five.subjects(step: Self.step(5))
         let cases: [(String, ExecutionPlanState, CGSize)] = [
             ("execution-plan-graph", plan(filled: false, plans: [five]), CGSize(width: 1320, height: 1500)),
             ("execution-plan-graph-step", chosen, CGSize(width: 1320, height: 1500)),
             ("execution-plan-graph-narrow", chosen, CGSize(width: 900, height: 2000)),
+            ("execution-plan-run", running, CGSize(width: 1320, height: 2000)),
+            ("execution-plan-run-narrow", running, CGSize(width: 900, height: 2600)),
             ("execution-plan-one-step", second, CGSize(width: 1120, height: 1400)),
             ("execution-plan-reading", plan(filled: false, load: .loading), opening),
             ("execution-plan-unreadable", plan(filled: false, load: .failed("PayloadTooLarge: use bounded queries")), opening),
@@ -1740,6 +1759,104 @@ final class DesignShellTests: XCTestCase {
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
+        }
+    }
+}
+
+extension DesignShellTests {
+    /// M3: the Projects screen's state: drafts, parsing and what blocks a save.
+    func test_m3_projects_draft_parses_kinds_and_blocks_an_incomplete_save() throws {
+        var draft = ProjectDraft()
+        draft.id = String(repeating: "a", count: 32)
+        XCTAssertEqual(draft.problem, "Name the project.")
+        draft.name = "Crew"
+        XCTAssertEqual(draft.problem, "Choose at least one registered repository.")
+        draft.repositories = [String(repeating: "b", count: 32)]
+        draft.kinds = "backend=ClaudeCode, mobile=Codex"
+        draft.testCommand = "/usr/bin/make test"
+        XCTAssertNil(draft.problem)
+        let record = try XCTUnwrap(draft.record())
+        XCTAssertEqual(record.kinds, [.init(kind: "backend", provider: "ClaudeCode"), .init(kind: "mobile", provider: "Codex")])
+        XCTAssertEqual(record.testCommand, ["/usr/bin/make", "test"])
+        XCTAssertEqual(Set(record.payload(asNew: true).keys), Set(Request.SaveProject.fields))
+        XCTAssertEqual(record.payload(asNew: true)["revision"], .int(0))
+        draft.kinds = "backend:ClaudeCode"
+        XCTAssertNotNil(draft.problem)
+        draft.kinds = ""
+        draft.capacity = "9"
+        XCTAssertEqual(draft.problem, "Capacity is a number from 1 to 8.")
+        // The runner's requests exist only from 1.3; everything else keeps its frame.
+        for request in [Request.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun] { XCTAssertEqual(request.minor, 3) }
+        XCTAssertEqual(Request.ApprovedPlan.minor, 1)
+        XCTAssertTrue(MainView.built.contains(.projects))
+    }
+
+    func test_m3_plan_run_and_projects_decode_the_helpers_answer() throws {
+        let step: JSON = .object(["step": .text(Self.ids[0]), "key": .text("api"), "title": .text("Add the API"), "kind": .text("backend"),
+                                  "provider": .text("ClaudeCode"), "depends_on": .list([]), "state": .text("Review"), "detail": .text(""),
+                                  "attempt": .text(Self.ids[1]), "candidate": .text("d"), "receipt": .int(9), "commit": .null])
+        let answer: [String: JSON] = ["plan": .text(Self.ids[2]), "revision": .int(1), "state": .text("RUNNING"), "control": .text("RUNNING"),
+                                      "repository": .text(Self.ids[3]), "base": .text("b"), "branch": .text("jojo/plan/x"), "head": .text("b"),
+                                      "steps": .list([step])]
+        let run = try XCTUnwrap(PlanRun(answer))
+        XCTAssertEqual(run.steps.first?.key, "api")
+        XCTAssertEqual(run.steps.first?.receipt, 9)
+        XCTAssertEqual(ExecutionPlanState.tone("Review"), .warn)
+        XCTAssertEqual(ExecutionPlanState.tone("Conflict"), .danger)
+        XCTAssertTrue(ExecutionPlanState.runSentence(run).hasPrefix("Running."))
+        var broken = answer
+        broken["steps"] = .list([.object(["step": .text("x")])])
+        XCTAssertNil(PlanRun(broken), "a step without its fields makes the answer unreadable")
+        let list = try XCTUnwrap(ProjectList(["capacity": .int(2), "projects": .list([
+            .object(["project": .text(Self.ids[0]), "revision": .int(2), "name": .text("Crew"), "repositories": .list([.text(Self.ids[1])]),
+                     "instructions": .text("Keep it small."), "test_command": .list([]), "ci_command": .list([]),
+                     "kinds": .list([.object(["kind": .text("docs"), "provider": .text("Codex")])]),
+                     "default_provider": .text("ClaudeCode"), "capacity": .int(2)]),
+        ])]))
+        XCTAssertEqual(list.projects.first?.kinds.first?.provider, "Codex")
+        // Without a started run, nothing on Execution Plan claims a name or a state.
+        let plan = try XCTUnwrap(ApprovedPlan(fiveSteps))
+        var state = ExecutionPlanState(connection: .ready(epoch: 7), admission: "Open", plans: [plan], load: .loaded)
+        XCTAssertNil(state.run)
+        XCTAssertNil(state.runBlocked)
+        state.runs = [plan.plan: Self.run(plan)]
+        XCTAssertEqual(state.runStep(Self.step(1))?.state, "Integrated")
+        state.commandPending = true
+        XCTAssertEqual(state.runBlocked, "Unavailable while a command awaits the core.")
+    }
+
+    /// Review aid: Projects empty, listed, being edited, unreadable and disconnected.
+    func test_m3_projects_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        let record = ProjectRecord(id: Self.ids[0], revision: 2, name: "Crew", repositories: [Self.ids[1]],
+                                   instructions: "Kotlin only. Never edit migrations after merge.", testCommand: ["/usr/bin/make", "test"],
+                                   kinds: [.init(kind: "backend", provider: "ClaudeCode"), .init(kind: "mobile", provider: "Codex")],
+                                   defaultProvider: "ClaudeCode", capacity: 2)
+        let list = ProjectList(projects: [record], capacity: 2)
+        let repository = ChatIndex.Repository(id: Self.ids[1], path: "/Users/me/JojoDisposable/crew", pathComplete: true)
+        let ready = HelperConnection.ready(epoch: 7)
+        var editing = ProjectsState(connection: ready, list: list, load: .loaded, repositories: [repository])
+        editing.draft = ProjectDraft(record)
+        let cases: [(String, ProjectsState)] = [
+            ("projects-empty", ProjectsState(connection: ready, list: ProjectList(projects: [], capacity: 1), load: .loaded)),
+            ("projects-listed", ProjectsState(connection: ready, list: list, load: .loaded, repositories: [repository])),
+            ("projects-editing", editing),
+            ("projects-unreadable", ProjectsState(connection: ready, load: .failed("UnknownType"))),
+            ("projects-disconnected", ProjectsState(connection: .channelLost("pipe closed"), list: list, load: .loaded)),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.projects), showInspector: {}) { ProjectsView(state: state) }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: 1120, height: 1150)
                 guard let directory else { continue }
                 try write(shell, to: directory, "\(file)-\(name).png")
             }

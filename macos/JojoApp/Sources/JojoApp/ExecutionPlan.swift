@@ -4,7 +4,8 @@ import SwiftUI
 // Execution Plan (docs/design/screens/EXECUTION_PLAN.md): the approved plan as the core
 // stores it (steps, edges, revision), one human Start for one of its steps, and what the
 // core answered. The plan is read with `ApprovedPlan` while the screen is the shown one.
-// The core reports no name, text or state of a step, so none is drawn.
+// M3: a lead plan can be started as a whole; its run (`PlanRun`) names each step and
+// reports its state, and only then are names and states drawn.
 
 /// Where each step of a plan is drawn. Waves are derived from the edges (the longest chain
 /// of prerequisites before a step); lanes are the repositories in the order the plan
@@ -117,6 +118,8 @@ struct ExecutionPlanState: Equatable {
     var chosenPlan: String?
     /// The step the human chose.
     var selected: String?
+    /// M3: the run of each plan that was started, by plan identity.
+    var runs: [String: PlanRun] = [:]
 
     /// What the plan section shows.
     enum Phase: Equatable {
@@ -130,6 +133,41 @@ struct ExecutionPlanState: Equatable {
 
     var plan: ApprovedPlan? { plans.first { $0.plan == chosenPlan } ?? plans.first }
     var step: ApprovedPlan.Step? { plan?.steps.first { $0.id == selected } }
+    /// The run of the shown plan, if it was started.
+    var run: PlanRun? { plan.flatMap { runs[$0.plan] } }
+    func runStep(_ id: String) -> PlanRun.Step? { run?.steps.first { $0.id == id } }
+
+    /// Why "Run Plan" cannot be sent, or nil when it can. The core decides the rest.
+    var runBlocked: String? {
+        if link != .connected { return "Unavailable: the core is not connected." }
+        if slice == false { return "The core has no slice configuration; it cannot run a plan." }
+        if admissionClosed { return "Admission is closed. The core starts nothing until it is open." }
+        if commandPending { return "Unavailable while a command awaits the core." }
+        return nil
+    }
+
+    /// The tone of a step's state, in the words of the status model.
+    static func tone(_ state: String) -> Tone {
+        switch state {
+        case "Integrated": return .ok
+        case "Running", "Validating", "Accepted": return .info
+        case "Review", "Blocked": return .warn
+        case "Conflict", "Failed", "Refused": return .danger
+        default: return .neutral
+        }
+    }
+
+    /// A sentence for the state of a run.
+    static func runSentence(_ run: PlanRun) -> String {
+        switch run.state {
+        case "RUNNING": return "Running. The core starts each ready step up to the capacity and validates each one when it settles."
+        case "PAUSED": return "Paused. No new step starts; running attempts continue."
+        case "CANCELLED": return "Cancelled. Nothing more starts; this run cannot be resumed."
+        case "HALTED": return "Halted. Every step left needs the human: a failed, refused or conflicting step holds back what depends on it."
+        case "DONE": return "Done. Every step is on the plan branch."
+        default: return run.state
+        }
+    }
 
     var phase: Phase {
         if let plan { return .shown(plan) }
@@ -274,17 +312,17 @@ struct ExecutionPlanState: Equatable {
     /// What the board draws and the core does not report, and the two decisions that are
     /// not built. No example stands in for any of them.
     static let missing = [
-        Missing(label: "Step names", value: "Not reported. A plan stores the identity of a step, not a name or a description."),
+        Missing(label: "Step names", value: "Reported for a plan a lead drafted once it runs. An imported plan has none."),
         Missing(label: "Acceptance criteria", value: notReported),
         Missing(label: "File scope", value: notReported),
-        Missing(label: "Step state", value: "Not reported, so no node has a status. An attempt's record is on Agent Runs."),
+        Missing(label: "Step state", value: "Reported only for a plan that runs. Before that no node has a status."),
         Missing(label: "Gates", value: "Not reported as nodes. The core stores a gate as the predicate of an edge; whether it is met is not reported."),
         Missing(label: "Lifecycle", value: "Not reported. The core has no lifecycle stage of a feature."),
         Missing(label: "Plan checks", value: "Not reported. The core validates a plan when it is stored."),
         Missing(label: "Plan revisions", value: "Only the approved revision is reported. A newer revision that is not approved makes the approval stale, and then no plan is reported."),
         Missing(label: "Execution history", value: "Not reported for a step. Attempts are on Agent Runs."),
         Missing(label: "Repair", value: "Decided, not built: automatic, at most two tries, then a human hold."),
-        Missing(label: "Parallel capacity", value: "Not reported, and not decided."),
+        Missing(label: "Parallel capacity", value: "Decided (D4): one number for the whole core, set in the project record. Shown on Projects."),
     ]
 }
 
@@ -297,6 +335,9 @@ struct ExecutionPlanActions {
     var choosePlan: (String) -> Void = { _ in }
     /// Chooses a step: it is inspected and its identities fill the Start fields.
     var pick: (String) -> Void = { _ in }
+    /// M3: starts the shown plan, or pauses, resumes or cancels its run.
+    var runPlan: () -> Void = {}
+    var control: (String) -> Void = { _ in }
 }
 
 struct ExecutionPlanScreen: View {
@@ -314,7 +355,7 @@ struct ExecutionPlanScreen: View {
             connection: model.client.connection, admission: workspace.admission, pid: model.client.processIdentifier,
             slice: model.client.hello?.slice, subjects: subjects, commandPending: workspace.commandPending,
             outcome: workspace.startOutcome, plans: workspace.plans, load: workspace.plansLoad,
-            truncated: workspace.plansTruncated, chosenPlan: chosenPlan, selected: selected)
+            truncated: workspace.plansTruncated, chosenPlan: chosenPlan, selected: selected, runs: workspace.planRuns)
         ExecutionPlanView(
             state: state,
             actions: ExecutionPlanActions(
@@ -324,7 +365,9 @@ struct ExecutionPlanScreen: View {
                 pick: { step in
                     guard let picked = state.subjects(picking: step) else { return }
                     (selected, subjects) = (step, picked)
-                }))
+                },
+                runPlan: { if let plan = state.plan { workspace.runPlan(plan.plan) } },
+                control: { action in if let plan = state.plan { workspace.controlPlan(plan.plan, action) } }))
             .onChange(of: visible) { if visible { workspace.loadPlans() } }
             .onChange(of: workspace.snapshotSeq) { if visible { workspace.loadPlans() } }
     }
@@ -412,6 +455,7 @@ struct ExecutionPlanView: View {
                 revision(plan)
                 if state.plans.count > 1 { chooser(plan) }
                 graph(plan)
+                runSection(plan)
                 if inspectorBelow { Card(.panelList) { inspector(plan) }.frame(maxWidth: 760, alignment: .leading) }
             }
         }
@@ -473,8 +517,13 @@ struct ExecutionPlanView: View {
                         }
                         ForEach(graph.nodes) { node in
                             Button { actions.pick(node.id) } label: {
-                                TaskNode(identifier: ExecutionPlanState.short(node.id), title: ExecutionPlanState.provider(node.step.provider),
-                                         detail: "Step rev \(node.step.revision)", selected: node.id == state.selected)
+                                if let run = state.runStep(node.id) {
+                                    TaskNode(identifier: run.key, title: run.title,
+                                             detail: "\(ExecutionPlanState.provider(run.provider)) · \(run.state)", selected: node.id == state.selected)
+                                } else {
+                                    TaskNode(identifier: ExecutionPlanState.short(node.id), title: ExecutionPlanState.provider(node.step.provider),
+                                             detail: "Step rev \(node.step.revision)", selected: node.id == state.selected)
+                                }
                             }
                             .buttonStyle(.plain)
                             .offset(x: graph.origin(node).x, y: graph.origin(node).y)
@@ -503,11 +552,71 @@ struct ExecutionPlanView: View {
                     GraphEdge(from: CGPoint(x: 0, y: 6), to: CGPoint(x: 26, y: 6), dashed: true).frame(width: 26, height: 12)
                     Text("Approval dependency")
                 }
-                Text("Whether a dependency is met is not reported.")
+                Text(state.run == nil ? "Whether a dependency is met is reported once the plan runs."
+                     : "A dependency is met when its step is on the plan branch.")
             }
-            Text("Waves are derived from the edges. Steps have no name or state in the core.")
+            Text(state.run == nil ? "Waves are derived from the edges. A step's name and state are reported once the plan runs."
+                 : "Waves are derived from the edges. Names and states are the run's.")
         }
         .textStyle(.meta).foregroundStyle(theme.text3)
+    }
+
+    // MARK: Run
+
+    /// M3: the run of the shown plan, or the button that starts it.
+    @ViewBuilder
+    private func runSection(_ plan: ApprovedPlan) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let run = state.run {
+                SectionHeading("Plan run") {
+                    if run.control == "RUNNING" {
+                        Button("Pause Run") { actions.control("Pause") }.buttonStyle(.jojo(.secondary, compact: true))
+                    }
+                    if run.control == "PAUSED" {
+                        Button("Resume Run") { actions.control("Resume") }.buttonStyle(.jojo(.secondary, compact: true))
+                            .disabled(state.runBlocked != nil)
+                    }
+                    if run.control != "CANCELLED" && run.state != "DONE" {
+                        Button("Cancel Run") { actions.control("Cancel") }.buttonStyle(.jojo(.secondary, compact: true))
+                    }
+                }
+                Text(ExecutionPlanState.runSentence(run)).textStyle(.body).foregroundStyle(theme.text2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Card(.panelList) {
+                    VStack(spacing: 0) {
+                        FactLine("Run of", "Plan rev \(run.revision)")
+                        FactLine("Plan branch") { identifier(run.branch) }
+                        FactLine("Branch head") { identifier(ExecutionPlanState.short(run.head)) }
+                        FactLine("Base", last: true) { identifier(ExecutionPlanState.short(run.base)) }
+                    }
+                }
+                Card(.panelList) {
+                    Rows(run.steps) { step in
+                        Button { actions.pick(step.id) } label: {
+                            ListRow("\(step.key) · \(step.title)",
+                                    meta: [ExecutionPlanState.provider(step.provider), step.kind].compactMap { $0 }.joined(separator: " · "),
+                                    detail: step.detail.isEmpty ? (step.dependsOn.isEmpty ? "No dependency" : "After \(step.dependsOn.joined(separator: ", "))") : step.detail,
+                                    leading: { EmptyView() },
+                                    trailing: { KindTag(step.state, tone: ExecutionPlanState.tone(step.state)) })
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Footnote("Accept or reject a step that is in review on Verification & Evidence. An accepted step goes onto the plan branch, which stays local; nothing is pushed. Nothing is retried: a failed step waits for you.")
+            } else {
+                SectionHeading("Plan run")
+                Text("Approving a plan does not run it. Run Plan asks the core to start every ready step, up to the parallel capacity of the project record, and to validate each step when it settles. Only a plan a lead drafted can run.")
+                    .textStyle(.body).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button { actions.runPlan() } label: { Label("Run Plan", systemImage: "play.fill") }
+                        .buttonStyle(.jojo(.primary))
+                        .disabled(state.runBlocked != nil)
+                    if let blocked = state.runBlocked { DisabledReason(blocked) }
+                }
+            }
+        }
+        .frame(maxWidth: 760, alignment: .leading)
     }
 
     // MARK: Inspector
@@ -570,9 +679,22 @@ struct ExecutionPlanView: View {
 
     private func stepInspector(_ plan: ApprovedPlan, _ step: ApprovedPlan.Step) -> some View {
         let before = plan.edges.filter { $0.dependent == step.id }, after = plan.edges.filter { $0.prerequisite == step.id }
+        let run = state.runStep(step.id)
         return VStack(alignment: .leading, spacing: 0) {
             header("Step · \(ExecutionPlanState.repository(step.repository)) · Plan rev \(plan.revision)",
-                   "Step \(ExecutionPlanState.short(step.id))", tag: ExecutionPlanState.provider(step.provider))
+                   run.map { "\($0.key) · \($0.title)" } ?? "Step \(ExecutionPlanState.short(step.id))",
+                   tag: ExecutionPlanState.provider(step.provider))
+            if let run {
+                InspectorSection("Run") {
+                    FactGrid {
+                        Fact("State", run.state)
+                        if !run.detail.isEmpty { Fact("Detail", run.detail) }
+                        if let kind = run.kind { Fact("Task kind", kind) }
+                        if let attempt = run.attempt { Fact("Attempt") { whole(attempt) } }
+                        if let commit = run.commit { Fact("Commit") { whole(commit) } }
+                    }
+                }
+            }
             InspectorSection("Assignment") {
                 FactGrid {
                     Fact("Step") { whole(step.id) }
@@ -605,7 +727,8 @@ struct ExecutionPlanView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(before) { edge in dependency("After step \(ExecutionPlanState.short(edge.prerequisite))", edge) }
                         ForEach(after) { edge in dependency("Before step \(ExecutionPlanState.short(edge.dependent))", edge) }
-                        quiet("Whether a dependency is met is not reported.")
+                        quiet(run == nil ? "Whether a dependency is met is reported once the plan runs."
+                              : "Met when the step before it is on the plan branch.")
                     }
                 }
             }

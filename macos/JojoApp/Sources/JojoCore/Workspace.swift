@@ -322,6 +322,12 @@ public final class WorkspaceModel {
     public private(set) var plansLoad = PlanLoad.idle
     /// More approved plans exist than `maxPlans`; the rest was not read.
     public private(set) var plansTruncated = false
+    /// M3: the run of each approved plan read for Execution Plan, by plan identity; a plan
+    /// that was never started has no entry. Read with the plans, never by `refresh`.
+    public internal(set) var planRuns: [String: PlanRun] = [:]
+    /// M3: the project records and the capacity, read only when Projects asks.
+    public internal(set) var projects: ProjectList?
+    public internal(set) var projectsLoad = PlanLoad.idle
     /// M2: Feature Chat. Read only when that screen asks; `refresh` does not fill them.
     public internal(set) var chatIndex: ChatIndex?
     public internal(set) var chatIndexLoad = PlanLoad.idle
@@ -484,8 +490,10 @@ public final class WorkspaceModel {
                     return self.readPlans(after: next, collected: all)
                 }
                 (self.plans, self.plansTruncated, self.plansLoad) = (all, plan.next != nil, .loaded)
+                self.loadPlanRuns()
             case .null:
                 (self.plans, self.plansTruncated, self.plansLoad) = (collected, false, .loaded)
+                self.loadPlanRuns()
             case .error(let reason), .unanswered(let reason):
                 (self.plans, self.plansLoad) = ([], .failed(reason))
             default:
