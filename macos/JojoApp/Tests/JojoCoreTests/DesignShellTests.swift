@@ -161,7 +161,7 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.opaqueSidebar, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 3640)
+            .frame(width: 1120, height: 3810)
             guard let directory else { continue }
             try write(shell, to: directory, "shell-\(name).png")
         }
@@ -1425,13 +1425,171 @@ final class DesignShellTests: XCTestCase {
 
     // MARK: Execution Plan (docs/design/screens/EXECUTION_PLAN.md)
 
+    /// With no plans the read has ended while the core is connected and has not begun otherwise.
     private func plan(connection: HelperConnection = .ready(epoch: 7), admission: String = "Open", slice: Bool? = true,
-                      filled: Bool = true, commandPending: Bool = false, outcome: StartOutcome? = nil) -> ExecutionPlanState {
+                      filled: Bool = true, commandPending: Bool = false, outcome: StartOutcome? = nil,
+                      plans: [ApprovedPlan] = [], load: PlanLoad? = nil, selected: String? = nil) -> ExecutionPlanState {
         let ids = Self.ids
+        var connected = false
+        if case .ready = connection { connected = true }
         return ExecutionPlanState(
             connection: connection, admission: admission, pid: 4242, slice: slice,
             subjects: filled ? StartSubjects(prd: ids[0], adr: ids[1], plan: ids[2], validation: ids[3], step: ids[4]) : StartSubjects(),
-            commandPending: commandPending, outcome: outcome)
+            commandPending: commandPending, outcome: outcome, plans: plans, load: load ?? (connected ? .loaded : .idle),
+            selected: selected)
+    }
+
+    private static func step(_ n: Int) -> String { String(repeating: String(format: "%x7%xd", n, 15 - n), count: 8) }
+    private static let repositories = ["a1", "b2"].map { String(repeating: $0, count: 16) }
+
+    /// One step of an `ApprovedPlan` answer, as the helper sends it.
+    private func stepRow(_ n: Int, repository: Int? = 0, provider: String? = "ClaudeCode") -> JSON {
+        let bound = repository.map { JSON.text(Self.repositories[$0]) } ?? .null
+        return .object(["step": .text(Self.step(n)), "revision": .int(1), "provider": provider.map(JSON.text) ?? .null,
+                        "repository": bound, "priority": repository == nil ? .null : .int(0),
+                        "repository_mode": repository == nil ? .null : .text("Shared"), "environment": .text("slice-v1"),
+                        "sources": .list(repository == nil ? [] : [.object(["repository": bound, "commit": .text(String(repeating: "c0de", count: 10)),
+                                                                             "snapshot": .null])])])
+    }
+
+    private func edgeRow(_ n: Int, _ from: Int, _ to: Int, approval: Bool = false) -> JSON {
+        .object(["edge": .text(Self.step(100 + n)), "prerequisite": .text(Self.step(from)), "dependent": .text(Self.step(to)),
+                 "predicate": .text(approval ? "ArtifactApproved" : "Evidence"),
+                 "artifact": approval ? .text(Self.ids[1]) : .null, "artifact_revision": approval ? .int(5) : .null,
+                 "evidence": approval ? .null : .text("step-\(from)-candidate"), "evidence_kind": approval ? .null : .text("OutputAvailable")])
+    }
+
+    /// An `ApprovedPlan` answer, as the helper sends it.
+    private func planAnswer(_ plan: String = DesignShellTests.ids[2], revision: Int64 = 2, validation: String? = DesignShellTests.ids[3],
+                            steps: [JSON], edges: [JSON] = [], next: String? = nil) -> [String: JSON] {
+        ["plan": .text(plan), "revision": .int(revision), "digest": .text(String(repeating: "d1", count: 32)), "decision": .int(41),
+         "prd": .text(Self.ids[0]), "adr": .text(Self.ids[1]), "validation": validation.map(JSON.text) ?? .null,
+         "validation_digest": .text(String(repeating: "e2", count: 32)), "steps": .list(steps), "edges": .list(edges),
+         "approvals": .list([.object(["artifact": .text(Self.ids[0]), "revision": .int(4), "decision": .int(12)]),
+                             .object(["artifact": .text(Self.ids[1]), "revision": .int(5), "decision": .int(19)])]),
+         "next": next.map(JSON.text) ?? .null]
+    }
+
+    /// Five steps in two repositories: 4 follows 1 and 2, 5 follows 3 and (by an approval) 4.
+    private var fiveSteps: [String: JSON] {
+        planAnswer(steps: [stepRow(1), stepRow(2), stepRow(3, repository: 1, provider: "Codex"), stepRow(4),
+                           stepRow(5, repository: 1, provider: "Codex")],
+                   edges: [edgeRow(1, 1, 4), edgeRow(2, 2, 4), edgeRow(3, 3, 5), edgeRow(4, 4, 5, approval: true)])
+    }
+
+    func test_dw1_approved_plans_are_read_only_when_the_screen_asks_one_query_per_plan() {
+        let h = Harness()
+        let model = WorkspaceModel(client: h.client)
+        model.loadPlans()
+        XCTAssertEqual(h.fake.count("ApprovedPlan"), 0, "nothing is read before the first snapshot")
+        model.refresh()
+        h.fake.reply(h.fake.last("Snapshot")!, ["rows": .list([]), "as_of_event_seq": .int(30), "admission": .text("Open")])
+        XCTAssertEqual(h.fake.count("ApprovedPlan"), 0, "the snapshot does not read a plan")
+        XCTAssertEqual(model.plansLoad, .idle)
+
+        model.loadPlans()
+        XCTAssertEqual(model.plansLoad, .loading)
+        XCTAssertEqual(h.fake.last("ApprovedPlan")?.payload, ["after": .null])
+        model.loadPlans()
+        XCTAssertEqual(h.fake.count("ApprovedPlan"), 1, "one read at a time")
+        var first = fiveSteps
+        first["next"] = .text(Self.ids[2])
+        h.fake.reply(h.fake.last("ApprovedPlan")!, first)
+        XCTAssertEqual(h.fake.last("ApprovedPlan")?.payload, ["after": .text(Self.ids[2])], "the next plan is asked for by the cursor")
+        XCTAssertEqual(model.plansLoad, .loading)
+        h.fake.reply(h.fake.last("ApprovedPlan")!, planAnswer(Self.ids[4], revision: 1, validation: nil, steps: [stepRow(9)]))
+        XCTAssertEqual(model.plansLoad, .loaded)
+        XCTAssertEqual(model.plans.map(\.plan), [Self.ids[2], Self.ids[4]])
+        XCTAssertFalse(model.plansTruncated)
+        let plan = model.plans[0]
+        XCTAssertEqual(plan.revision, 2)
+        XCTAssertEqual(plan.steps.map(\.id), (1...5).map(Self.step))
+        XCTAssertEqual(plan.steps[2].provider, "Codex")
+        XCTAssertEqual(plan.steps[2].repository, Self.repositories[1])
+        XCTAssertEqual(plan.edges.count, 4)
+        XCTAssertEqual(plan.edges[3].predicate, "ArtifactApproved")
+        // A step fills the five identities of a Start; a plan without a named validation plan leaves that one empty.
+        XCTAssertEqual(plan.subjects(step: Self.step(4)),
+                       StartSubjects(prd: Self.ids[0], adr: Self.ids[1], plan: Self.ids[2], validation: Self.ids[3], step: Self.step(4)))
+        XCTAssertEqual(model.plans[1].subjects(step: Self.step(9)).validation, "")
+
+        // No approved plan is an answer, not a failure.
+        model.loadPlans()
+        h.fake.replyNull(h.fake.last("ApprovedPlan")!)
+        XCTAssertEqual(model.plansLoad, .loaded)
+        XCTAssertTrue(model.plans.isEmpty)
+
+        // A refusal, a malformed answer and a lost channel drop what was held and say why.
+        model.loadPlans()
+        h.fake.error(h.fake.last("ApprovedPlan")!, "PayloadTooLarge: use bounded queries")
+        XCTAssertEqual(model.plansLoad, .failed("PayloadTooLarge: use bounded queries"))
+        model.loadPlans()
+        var broken = fiveSteps
+        broken["steps"] = .list([stepRow(1), .object(["step": .text("not an identity")])])
+        h.fake.reply(h.fake.last("ApprovedPlan")!, broken)
+        XCTAssertEqual(model.plansLoad, .failed("malformed plan"))
+        XCTAssertTrue(model.plans.isEmpty)
+        XCTAssertNil(ApprovedPlan(planAnswer(steps: [stepRow(1), stepRow(1)])), "two steps with one identity are not a plan")
+
+        // The poll and the refresh send what they sent before.
+        let sent = h.fake.count("ApprovedPlan")
+        model.pollEvents()
+        model.refresh()
+        XCTAssertEqual(h.fake.count("ApprovedPlan"), sent)
+    }
+
+    func test_dw1_execution_plan_draws_waves_lanes_and_edges_from_the_stored_plan_only() throws {
+        let five = try XCTUnwrap(ApprovedPlan(fiveSteps))
+        let graph = PlanGraph(five)
+        XCTAssertFalse(graph.cyclic)
+        XCTAssertEqual(graph.waves, 3)
+        XCTAssertEqual(graph.nodes.map(\.wave), [0, 0, 0, 1, 2], "a step stands one wave after its latest prerequisite")
+        XCTAssertEqual(graph.lanes.map(\.repository), Self.repositories)
+        XCTAssertEqual(graph.nodes.map(\.lane), [0, 0, 1, 0, 1])
+        XCTAssertEqual(graph.nodes.map(\.row), [0, 1, 0, 0, 0], "two steps of one repository in one wave stand below each other")
+        XCTAssertEqual(graph.lanes.map(\.rows), [2, 1])
+        XCTAssertEqual(graph.size.width, 3 * PlanGraph.column)
+        // No node overlaps another, and an edge runs from the trailing to the leading side.
+        let frames = graph.nodes.map { CGRect(origin: graph.origin($0), size: TaskNode.size) }
+        for (i, a) in frames.enumerated() { for b in frames.dropFirst(i + 1) { XCTAssertFalse(a.intersects(b)) } }
+        let ends = try XCTUnwrap(graph.ends(five.edges[0]))
+        XCTAssertEqual(ends.from.x, frames[0].maxX)
+        XCTAssertEqual(ends.to.x, frames[3].minX)
+
+        // One step, as the core stores a plan today: one wave, one lane, no edge.
+        let one = PlanGraph(try XCTUnwrap(ApprovedPlan(planAnswer(steps: [stepRow(1)]))))
+        XCTAssertEqual([one.waves, one.lanes.count, one.nodes.count, one.edges.count], [1, 1, 1, 0])
+        // Edges that do not order the steps are not drawn as waves.
+        let loop = PlanGraph(try XCTUnwrap(ApprovedPlan(planAnswer(steps: [stepRow(1), stepRow(2)], edges: [edgeRow(1, 1, 2), edgeRow(2, 2, 1)]))))
+        XCTAssertTrue(loop.cyclic)
+        // A step the plan binds to no repository has a lane of its own.
+        let unbound = PlanGraph(try XCTUnwrap(ApprovedPlan(planAnswer(steps: [stepRow(1), stepRow(2, repository: nil, provider: nil)]))))
+        XCTAssertEqual(unbound.lanes.map(\.repository), [Self.repositories[0], nil])
+        XCTAssertEqual(ExecutionPlanState.provider(nil), "No provider bound")
+        XCTAssertEqual(ExecutionPlanState.provider("ClaudeCode"), "Claude Code")
+
+        // What the plan section shows follows the read, never an example.
+        XCTAssertEqual(plan().phase, .none)
+        XCTAssertEqual(plan(load: .loading).phase, .reading)
+        XCTAssertEqual(plan(connection: .handshaking).phase, .reading)
+        XCTAssertEqual(plan(connection: .channelLost("pipe closed")).phase, .unknown)
+        XCTAssertEqual(plan(load: .failed("UnknownType")).phase, .failed("UnknownType"))
+        XCTAssertEqual(ExecutionPlanState.loadFailure("UnknownType"), "This core has no request that returns the approved plan.")
+        XCTAssertTrue(ExecutionPlanState.loadFailure("PayloadTooLarge: use bounded queries").contains("too large"))
+        let other = try XCTUnwrap(ApprovedPlan(planAnswer(Self.ids[4], steps: [stepRow(9)])))
+        var shown = plan(plans: [five, other], selected: Self.step(4))
+        XCTAssertEqual(shown.phase, .shown(five))
+        XCTAssertEqual(shown.step?.id, Self.step(4))
+        XCTAssertEqual(plan(connection: .channelLost("pipe closed"), plans: [five]).phase, .shown(five), "what was read stays, read-only")
+        shown.chosenPlan = Self.ids[4]
+        XCTAssertEqual(shown.plan, other)
+        XCTAssertNil(shown.step, "a step of another plan is not inspected")
+        XCTAssertNil(shown.subjects(picking: Self.step(4)), "and cannot be picked")
+        XCTAssertEqual(shown.subjects(picking: Self.step(9))?.step, Self.step(9))
+
+        // An edge is said by the predicate the plan stores.
+        XCTAssertEqual(ExecutionPlanState.requirement(five.edges[0]), "Evidence: OutputAvailable · step-1-candidate")
+        XCTAssertEqual(ExecutionPlanState.requirement(five.edges[3]), "Approval of \(Self.ids[1].prefix(12)) rev 5")
     }
 
     func test_dw1_start_outcome_is_what_the_helper_answered() {
@@ -1500,7 +1658,7 @@ final class DesignShellTests: XCTestCase {
         XCTAssertNil(typed.subjects.payload)
     }
 
-    func test_dw1_execution_plan_says_a_refusal_in_words_and_shows_no_plan_and_no_capacity() {
+    func test_dw1_execution_plan_says_a_refusal_in_words_and_shows_no_capacity() {
         XCTAssertEqual(ExecutionPlanState.refusal("AdmissionClosed").message, "Admission is closed. Nothing was started.")
         XCTAssertTrue(ExecutionPlanState.refusal("StartRefused: missing or stale approval: validation plan").message.contains("Approval Inbox"))
         XCTAssertTrue(ExecutionPlanState.refusal("StartRefused: step is not part of the approved plan").message.contains("approved plan"))
@@ -1536,10 +1694,26 @@ final class DesignShellTests: XCTestCase {
     func test_dw1_execution_plan_renders_in_both_appearances() throws {
         let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
         let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
-        let opening = CGSize(width: 1120, height: 900), tall = CGSize(width: 1120, height: 1100)
+        let opening = CGSize(width: 1120, height: 1150), tall = CGSize(width: 1120, height: 1350)
         var wrong = plan()
         wrong.subjects.plan = "plan-rev-3"
+        let five = try XCTUnwrap(ApprovedPlan(fiveSteps))
+        let one = try XCTUnwrap(ApprovedPlan(planAnswer(Self.ids[4], revision: 1, validation: nil, steps: [stepRow(9, provider: "Codex")])))
+        let picked = five.subjects(step: Self.step(4))
+        var chosen = plan(plans: [five], selected: Self.step(4))
+        chosen.subjects = picked
+        var second = plan(filled: false, plans: [five, one])
+        second.chosenPlan = one.plan
+        var lost = plan(connection: .channelLost("pipe closed"), plans: [five], selected: Self.step(5))
+        lost.subjects = five.subjects(step: Self.step(5))
         let cases: [(String, ExecutionPlanState, CGSize)] = [
+            ("execution-plan-graph", plan(filled: false, plans: [five]), CGSize(width: 1320, height: 1500)),
+            ("execution-plan-graph-step", chosen, CGSize(width: 1320, height: 1500)),
+            ("execution-plan-graph-narrow", chosen, CGSize(width: 900, height: 2000)),
+            ("execution-plan-one-step", second, CGSize(width: 1120, height: 1400)),
+            ("execution-plan-reading", plan(filled: false, load: .loading), opening),
+            ("execution-plan-unreadable", plan(filled: false, load: .failed("PayloadTooLarge: use bounded queries")), opening),
+            ("execution-plan-disconnected-plan", lost, CGSize(width: 1320, height: 1500)),
             ("execution-plan-empty", plan(filled: false), opening),
             ("execution-plan-ready", plan(), opening),
             ("execution-plan-invalid", wrong, opening),
@@ -1888,6 +2062,16 @@ private struct Gallery: View {
             }
             .frame(height: 130)
             NotBuiltYet(screen: .dashboard).frame(height: 110)
+            titled("Plan surfaces") {
+                ZStack(alignment: .topLeading) {
+                    LaneBand(name: "Repository a1b2c3d4e5f6").frame(width: 520, height: 120)
+                    GraphEdge(from: CGPoint(x: 216, y: 66), to: CGPoint(x: 256, y: 66))
+                    GraphEdge(from: CGPoint(x: 452, y: 66), to: CGPoint(x: 508, y: 66), dashed: true)
+                    TaskNode(identifier: "17de317de317", title: "Claude Code", detail: "Step rev 1").offset(x: 20, y: 24)
+                    TaskNode(identifier: "47db347db347", title: "Codex", detail: "Step rev 1", selected: true).offset(x: 256, y: 24)
+                }
+                .frame(width: 520, height: 120, alignment: .topLeading)
+            }
         }
     }
 

@@ -402,3 +402,15 @@ Added to `Surfaces.swift` for Settings & Providers ([screens/SETTINGS.md](screen
 | `SettingText` | The value of a setting as read-only text in one of three forms (`SettingForm`): a sentence at 13 in `text2`; a path or identifier at monospaced 11.5 in `text`; and, not on the canvas, a missing value ("Not reported", "Not built") at 13 in `text3` |
 
 Not built from the board: the compact buttons of a line ("Change…", "Edit", "Add…", "Back Up Now", "Restore…"), the switch (32 × 19) and the segmented control. Each would change a setting, and the app has no request that writes one. The operational pills of a line ("Ready", "Limited", "Connected") have no source.
+
+## 22. Implementation notes: plan surfaces (design wave 1, Execution Plan)
+
+Added to `Surfaces.swift` for Execution Plan ([screens/EXECUTION_PLAN.md](screens/EXECUTION_PLAN.md), section 7). The measures are those of section 6 and of the canvas board; the values they do not have are named in EXECUTION_PLAN.md, section 7.4.
+
+| Component | Notes |
+|---|---|
+| `TaskNode` | The task node of section 6 in the one form the core's data allows: 196 × 84, radius 10, `surface`, padding 9 by 11, gap 4. Line one: an identifier in monospaced 11.5 medium, `text2`. Line two: a title at 12.5 semibold, `textStrong`. Line three: a detail at 11.5, `text3`. Outline 1 pt `liftRing`; chosen: 2 pt `accent`. The node is a plain view; the screen wraps it in a button |
+| `GraphEdge` | An edge between two points: a cubic curve that leaves and arrives horizontally, 1.5 pt in `dashedOutline`, solid or dashed (4 on, 4 off), with a filled arrowhead (6 by 7, `text3`) at its end. Hidden from assistive technology; the inspector names the dependency in words |
+| `LaneBand` | A lane of the graph: radius 8, `fill2` with a `hairline` outline, and a header 24 high with a neutral square (8 × 8, radius 2, `tileNeutral`) and a name at 11.5 semibold, `text2` |
+
+Not built from the board: the status pill of a node, its Running and Blocked outlines, the "Eligible" tag, the gate node, the per-repository color of a lane, the green, white and amber edge colors, the pipeline cells of section 5.4 and the lifecycle stepper of section 2.1. Each needs data the helper does not report: a state of a step, an evaluation of a dependency, a gate as an object, a color of a repository, a lifecycle stage.

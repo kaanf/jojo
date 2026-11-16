@@ -84,28 +84,58 @@ A plan without tasks, a loading plan, a disconnected core, closed admission, a S
 | "Pause Admission" | No such request exists; admission closes only through recovery |
 | Three tasks run at once across two repositories | D4 is open: no parallel capacity is decided |
 | "Approval gate" with scope expansion as a pending approval | D1: four approval kinds (spec, plan, push, PR); scope expansion is "not available yet" |
+| A gate is a node between two waves, with a count ("0 of 2 approved") | The core stores a gate as the predicate of an edge (`ArtifactApproved` or `Evidence`) and reports no evaluation of it. The app follows the core: no gate node, the predicate is named in the inspector (found on 2026-11-16) |
+| "Plan rev 2 is approved. Rev 3 is proposed" | In the core a newer revision that is not approved makes the plan's approval stale: a Start is refused and `ApprovedPlan` returns nothing. An approved and a proposed revision never stand side by side (found on 2026-11-16) |
 
 ## 7. What the app shows today
 
-Built in `macos/JojoApp/Sources/JojoApp/ExecutionPlan.swift` on the shared surfaces of COMPONENTS.md, sections 14 to 21. It replaces the old Start screen (`StartView` in `Views.swift`), which ran unchanged under this destination; everything that screen did is kept: the five identity fields, the Start command and its result.
+Built in `macos/JojoApp/Sources/JojoApp/ExecutionPlan.swift` on the shared surfaces of COMPONENTS.md, sections 14 to 22. The Start flow of the first version (which replaced the old Start screen, `StartView`) is kept unchanged: the five identity fields, the Start command and its result. Since 2026-11-16 the screen also shows the approved plan.
 
-**What the app knows about a plan.** Almost nothing, and the screen is built on that:
+**What the app knows about a plan.**
 
-1. **The Start request** (`Start` in `SPECS`, `crates/jojo-domain/src/protocol.rs`; `StartSubjects` in `Workspace.swift`) takes five identities and nothing else: `prd`, `adr`, `plan`, `validation`, `step`. `WorkspaceModel.start(_:)` sends it.
-2. **The Start answer** is a receipt with two more fields: `attempt` (the identity of the new attempt, which is the identity of the command) and `dispatch` ("launched", or "not repeated" when the same command is answered from its receipt).
-3. **A refusal** is one text, the `code` of the error answer (`crates/jojo-helper/src/service.rs`, `crates/jojo-storage/src/slice.rs`): `SliceNotConfigured`, `AdmissionClosed`, `CapacityOne: …`, `RecoveryHold: …`, `StartRefused: …` (a missing or stale approval of the PRD, ADR, plan or validation plan; a step that is not in the approved plan; an unregistered or changed repository), `NoProductionAdapter: …`, `AdapterRejected: …`, `DuplicateStart: …`, `StartFailed: …` (accepted and committed, but nothing was launched), and a few plain sentences from the transaction ("repository differs from the approved plan", "validation plan is not the one the plan binds").
-4. **The snapshot has no plan.** Its `aggregates` section has rows of four kinds only: `artifact` (a PRD), `review_document` (an ADR, a plan or a validation plan; the value is a digest and the row does not say which of the three it is), `scheduler_attempt` (the text `RESERVED`) and `worktree_admin`. There is no row for a plan, a step, a task or a dependency, and the identity of a step is in no row.
-5. **No request returns a plan**: not its steps, not its edges, not its text. `ReviewBundle` returns the revision and digests of a document. The plan the core holds today has exactly one step and no edge (`FeatureBundle` in `slice.rs`: "a one-step execution plan").
+1. **The approved plan** (`ApprovedPlan` in `SPECS`, `crates/jojo-domain/src/protocol.rs`; `ReadView::ipc_approved_plan` in `crates/jojo-storage/src/ipc_queries.rs`; `ApprovedPlan` in `Workspace.swift`; the fields are listed in `docs/architecture/STDIO_PROTOCOL.md`). One answer holds the approved revision of one plan: its identity, revision and digest, the PRD and ADR it was stored under, the validation plan found by the digest the plan binds, its steps (identity, revision, provider, repository, priority, repository use, environment, base commit), the edges between steps with the kind of their predicate, and the approvals the plan binds. Several plans can be approved (one per imported bundle); `next` leads to the following one.
+2. **Not stored, so not reported:** a name, description, acceptance criteria or file scope of a step; a lifecycle state of a step; whether an edge's predicate is met; a gate as an object of its own; the result of a plan check; a color or name of a repository. Stored but not returned by the query: the attempts of a step.
+3. **The plan the core holds today has exactly one step and no edge** (`FeatureBundle` in `slice.rs`: "a one-step execution plan"; `ImportBundle` is the only request that stores a plan). Plans with several steps and edges exist only in the core's tests. The graph is built for them and is exercised with test rows; in the running app it draws one node.
+4. **The Start request** takes five identities and nothing else: `prd`, `adr`, `plan`, `validation`, `step` (`StartSubjects`). Its answer is a receipt with `attempt` and `dispatch`; a refusal is one text, the `code` of the error answer (`SliceNotConfigured`, `AdmissionClosed`, `CapacityOne: …`, `RecoveryHold: …`, `StartRefused: …`, `NoProductionAdapter: …`, `AdapterRejected: …`, `DuplicateStart: …`, `StartFailed: …`, and a few plain sentences from the transaction).
+5. **The snapshot still has no plan**: its rows are `artifact`, `review_document`, `scheduler_attempt` and `worktree_admin`. The screen does not read the plan from the snapshot.
 
-DESIGN_ROADMAP_DIFFERENCES.md, section 4, gives the Execution Plan board to M3 (design wave 3); that stays. Design wave 1 builds only what has data today.
+DESIGN_ROADMAP_DIFFERENCES.md, section 4, gives the whole Execution Plan board to M3 (design wave 3); that stays. This step draws what the stored plan can carry.
 
-**So the screen shows the Start flow and says what is not reported** (decided by the human on 2026-11-16; the alternatives were lists of the snapshot's documents and attempts, which Specifications and Agent Runs already show, and a new query that returns the plan, which changes Rust and the protocol and is out of this step). The graph, the dependency nodes, the gates, the pipeline cells (COMPONENTS.md, section 5.4) and the lifecycle stepper (section 2.1) are **not built**: none of them can be drawn from reported data, and no example graph stands in their place.
+**When the plan is read** (decided by the human on 2026-11-16). As Activity & Audit reads its events: `WorkspaceModel.loadPlans()` runs when Execution Plan becomes the shown destination and, while it is shown, when the snapshot's event number changes. It sends one `ApprovedPlan` per plan, at most eight plans, and replaces what was held when the read has ended. `refresh` and `pollEvents` are unchanged and no request is added at launch. A read that fails drops what was held and shows a "Try Again" button.
 
-**The five identities are typed** (decided by the human on 2026-11-16). A pick list was the alternative: the PRD could be picked from the snapshot's `artifact` rows, but ADR, plan and validation plan would share one list of `review_document` rows whose kind is not reported, and the step is in no row. The fields are `InputField`s; a filled field that is not an identity says so under it.
+**The graph** (decided by the human on 2026-11-16) is drawn from the stored plan only:
 
-**No control without a request.** "Pause Admission", "Approve Plan" (a decision is made in the Approval Inbox), "Compare rev 2 → 3", the filters, "Reset", the wave control, "Change" of a provider, "View Evidence", "Inspect Attempt", "View Logs", "View Blockers" and "Inspect Task" are not built, neither as a button nor as a disabled one. "Review Plan" is built: it opens the Approval Inbox. No segmented control and no toggle were added.
+| Board | App |
+|---|---|
+| Task node, 196 × 84 | The same box (`TaskNode`) with three lines: the first twelve characters of the step's identity (monospaced), the provider ("Claude Code", "Codex", "No provider bound"), "Step rev n". No status pill, no state outline, no "Eligible" tag, no name |
+| Chosen node | 2 pt `accent` ring; choosing a node inspects the step and fills the Start fields |
+| Edges | A curve with an arrowhead from the prerequisite to the dependent (`GraphEdge`), in one color. Solid for an `Evidence` predicate, dashed for `ArtifactApproved`. Not green or white: whether a dependency is met is not reported |
+| Columns "Wave 1" … "Wave 4", "Gates" | "Wave n" columns of 236. A step's wave is **derived** by the app: one more than the latest wave of its prerequisites. The core stores no wave. No "Gates" column |
+| Lanes with the repository's name and color | One lane per repository in the order the plan names them (`LaneBand`), labelled "Repository" and the first twelve characters of its identity, with a neutral square. Steps of one repository in one wave stand below each other. A step bound to no repository has a lane "No repository bound" |
+| Gate nodes | Not drawn (section 6). The predicate of an edge is named in the inspector |
+| Legend | "Evidence dependency" (solid), "Approval dependency" (dashed), "Whether a dependency is met is not reported.", and a sentence that waves are derived and steps have no name or state. With no edge: "This plan has one step and no dependency." |
+| "←" "→" "Space" | Not built |
 
-**When Start can be sent.** The old screen disabled the button only while a command was unanswered; the model refused anything that was not five identities, and the helper refused the rest. The rule is the same, with each case said in words beside the button, and three cases the helper would refuse (or could never answer) stopped before sending:
+Edges that do not order the steps (a cycle) cannot be stored by the core; if an answer had one, no graph is drawn and a notice says so.
+
+**The inspector** shows the plan until a step is chosen, then that step:
+
+| Section | Plan | Step |
+|---|---|---|
+| Header | "Plan · rev n", "Plan" and the short identity, the tag "Approved" | "Step · Repository … · Plan rev n", "Step" and the short identity, the provider as a tag |
+| Plan / Assignment | Identity, Revision, Digest, "Approved by" (the decision event), Steps, Edges | Step identity, Revision, Repository, Provider, Repository use, Priority. No "Change" link |
+| Documents / Source | PRD, ADR, Validation (or "Not named by the core") | Base commit, Snapshot when there is one, Environment |
+| Dependencies | | "None", or "After step …" and "Before step …" with the predicate in words ("Evidence: OutputAvailable · …", "Approval of … rev n"), and "Whether a dependency is met is not reported." |
+| Required approvals | The approvals the plan binds: short identity, revision, decision event. "Bound when the plan was stored. The core checks that each is current at a Start." | The same |
+| Last section | "Choose a step in the graph or in the list to inspect it and to fill the Start." | "Not reported": description, acceptance criteria, file scope, execution history and verification requirements |
+
+The inspector has no action bar: "View Evidence", "Inspect Attempt", "View Logs", "View Blockers" and "Inspect Task" have no data, and the one action with a request, "Start Task", is the screen's "Start Step".
+
+**The step pick list and the five identities** (decided by the human on 2026-11-16). Above the five fields a card lists the steps of the shown plan (short identity, provider, repository). Choosing a step there or in the graph fills all five fields from the plan (`ApprovedPlan.subjects(step:)`) and marks the row "Chosen". The fields stay `InputField`s and can still be typed; a filled field that is not an identity says so under it. When the core names no validation plan for the plan, that field is left empty and a footnote says to type it. With several approved plans a row of chips above the graph chooses the plan; the first is shown by default.
+
+**No control without a request.** "Pause Admission", "Approve Plan" (a decision is made in the Approval Inbox), "Compare rev 2 → 3", the filters, "Reset", the wave control, "Change" of a provider, "Start Eligible Tasks" and the inspector's buttons are not built, neither as a button nor as a disabled one. "Review Plan" opens the Approval Inbox. No segmented control and no toggle were added.
+
+**When Start can be sent.** Unchanged:
 
 | Case, in this order | Text beside the button |
 |---|---|
@@ -116,9 +146,9 @@ DESIGN_ROADMAP_DIFFERENCES.md, section 4, gives the Execution Plan board to M3 (
 | A field is empty | "Enter all five identities." |
 | A field is not 32 lowercase hex characters | "Not an identity: PRD, Step." (the fields that fail) |
 
-Before the first snapshot the admission is unknown and does not block: the helper decides.
+Before the first snapshot the admission is unknown and does not block: the helper decides. A step that was already started is not marked: the query does not return a step's attempts, and the core answers such a Start with `DuplicateStart`.
 
-**The result of a Start** is kept by the workspace as a value (`WorkspaceModel.startOutcome`, new in this step; the status line of the window keeps its words, which the GUI scenarios read). It is what the helper answered, nothing is inferred:
+**The result of a Start** is kept by the workspace as a value (`WorkspaceModel.startOutcome`; the status line of the window keeps its words, which the GUI scenarios read). Unchanged:
 
 | Outcome | Shown |
 |---|---|
@@ -135,38 +165,52 @@ Before the first snapshot the admission is unknown and does not block: the helpe
 | Toolbar, breadcrumb | The shell breadcrumb stays "Jojo › Feature › Execution Plan". The shell toolbar has no screen buttons; "Review Plan" and "Start Step" are in the screen |
 | Sidebar counter | None, as on the board. Nothing reported counts eligible or blocked steps |
 | Lifecycle bar | Not built. The core reports no lifecycle stage of a feature and no task counts |
-| Filters, Plan checks | Not built. There are no tasks to filter and no check of a plan is reported |
-| Revision notice | Not built. Which revision of a plan is approved is not reported; the Approval Inbox shows the loaded document's revision |
-| Graph, lanes, legend | Not built (see above) |
-| Inspector | Not built as an inspector. Its one action that has a request, "Start Task", is the screen's "Start Step" |
+| Filters, Plan checks | Not built. No status or count is reported to filter by, and no result of a plan check is reported |
+| Revision notice | An accent notice (radius 9, `accent` at 8% with an edge at 28%): "Plan rev n is approved." over "A Start follows this revision. When a newer revision is stored, the approval is stale and the core reports no plan until that revision is approved." No "Compare" button; "Review Plan" is in the heading of "Step to start" |
+| Graph, lanes, legend | Built from the stored plan (see above): task nodes without a status, edges, derived waves, repository lanes. No gate node |
+| Inspector | Built for the plan and for one step, from stored fields only (see above), without an action bar. Beside the plan from 820 points of content width (300 wide, as Activity & Audit), below the graph otherwise |
 | "Start Eligible Tasks · 1", "Start Task" | "Start Step" (primary, one per screen), with the board's note in the words of today: "Starting asks the core to admit the step. It can still be refused, for example when an approval is stale." |
-| (not on the canvas) Step to start | A heading, the old screen's sentence ("Start runs one approved plan step in a Jojo-owned worktree. The core refuses it unless admission is open, every approval is current and no earlier work is on hold."), and a card of five lines: PRD, ADR, Plan, Validation plan, Step, each an input field with the prompt "identity (32 hex)" |
+| (not on the canvas) Plan chips | Only with several approved plans: one filter chip per plan (short identity, number of steps) |
+| (not on the canvas) Step to start | A heading, the sentence about a Start, the step pick list of the shown plan, and a card of five lines: PRD, ADR, Plan, Validation plan, Step, each an input field with the prompt "identity (32 hex)" |
 | (not on the canvas) Reported by the core | Three lines with the words of the sidebar's status well and of Settings & Providers: Core, Admission, Slice configuration |
-| (not on the canvas) Not reported | A card that names what the board draws and the core does not report: Tasks and waves, Dependencies, Gates, Lifecycle, Plan checks, Plan revisions, Step state; and two decisions: Repair ("Decided, not built: automatic, at most two tries, then a human hold.", D2) and Parallel capacity ("Not reported, and not decided.", D4; no number) |
+| (not on the canvas) Not reported | A card that names what the board draws and the core does not report: Step names, Acceptance criteria, File scope, Step state, Gates, Lifecycle, Plan checks, Plan revisions, Execution history; and two decisions: Repair ("Decided, not built: automatic, at most two tries, then a human hold.", D2) and Parallel capacity ("Not reported, and not decided.", D4; no number) |
 
 ### 7.2 States
 
-- Loading (`notStarted`, `handshaking`): the fields can be filled; Start is disabled with "Unavailable: the core is not connected."; "Reported by the core" says "Connecting to core…".
-- Disconnected (`channelLost`, `ended`, `launchFailed`): danger banner "Jojo core isn't responding" · "A Start cannot be sent. What was typed is kept." There is no "Reconnect" yet.
+The plan section ("Approved plan") has its own states (`ExecutionPlanState.Phase`); the rest of the screen is as before.
+
+- Reading (the read is running or has not begun, the core is connected or connecting): the Loading form "Reading the approved plan…".
+- No approved plan (the read ended with no plan): the Empty form "No approved plan" · "The core holds no plan with a current approval. A plan arrives as an imported bundle and is approved in the Approval Inbox. A newer revision that is not approved makes the approval stale." with the button "Open Approval Inbox". The five fields can still be typed.
+- Unreadable (the read failed): warning banner "The approved plan could not be read" with a sentence for the reason ("This core has no request that returns the approved plan." for an older helper, "The plan is too large for one answer of the core. It is not shown.", "The core's answer was not a plan this app can read. Nothing is shown.", otherwise "The core did not answer the read. Nothing is shown."), the button "Try Again", and the reason as sent, monospaced. Nothing that was read before is shown.
+- Loading (`notStarted`, `handshaking`): the plan section is Reading; the fields can be filled; Start is disabled with "Unavailable: the core is not connected."; "Reported by the core" says "Connecting to core…".
+- Disconnected (`channelLost`, `ended`, `launchFailed`): danger banner "Jojo core isn't responding" · "A Start cannot be sent. What was typed is kept." With a plan read earlier, the plan stays, read-only, and the banner adds "The plan below was read before the core stopped answering."; without one the plan section says "No plan was read" · "The core stopped answering before the approved plan was read." There is no "Reconnect" yet.
 - Incompatible protocol: danger banner "Jojo core speaks another protocol version" · "Diagnostics only. A Start cannot be sent."
-- Recovery required / admission closed: danger banner "Execution admission is closed" · "No new attempt starts until you review the inspection." with the button "Open Recovery Center" (the banner of Agent Runs).
+- Recovery required / admission closed: danger banner "Execution admission is closed" · "No new attempt starts until you review the inspection." with the button "Open Recovery Center" (the banner of Agent Runs). The plan is still shown.
 - Requested, Unknown outcome, Error (refused): see the outcome table above.
-- Empty: the screen has no list, so no Empty form. With all fields empty Start says "Enter all five identities."
-- Stale and Permission denied have no source on this screen.
-- Width: the content is at most 760 wide.
+- Stale: there is no Stale form. The plan is read again whenever the snapshot's event number changes while the screen is shown.
+- Permission denied has no source on this screen.
+- Width: the sections other than the graph are at most 760 wide; the graph well takes the column and scrolls sideways.
 
 ### 7.3 Open points
 
-- A query that returns the approved plan (its steps, their provider and repository, the edges, the revision) is what the graph, the inspector and a pick list of steps need. Until then a step's identity is known only to whoever imported the bundle.
-- The snapshot does not say which `review_document` is a plan; with that, the four document fields could be picked instead of typed.
+- A step has no name. Until the core stores one (the roadmap's planner, M3), a node shows an identity, and the graph cannot be read the way the board is.
+- The query does not return the attempts of a step, although the core stores them (`scheduler_attempts`). With them the inspector could list "Execution history" and the screen could say that a step was already started.
+- No state of a step and no evaluation of an edge is reported; with them the pills, the state outlines, "Eligible", the blocker list and the legend's "met" and "pending" could be drawn. The core computes the evaluation at a Start (`evaluate_dependencies`) and has no read of it over the protocol.
+- A plan above the frame limit is refused whole; the steps are not paged. Today's plans have one step.
+- The snapshot still does not say which `review_document` is a plan. The plan fields no longer need it.
 - "Repairing" (D2) is not an operational state yet; it is added with M4.
 
 ### 7.4 Values that are not on the canvas
 
 | Point | Value in the app |
 |---|---|
-| Content | At most 760 wide, padding 18 top, 22 at the sides, 24 bottom, gap 18 (as Settings & Providers) |
+| Content | Padding 18 top, 22 at the sides, 24 bottom, gap 18; every section except the graph at most 760 wide |
+| Graph well | Radius 12, `fill2` (the board's `#17171A` is not a token), padding 12 by 8; columns of 236 with the node 20 from the column's leading edge; a heading row of 22; lanes 8 apart, each with a header of 24, rows of 84 with 12 between them and 12 below |
+| Edge | 1.5 pt in `dashedOutline`, dash 4 on 4 off for an approval dependency, an arrowhead of 6 by 7 in `text3` |
+| Node outline | `liftRing` (the board's white at 7% is close to `cardRing`, which does not show on the lane) |
 | Identity line | The fact line of COMPONENTS.md, section 18 (label 130) with a monospaced input field as its value; an invalid value has a line in `warn` at the meta size under the field |
+| Step pick list | List rows of section 14 in a `.panelList` card; the chosen row has the kind tag "Chosen" in `info` |
+| Inspector | 300 wide beside the plan from 820 points of content width; identities and digests wrap instead of being cut |
 | Not-reported lines | The setting line of section 21 in its missing form (`text3`) |
-| New components | None. The screen is made of existing surfaces, so nothing was added to the component gallery |
-| Off-screen renders | `execution-plan-empty-…`, `-ready-…`, `-invalid-…`, `-narrow-…`, `-requested-…`, `-accepted-…`, `-refused-…`, `-unknown-…`, `-admission-closed-…`, `-no-slice-…`, `-loading-…`, `-incompatible-…`, `-disconnected-…` |
+| New components | `TaskNode`, `GraphEdge`, `LaneBand` (COMPONENTS.md, section 22) |
+| Off-screen renders | `execution-plan-graph-…`, `-graph-step-…`, `-graph-narrow-…`, `-one-step-…`, `-reading-…`, `-unreadable-…`, `-disconnected-plan-…`, and the earlier `-empty-…`, `-ready-…`, `-invalid-…`, `-narrow-…`, `-requested-…`, `-accepted-…`, `-refused-…`, `-unknown-…`, `-admission-closed-…`, `-no-slice-…`, `-loading-…`, `-incompatible-…`, `-disconnected-…` (these now show "No approved plan" or the plan section's state above the Start) |

@@ -22,7 +22,7 @@ struct MainView: View {
                         shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
                         shown(.agentRuns) { AgentRunsScreen(model: model, open: { screen = $0 }) }
                         shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
-                        shown(.executionPlan) { ExecutionPlanScreen(model: model, open: { screen = $0 }) }
+                        shown(.executionPlan) { ExecutionPlanScreen(model: model, visible: screen == .executionPlan, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                         shown(.settings) { SettingsScreen(model: model) }
                         shown(.sourceControl) { SourceControlScreen(model: model, open: { screen = $0 }) }

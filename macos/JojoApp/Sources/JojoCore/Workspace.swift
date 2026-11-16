@@ -155,6 +155,126 @@ public enum StartOutcome: Equatable, Sendable {
     case unknown
 }
 
+/// The approved revision of one execution plan, as the `ApprovedPlan` query returns it.
+/// Only what the core stores: a step has an identity, never a name, a text or a state.
+public struct ApprovedPlan: Equatable, Sendable, Identifiable {
+    public struct Source: Equatable, Sendable {
+        public let repository: String
+        public let commit: String
+        /// The digest of a candidate snapshot the step builds on; nil for a plain commit.
+        public let snapshot: String?
+    }
+
+    public struct Step: Equatable, Sendable, Identifiable {
+        public let id: String
+        public let revision: Int64
+        /// The core's word for the provider (`ClaudeCode`, `Codex`); nil when the plan binds none.
+        public let provider: String?
+        public let repository: String?
+        public let priority: Int64?
+        public let repositoryMode: String?
+        public let environment: String?
+        public let sources: [Source]
+    }
+
+    public struct Edge: Equatable, Sendable, Identifiable {
+        public let id: String
+        public let prerequisite: String
+        public let dependent: String
+        /// `ArtifactApproved` or `Evidence`.
+        public let predicate: String
+        public let artifact: String?
+        public let artifactRevision: Int64?
+        public let evidence: String?
+        public let evidenceKind: String?
+    }
+
+    public struct Approval: Equatable, Sendable {
+        public let artifact: String
+        public let revision: Int64
+        public let decision: Int64
+    }
+
+    public let plan: String
+    public let revision: Int64
+    public let digest: String
+    /// The event of the approval that is current.
+    public let decision: Int64
+    public let prd: String
+    public let adr: String
+    /// The validation plan whose digest the plan binds; nil when the core finds none or several.
+    public let validation: String?
+    public let validationDigest: String
+    public let steps: [Step]
+    public let edges: [Edge]
+    public let approvals: [Approval]
+    /// The cursor of the next approved plan; nil when this is the last.
+    public let next: String?
+    public var id: String { plan }
+
+    public init?(_ p: [String: JSON]) {
+        func optional(_ value: JSON?) -> String?? {
+            guard let value else { return nil }
+            return value.isNull ? .some(nil) : value.string.map { .some($0) }
+        }
+        func number(_ value: JSON?) -> Int64?? {
+            guard let value else { return nil }
+            return value.isNull ? .some(nil) : value.integer.map { .some($0) }
+        }
+        guard let plan = p["plan"]?.string, Identity.valid(plan), let revision = p["revision"]?.integer,
+              let digest = p["digest"]?.string, let decision = p["decision"]?.integer,
+              let prd = p["prd"]?.string, let adr = p["adr"]?.string,
+              let validation = optional(p["validation"]), let validationDigest = p["validation_digest"]?.string,
+              let stepItems = p["steps"]?.items, let edgeItems = p["edges"]?.items, let approvalItems = p["approvals"]?.items,
+              let next = optional(p["next"]) else { return nil }
+        let steps = stepItems.compactMap { row -> Step? in
+            guard let id = row["step"]?.string, Identity.valid(id), let revision = row["revision"]?.integer,
+                  let provider = optional(row["provider"]), let repository = optional(row["repository"]),
+                  let priority = number(row["priority"]), let mode = optional(row["repository_mode"]),
+                  let environment = optional(row["environment"]), let sourceItems = row["sources"]?.items else { return nil }
+            let sources = sourceItems.compactMap { source -> Source? in
+                guard let repository = source["repository"]?.string, let commit = source["commit"]?.string,
+                      let snapshot = optional(source["snapshot"]) else { return nil }
+                return Source(repository: repository, commit: commit, snapshot: snapshot)
+            }
+            guard sources.count == sourceItems.count else { return nil }
+            return Step(id: id, revision: revision, provider: provider, repository: repository, priority: priority,
+                        repositoryMode: mode, environment: environment, sources: sources)
+        }
+        let edges = edgeItems.compactMap { row -> Edge? in
+            guard let id = row["edge"]?.string, let prerequisite = row["prerequisite"]?.string,
+                  let dependent = row["dependent"]?.string, let predicate = row["predicate"]?.string,
+                  let artifact = optional(row["artifact"]), let artifactRevision = number(row["artifact_revision"]),
+                  let evidence = optional(row["evidence"]), let evidenceKind = optional(row["evidence_kind"]) else { return nil }
+            return Edge(id: id, prerequisite: prerequisite, dependent: dependent, predicate: predicate, artifact: artifact,
+                        artifactRevision: artifactRevision, evidence: evidence, evidenceKind: evidenceKind)
+        }
+        let approvals = approvalItems.compactMap { row -> Approval? in
+            guard let artifact = row["artifact"]?.string, let revision = row["revision"]?.integer,
+                  let decision = row["decision"]?.integer else { return nil }
+            return Approval(artifact: artifact, revision: revision, decision: decision)
+        }
+        // One malformed row makes the whole answer malformed: a graph with a hole is not shown.
+        guard steps.count == stepItems.count, edges.count == edgeItems.count, approvals.count == approvalItems.count,
+              Set(steps.map(\.id)).count == steps.count else { return nil }
+        (self.plan, self.revision, self.digest, self.decision) = (plan, revision, digest, decision)
+        (self.prd, self.adr, self.validation, self.validationDigest) = (prd, adr, validation, validationDigest)
+        (self.steps, self.edges, self.approvals, self.next) = (steps, edges, approvals, next)
+    }
+
+    /// The identities a Start of `step` names. The validation plan stays empty when the
+    /// core did not name one.
+    public func subjects(step: String) -> StartSubjects {
+        StartSubjects(prd: prd, adr: adr, plan: plan, validation: validation ?? "", step: step)
+    }
+}
+
+/// Where the read of the approved plans stands.
+public enum PlanLoad: Equatable, Sendable {
+    case idle, loading, loaded
+    case failed(String)
+}
+
 /// Reviewed recovery choices (SHUTDOWN_RECOVERY), in `RecoveryChoice` order. Sent only by
 /// an explicit click, bound to the digest of the inspection on screen.
 public let recoveryChoices = [
@@ -196,6 +316,12 @@ public final class WorkspaceModel {
     /// that screen asks; `pollEvents` does not fill it.
     public private(set) var events: [JournalEvent] = []
     public private(set) var eventsLoad = JournalLoad.idle
+    /// The approved plans read for Execution Plan, in identity order. Read only when that
+    /// screen asks; `refresh` does not fill it.
+    public private(set) var plans: [ApprovedPlan] = []
+    public private(set) var plansLoad = PlanLoad.idle
+    /// More approved plans exist than `maxPlans`; the rest was not read.
+    public private(set) var plansTruncated = false
     public var onChange: (() -> Void)?
 
     private let client: HelperClient
@@ -204,6 +330,7 @@ public final class WorkspaceModel {
     /// The helper's largest page, and how far one read of the journal reaches back.
     static let eventPage = 8
     static let eventWindow: Int64 = 64
+    static let maxPlans = 8
 
     public init(client: HelperClient) {
         self.client = client
@@ -316,6 +443,40 @@ public final class WorkspaceModel {
                 self.eventsLoad = .failed(reason)
             default:
                 self.eventsLoad = .failed("unexpected answer")
+            }
+            self.onChange?()
+        }
+    }
+
+    /// Reads every approved plan again, one `ApprovedPlan` query per plan. What was held
+    /// is replaced when the read ends, and dropped when it fails.
+    public func loadPlans() {
+        guard plansLoad != .loading, snapshotSeq != nil else { return }
+        plansLoad = .loading
+        onChange?()
+        readPlans(after: nil, collected: [])
+    }
+
+    private func readPlans(after: String?, collected: [ApprovedPlan]) {
+        client.query(.ApprovedPlan, ["after": after.map(JSON.text) ?? .null]) { [weak self] reply in
+            guard let self else { return }
+            switch reply {
+            case .response(let p):
+                guard let plan = ApprovedPlan(p) else {
+                    (self.plans, self.plansLoad) = ([], .failed("malformed plan"))
+                    break
+                }
+                let all = collected + [plan]
+                if let next = plan.next, all.count < Self.maxPlans {
+                    return self.readPlans(after: next, collected: all)
+                }
+                (self.plans, self.plansTruncated, self.plansLoad) = (all, plan.next != nil, .loaded)
+            case .null:
+                (self.plans, self.plansTruncated, self.plansLoad) = (collected, false, .loaded)
+            case .error(let reason), .unanswered(let reason):
+                (self.plans, self.plansLoad) = ([], .failed(reason))
+            default:
+                (self.plans, self.plansLoad) = ([], .failed("unexpected answer"))
             }
             self.onChange?()
         }

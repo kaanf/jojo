@@ -1391,3 +1391,88 @@ extension SettingLine where Value == SettingText, Trailing == EmptyView {
         self.init(label, value, form: form, last: last) { EmptyView() }
     }
 }
+
+// MARK: Plan surfaces (design wave 1, Execution Plan; COMPONENTS.md, section 22)
+
+/// The task node of COMPONENTS.md, section 6, without a status: the core reports no state
+/// of a step, so the node has no pill, no state outline and no "Eligible" tag. Three lines:
+/// an identifier, a title, a detail. The chosen node has a 2 pt accent ring.
+struct TaskNode: View {
+    static let size = CGSize(width: 196, height: 84)
+
+    @Environment(\.theme) private var theme
+    let identifier: String
+    let title: String
+    let detail: String
+    var selected = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(identifier).font(.system(size: 11.5, weight: .medium, design: .monospaced)).foregroundStyle(theme.text2).lineLimit(1)
+            Text(title).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(theme.textStrong).lineLimit(1)
+            Text(detail).textStyle(.meta).foregroundStyle(theme.text3).lineLimit(1).truncationMode(.middle)
+        }
+        .padding(.vertical, 9)
+        .padding(.horizontal, 11)
+        .frame(width: Self.size.width, height: Self.size.height, alignment: .topLeading)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? theme.accent : theme.liftRing, lineWidth: selected ? 2 : 1))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// An edge of the plan graph from the trailing side of one node to the leading side of
+/// another, with an arrowhead. Solid or dashed; one color, because whether a dependency is
+/// met is not reported.
+struct GraphEdge: View {
+    @Environment(\.theme) private var theme
+    let from: CGPoint
+    let to: CGPoint
+    var dashed = false
+
+    var body: some View {
+        let reach = max(24, abs(to.x - from.x) / 2)
+        ZStack {
+            Path { path in
+                path.move(to: from)
+                path.addCurve(to: CGPoint(x: to.x - 5, y: to.y), control1: CGPoint(x: from.x + reach, y: from.y),
+                              control2: CGPoint(x: to.x - 5 - reach, y: to.y))
+            }
+            .stroke(theme.dashedOutline, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: dashed ? [4, 4] : []))
+            Path { path in
+                path.move(to: to)
+                path.addLine(to: CGPoint(x: to.x - 6, y: to.y - 3.5))
+                path.addLine(to: CGPoint(x: to.x - 6, y: to.y + 3.5))
+                path.closeSubpath()
+            }
+            .fill(theme.text3)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// A lane of the plan graph: a faint panel that carries a name beside a neutral square.
+/// The board colors the square per repository; no color of a repository is reported.
+struct LaneBand: View {
+    static let header: CGFloat = 24
+
+    @Environment(\.theme) private var theme
+    let name: String
+    var mono = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8).fill(theme.fill2)
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.hairline, lineWidth: 1))
+            .overlay(alignment: .topLeading) {
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 2).fill(theme.tileNeutral).frame(width: 8, height: 8)
+                    Text(name).font(.system(size: 11.5, weight: .semibold, design: mono ? .monospaced : .default))
+                        .foregroundStyle(theme.text2).lineLimit(1)
+                }
+                .frame(height: Self.header)
+                .padding(.horizontal, 10)
+            }
+    }
+}

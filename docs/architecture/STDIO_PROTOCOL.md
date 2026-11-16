@@ -135,3 +135,28 @@ The guard is started inside that process group, with a cleared environment, noth
 While the helper lives it remains the only supervisor: the guard takes no part in a normal stop, a guard that ends (a TERM sent to the group ends it too) is replaced, and a guard that cannot be kept is an inspection failure that stops the run. The guard is never recorded as a descendant of the agent. Started by hand outside a process group it was placed in, the mode does nothing.
 
 Limits: the guard reaches the owned process group only; it is an ordinary process of the same user; and a helper that is frozen rather than dead keeps the pipe open. See [P2-04.1 verification](../verification/P2-04-1.md).
+
+## Approved plan query (design wave 1)
+
+One query was added for protocol minor 1; the minor version stays 1 and Hello lists the name `ApprovedPlan` last among the queries. It is a read: no command, no table and no schema change.
+
+Request: `ApprovedPlan` with exactly one field, `after`: `null` for the first approved plan, or the `next` of the previous answer. A payload with another field set is answered `InvalidPayload: unexpected or missing fields`; a 1.0 frame naming it is answered `UnknownType`.
+
+Answer: `null` when no execution plan after `after` holds a current approval, otherwise one plan, whole:
+
+| Field | Value |
+|---|---|
+| `plan`, `revision`, `digest` | The plan's identity, the approved revision and the digest of its canonical body |
+| `decision` | The event of the approval that is current |
+| `prd`, `adr` | The documents the plan was stored under |
+| `validation`, `validation_digest` | The digest of the validation plan the plan binds, and the identity of the one document under the same PRD and ADR whose latest body has that digest; `null` when there is none or more than one |
+| `steps` | Per step: `step`, `revision`, `provider`, `repository`, `priority`, `repository_mode`, `environment`, and `sources` (`repository`, `commit`, `snapshot`). `provider`, `repository`, `priority` and `repository_mode` are `null` for a step the plan binds no resources to |
+| `edges` | Per edge of the execution graph: `edge`, `prerequisite`, `dependent`, `predicate` (`ArtifactApproved` or `Evidence`), and what the predicate names: `artifact` with `artifact_revision`, or `evidence` with `evidence_kind` |
+| `approvals` | The approvals the plan binds: `artifact`, `revision`, `decision` |
+| `next` | The cursor for the following approved plan, or `null` when this is the last |
+
+A plan is "approved" exactly when a Start would find its approval current. A newer revision that is not approved makes the approval stale, so such a plan is not returned at all: the answer never holds an approved and a proposed revision side by side.
+
+Not returned, because the core does not store it: a name, description, acceptance criteria or file scope of a step; a lifecycle state of a step; whether an edge's predicate is met; the result of the plan's validation. Stored but not returned: the edges of the artifact graph, the permission digest, the required outputs, the additional resources of a step, and the attempts of a step (`scheduler_attempts`).
+
+The whole plan is one answer. An answer above the frame limit is refused with `PayloadTooLarge: use bounded queries`, as for every request; the steps are not paged.
