@@ -101,6 +101,22 @@ Agent output uses the existing `Log` query; `log_records` is its highest sequenc
 **Replay.** As for every 1.1 command: an identity that already has a receipt is answered from it and nothing is run again; a lost response is reconciled with `Receipt`.
 
 
+## Typed messages and the structured assessment (Refactor R-01)
+
+Every request type, the minor that introduced it, its queue (control or bulk) and the payload fields the helper reads are defined once, in `crates/jojo-domain/src/protocol.rs` (`SPECS`, `RequestKind` and one payload type per request). The helper dispatches on `RequestKind` and Hello's `commands` and `queries` lists are produced from the same table. The client's list is `macos/JojoApp/Sources/JojoCore/Protocol.swift`; `scripts/tests/test_protocol_fields.py` checks the two against each other. Requests and their answers are otherwise unchanged: `crates/jojo-storage/tests/r01_frames.rs` holds 168 frames whose answers were recorded before the change.
+
+One addition to the wire, for frames of minor ≥ 1 only (the minor version is unchanged, and a 1.0 frame gets the row as before): each `Recovery` row carries the assessment as structured fields after the existing four.
+
+| Field | Meaning |
+| --- | --- |
+| `blockers` | List of text: what blocks every choice except Hold. At most 8 entries of at most 256 characters each. |
+| `blockers_complete` | `false` when the list or one of its entries was cut. |
+| `process_absent` | `true` when every process that could belong to the attempt is proven gone. |
+| `choices` | List of the choices the evidence offers, by the names `RecoveryResolve` accepts. |
+
+The `assessment` text is still sent unchanged. It is a debug rendering for people; a client must read the structured fields and must not parse the text.
+
+
 ## Agent guard (P2-04.1)
 
 Not a protocol change. No frame, type or field was added, and nothing about the guard can be requested over the protocol.

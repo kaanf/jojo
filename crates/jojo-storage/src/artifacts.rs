@@ -87,15 +87,19 @@ impl PreparedPrd {
     /// here; structurally incomplete content is accepted as a draft and reported by
     /// [`ReviewReadiness`] instead.
     pub fn import(input: &[u8]) -> Result<Self, PrdError> {
-        let document = PrdDocument::import(input)?;
+        PrdDocument::import(input).map(|document| Self::from_document(&document))
+    }
+
+    /// The prepared form of a document that already passed strict import.
+    pub fn from_document(document: &PrdDocument) -> Self {
         let content = document.canonical_json();
         let rendered = document.render_markdown();
-        Ok(Self {
+        Self {
             content_digest: sha256_hex(&[content.as_bytes()]),
             rendered_digest: sha256_hex(&[rendered.as_bytes()]),
             content,
             rendered,
-        })
+        }
     }
 
     /// Canonical typed content; `content_digest` is the SHA-256 of exactly these bytes.

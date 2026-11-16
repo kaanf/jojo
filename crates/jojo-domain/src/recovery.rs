@@ -74,6 +74,25 @@ impl RecoveryChoice {
             Self::Hold => "HOLD",
         }
     }
+    /// The name the protocol uses for this choice, in both directions.
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::ValidateOutput => "ValidateOutput",
+            Self::ContinueWithHistory => "ContinueWithHistory",
+            Self::ContinueFreshContext => "ContinueFreshContext",
+            Self::Hold => "Hold",
+        }
+    }
+    pub fn from_wire(name: &str) -> Option<Self> {
+        [
+            Self::ValidateOutput,
+            Self::ContinueWithHistory,
+            Self::ContinueFreshContext,
+            Self::Hold,
+        ]
+        .into_iter()
+        .find(|c| c.wire() == name)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

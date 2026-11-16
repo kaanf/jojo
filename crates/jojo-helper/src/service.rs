@@ -7,14 +7,16 @@
 use crate::SystemClock;
 use jojo_domain::codex::CODEX_HOME_VARIABLE;
 use jojo_domain::dependency::NodeRef;
-use jojo_domain::identity::{ArtifactId, FeatureId, RepositoryId, Revision};
+use jojo_domain::identity::Revision;
 use jojo_domain::identity::{IdGenerationError, IdGenerator, OpaqueId};
 use jojo_domain::ipc::*;
 use jojo_domain::json::Json;
 use jojo_domain::paths::LocalRoots;
+use jojo_domain::protocol::{
+    self, CandidateVerdict, Class, CloseCommand, DecisionVerb, RequestKind,
+};
 use jojo_domain::provider::LaunchSpec;
 use jojo_domain::provider::{AuthMode, ProviderAdapter, ProviderKind};
-use jojo_domain::recovery::RecoveryChoice;
 use jojo_domain::shutdown::{CloseState, ShutdownOutcome};
 use jojo_domain::validation::ValidationPlan;
 use jojo_storage::*;
@@ -313,7 +315,8 @@ impl Service {
         }
     }
     fn handle(&mut self, e: &Envelope) -> Result<Json, String> {
-        if e.kind == "Hello" {
+        let named = RequestKind::of_frame(&e.kind, e.minor);
+        if named == Some(RequestKind::Hello) {
             if self.session.is_some_and(|s| s != e.session) {
                 return Err("SessionMismatch".into());
             }
@@ -325,22 +328,8 @@ impl Service {
                 ("max_frame", number(MAX_FRAME as u64)),
                 ("max_page", number(8)),
                 ("admission", text("closed until reviewed recovery start")),
-                (
-                    "commands",
-                    text(if e.minor >= 1 {
-                        "PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision"
-                    } else {
-                        "PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision"
-                    }),
-                ),
-                (
-                    "queries",
-                    text(if e.minor >= 1 {
-                        "Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport"
-                    } else {
-                        "Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery"
-                    }),
-                ),
+                ("commands", text(protocol::names(Class::Mutation, e.minor))),
+                ("queries", text(protocol::names(Class::Query, e.minor))),
                 (
                     "slice",
                     Json::Bool(e.minor >= 1 && self.config.slice.is_some()),
@@ -355,61 +344,54 @@ impl Service {
         }
         let p = &e.payload;
         let mut reader = self.engine.reader().map_err(|e| e.to_string())?;
-        match e.kind.as_str() {
-            "Snapshot" => {
-                let section = string(get(p, "section")?)?;
-                let after = string(get(p, "after")?)?;
-                let cursor = match get(p, "cursor")? {
-                    Json::Null => None,
-                    v => Some(uint(v)?),
-                };
-                let limit = u32::try_from(uint(get(p, "limit")?)?).map_err(|_| "Limit")?;
+        // A request newer than the frame's minor does not exist for that frame.
+        let Some(kind) = named else {
+            return Err("UnknownType".into());
+        };
+        match kind {
+            RequestKind::Hello => unreachable!("answered above"),
+            RequestKind::Snapshot => {
+                let q = protocol::SnapshotQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_snapshot(section, after, cursor, limit))
+                    .read(|v| v.ipc_snapshot(&q.section, &q.after, q.cursor, q.limit))
                     .map_err(|e| e.to_string())
             }
-            "Events" => {
-                let after = uint(get(p, "after")?)?;
-                let limit = u32::try_from(uint(get(p, "limit")?)?).map_err(|_| "Limit")?;
+            RequestKind::Events => {
+                let q = protocol::EventsQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_events(after, limit))
+                    .read(|v| v.ipc_events(q.after, q.limit))
                     .map_err(|e| e.to_string())
             }
-            "EventDetail" => {
-                let seq = uint(get(p, "seq")?)?;
-                let offset = uint(get(p, "offset")?)?;
+            RequestKind::EventDetail => {
+                let q = protocol::EventDetailQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_event_detail(seq, offset))
+                    .read(|v| v.ipc_event_detail(q.seq, q.offset))
                     .map_err(|e| e.to_string())
             }
-            "Log" => {
-                let a = id(get(p, "attempt")?)?;
-                let seq = uint(get(p, "sequence")?)?;
-                let offset = uint(get(p, "offset")?)?;
+            RequestKind::Log => {
+                let q = protocol::LogQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_log(a, seq, offset))
+                    .read(|v| v.ipc_log(q.attempt, q.sequence, q.offset))
                     .map_err(|e| e.to_string())
             }
-            "Receipt" => {
-                let id = CommandId(id(get(p, "command")?)?);
+            RequestKind::Receipt => {
+                let q = protocol::ReceiptQuery::parse(p)?;
                 reader
-                    .receipt(id)
+                    .receipt(CommandId(q.command))
                     .map(|r| r.map_or(Json::Null, receipt))
                     .map_err(|e| e.to_string())
             }
-            "ShutdownReceipt" => {
-                let ticket = id(get(p, "ticket")?)?;
+            RequestKind::ShutdownReceipt => {
+                let q = protocol::ShutdownReceiptQuery::parse(p)?;
                 reader
-                    .read(|v| v.shutdown_receipt(ticket))
+                    .read(|v| v.shutdown_receipt(q.ticket))
                     .map(|r| r.as_ref().map_or(Json::Null, shutdown_json))
                     .map_err(|e| e.to_string())
             }
-            "Recovery" => {
-                let offset = usize::try_from(uint(get(p, "offset")?)?).map_err(|_| "Offset")?;
-                let limit = uint(get(p, "limit")?)?;
-                if limit == 0 || limit > 8 {
-                    return Err("Limit".into());
-                }
+            RequestKind::Recovery => {
+                let q = protocol::RecoveryQuery::parse(p)?;
+                // Protocol 1.1 rows also carry the assessment as structured fields.
+                let structured = e.minor >= 1;
                 Ok(object([
                     ("digest", text(self.recovery.digest())),
                     (
@@ -418,10 +400,10 @@ impl Service {
                             self.recovery
                                 .subjects()
                                 .iter()
-                                .skip(offset)
-                                .take(limit as usize)
+                                .skip(q.offset)
+                                .take(q.limit)
                                 .map(|s| {
-                                    object([
+                                    let mut row = vec![
                                         ("attempt", identity(s.attempt())),
                                         ("assessment", text(format!("{:?}", s.assessment()))),
                                         (
@@ -434,18 +416,22 @@ impl Service {
                                             "detail_complete",
                                             Json::Bool(s.findings().chars().count() <= 512),
                                         ),
-                                    ])
+                                    ];
+                                    if structured {
+                                        row.extend(protocol::assessment_fields(s.assessment()));
+                                    }
+                                    object(row)
                                 })
                                 .collect(),
                         ),
                     ),
                 ]))
             }
-            "CloseStatus" => Ok(status_json(self.status()?)),
-            "ReviewBundle" => {
-                let a = jojo_domain::identity::ArtifactId(id(get(p, "subject")?)?);
+            RequestKind::CloseStatus => Ok(status_json(self.status()?)),
+            RequestKind::ReviewBundle => {
+                let q = protocol::ReviewBundleQuery::parse(p)?;
                 let b = reader
-                    .read(|v| v.review_bundle(a))
+                    .read(|v| v.review_bundle(q.subject))
                     .map_err(|e| e.to_string())?;
                 Ok(b.map_or(Json::Null, |b| {
                     object([
@@ -466,8 +452,8 @@ impl Service {
                     ])
                 }))
             }
-            "HumanDecision" => {
-                if !matches!(p,Json::Object(f) if f.len()==8) {
+            RequestKind::HumanDecision => {
+                if !kind.shaped(p) {
                     return Err("InvalidDecisionPayload".into());
                 }
                 if !self.compatible || e.major != MAJOR as u64 || e.minor > MINOR as u64 {
@@ -476,33 +462,21 @@ impl Service {
                 if e.request.0 >> 127 != 0 {
                     return Err("ReservedIdentity".into());
                 }
-                let a = jojo_domain::identity::ArtifactId(id(get(p, "subject")?)?);
+                let d = protocol::DecisionCommand::parse(p, e.revision)?;
                 let review = ReviewBundle {
-                    subject: a,
-                    revision: jojo_domain::identity::Revision(
-                        e.revision.ok_or("RevisionRequired")?,
-                    ),
-                    hash: string(get(p, "hash")?)?.into(),
-                    content_hash: string(get(p, "content_hash")?)?.into(),
-                    displayed_hash: string(get(p, "displayed_hash")?)?.into(),
-                    context_hash: string(get(p, "context_hash")?)?.into(),
-                    upstream: match get(p, "upstream")? {
-                        Json::List(v) if v.len() <= 32 => v
-                            .iter()
-                            .map(|v| uint(v).map(EventSeq))
-                            .collect::<Result<_, _>>()?,
-                        _ => return Err("InvalidUpstream".into()),
-                    },
-                    prior_decision: match get(p, "prior_decision")? {
-                        Json::Null => None,
-                        v => Some(EventSeq(uint(v)?)),
-                    },
+                    subject: d.subject,
+                    revision: d.revision,
+                    hash: d.hash,
+                    content_hash: d.content_hash,
+                    displayed_hash: d.displayed_hash,
+                    context_hash: d.context_hash,
+                    upstream: d.upstream.into_iter().map(EventSeq).collect(),
+                    prior_decision: d.prior_decision.map(EventSeq),
                 };
-                let action = match string(get(p, "action")?)? {
-                    "Approve" => DecisionAction::Approve,
-                    "Reject" => DecisionAction::Reject,
-                    "Revoke" => DecisionAction::Revoke,
-                    _ => return Err("UnknownDecision".into()),
+                let action = match d.action {
+                    DecisionVerb::Approve => DecisionAction::Approve,
+                    DecisionVerb::Reject => DecisionAction::Reject,
+                    DecisionVerb::Revoke => DecisionAction::Revoke,
                 };
                 self.engine
                     .human_decide(
@@ -516,7 +490,10 @@ impl Service {
                     .map(receipt)
                     .map_err(|e| format!("{e:?}"))
             }
-            "PrepareClose" | "CancelClose" | "ConfirmClose" | "CancelAttempt" => {
+            RequestKind::PrepareClose
+            | RequestKind::CancelClose
+            | RequestKind::ConfirmClose
+            | RequestKind::CancelAttempt => {
                 if !self.compatible || e.major != MAJOR as u64 || e.minor > MINOR as u64 {
                     return Err("ProtocolMismatch: diagnostics only".into());
                 }
@@ -538,36 +515,17 @@ impl Service {
                 let origin = HumanOrigin::TrustedUi {
                     actor: format!("stdio:{:032x}", e.session.0),
                 };
-                let ticket = if matches!(e.kind.as_str(), "CancelClose" | "ConfirmClose") {
-                    Some(id(get(p, "ticket")?)?)
-                } else {
-                    None
-                };
-                let attempt = if e.kind == "CancelAttempt" {
-                    Some(id(get(p, "attempt")?)?)
-                } else {
-                    None
-                };
+                let command = CloseCommand::parse(kind, p)?;
                 let t = self.ids.next_id().map_err(|_| "IDs exhausted")?;
                 let s = self.ids.next_id().map_err(|_| "IDs exhausted")?;
-                let kind = e.kind.clone();
                 let result = self
                     .engine
-                    .execute(request, move |tx| match kind.as_str() {
-                        "PrepareClose" => tx.prepare_close(t, s, &origin),
-                        "CancelClose" => tx.cancel_close(
-                            ticket.ok_or_else(|| TxError::Rejected("ticket".into()))?,
-                            &origin,
-                        ),
-                        "ConfirmClose" => tx.confirm_close(
-                            ticket.ok_or_else(|| TxError::Rejected("ticket".into()))?,
-                            s,
-                            &origin,
-                        ),
-                        _ => {
-                            tx.cancel_approved_attempt(
-                                attempt.ok_or_else(|| TxError::Rejected("attempt".into()))?,
-                            )?;
+                    .execute(request, move |tx| match command {
+                        CloseCommand::Prepare => tx.prepare_close(t, s, &origin),
+                        CloseCommand::Cancel { ticket } => tx.cancel_close(ticket, &origin),
+                        CloseCommand::Confirm { ticket } => tx.confirm_close(ticket, s, &origin),
+                        CloseCommand::CancelAttempt { attempt } => {
+                            tx.cancel_approved_attempt(attempt)?;
                             Ok("cancel committed; completion requires result".into())
                         }
                     })
@@ -577,8 +535,8 @@ impl Service {
                 }
                 result.map(receipt)
             }
-            // Protocol 1.1. A 1.0 frame naming these gets the 1.0 answer below.
-            "RecoveryInspect" if e.minor >= 1 => {
+            // Protocol 1.1. A 1.0 frame naming these got the 1.0 answer above.
+            RequestKind::RecoveryInspect => {
                 drop(reader);
                 self.reinspect()?;
                 Ok(object([
@@ -590,25 +548,28 @@ impl Service {
                     ),
                 ]))
             }
-            "RegisterRepository" | "ImportBundle" | "Start" | "RecoveryResolve"
-            | "RecoveryStart" | "Validate" | "CandidateDecision"
-                if e.minor >= 1 =>
-            {
+            RequestKind::RegisterRepository
+            | RequestKind::ImportBundle
+            | RequestKind::Start
+            | RequestKind::RecoveryResolve
+            | RequestKind::RecoveryStart
+            | RequestKind::Validate
+            | RequestKind::CandidateDecision => {
                 drop(reader);
-                self.slice_command(e)
+                self.slice_command(kind, e)
             }
-            "Candidate" | "CandidateChanges" | "CandidateDiff" | "ValidationReport"
-                if e.minor >= 1 =>
-            {
+            RequestKind::Candidate
+            | RequestKind::CandidateChanges
+            | RequestKind::CandidateDiff
+            | RequestKind::ValidationReport => {
                 drop(reader);
-                self.review_query(e)
+                self.review_query(kind, e)
             }
-            _ => Err("UnknownType".into()),
         }
     }
     /// Protocol 1.1 mutations. Each commits under the client's command identity, so a
     /// repeated frame returns the original receipt and repeats nothing.
-    fn slice_command(&mut self, e: &Envelope) -> Result<Json, String> {
+    fn slice_command(&mut self, kind: RequestKind, e: &Envelope) -> Result<Json, String> {
         if !self.compatible || e.major != MAJOR as u64 || e.minor > MINOR as u64 {
             return Err("ProtocolMismatch: diagnostics only".into());
         }
@@ -618,31 +579,7 @@ impl Service {
         let p = &e.payload;
         // Exact field sets: a frame carrying anything else (an executable, arguments, a
         // variable) is refused outright rather than having the extra field ignored.
-        let fields: &[&str] = match e.kind.as_str() {
-            "RegisterRepository" => &["path"],
-            "ImportBundle" => &[
-                "feature",
-                "prd_id",
-                "adr_id",
-                "plan_id",
-                "validation_id",
-                "prd",
-                "adr",
-                "step",
-                "repository",
-                "base",
-                "provider",
-                "validation",
-            ],
-            "Start" => &["prd", "adr", "plan", "validation", "step"],
-            "RecoveryResolve" => &["digest", "attempt", "choice"],
-            "Validate" => &["attempt", "candidate"],
-            "CandidateDecision" => &["attempt", "candidate", "receipt", "action"],
-            _ => &["digest"],
-        };
-        if !matches!(p, Json::Object(f) if f.len() == fields.len()
-            && fields.iter().all(|k| f.iter().any(|(name, _)| name == k)))
-        {
+        if !kind.shaped(p) {
             return Err("InvalidPayload: unexpected or missing fields".into());
         }
         let payload = encode(&object([
@@ -659,7 +596,6 @@ impl Service {
             CommandError::Rejected(TxError::Rejected(why)) => why,
             other => format!("{other:?}"),
         };
-        let subject = |key: &str| get(p, key).and_then(id).map(ArtifactId);
         // A command that was already committed, in this or an earlier epoch, is answered
         // from its receipt alone: no check is re-run and nothing is dispatched again.
         let known = self
@@ -675,24 +611,21 @@ impl Service {
             let Json::Object(mut fields) = receipt(r) else {
                 unreachable!("receipt is an object")
             };
-            if e.kind == "Start" {
+            if kind == RequestKind::Start {
                 fields.push(("attempt".into(), identity(e.request)));
                 fields.push(("dispatch".into(), text("not repeated")));
             }
-            if e.kind == "Validate" {
+            if kind == RequestKind::Validate {
                 fields.push(("validation".into(), text("not repeated")));
             }
             return Ok(Json::Object(fields));
         }
-        match e.kind.as_str() {
-            "RegisterRepository" => {
+        match kind {
+            RequestKind::RegisterRepository => {
                 let slice = self.config.slice.as_ref().ok_or("SliceNotConfigured")?;
-                let path = string(get(p, "path")?)?;
-                if path.len() > 4096 || path.contains('\0') {
-                    return Err("InvalidRepositoryPath".into());
-                }
+                let c = protocol::RegisterRepositoryCommand::parse(p)?;
                 let root = DisposableRoot::inspect(&slice.disposable_root)?;
-                let repository = root.repository(Path::new(path))?;
+                let repository = root.repository(Path::new(&c.path))?;
                 self.engine
                     .execute(request, move |tx| {
                         let id = tx.register_local_repository(&repository)?;
@@ -701,32 +634,23 @@ impl Service {
                     .map(receipt)
                     .map_err(rejected)
             }
-            "ImportBundle" => {
-                let subjects = SliceSubjects {
-                    prd: subject("prd_id")?,
-                    adr: subject("adr_id")?,
-                    plan: subject("plan_id")?,
-                    validation: subject("validation_id")?,
-                };
-                let prd = PreparedPrd::import(string(get(p, "prd")?)?.as_bytes())
-                    .map_err(|e| format!("InvalidPrd: {e:?}"))?;
-                let validation = ValidationPlan::import(string(get(p, "validation")?)?.as_bytes())
-                    .map_err(|e| format!("InvalidValidationPlan: {e}"))?;
-                let provider = match string(get(p, "provider")?)? {
-                    "Codex" => ProviderKind::Codex,
-                    "ClaudeCode" => ProviderKind::ClaudeCode,
-                    _ => return Err("UnknownProvider".into()),
-                };
+            RequestKind::ImportBundle => {
+                let c = protocol::ImportBundleCommand::parse(p)?;
                 let bundle = FeatureBundle::new(
-                    FeatureId(id(get(p, "feature")?)?),
-                    subjects,
-                    prd,
-                    string(get(p, "adr")?)?.to_owned(),
-                    id(get(p, "step")?)?,
-                    RepositoryId(id(get(p, "repository")?)?),
-                    string(get(p, "base")?)?.to_owned(),
-                    provider,
-                    validation,
+                    c.feature,
+                    SliceSubjects {
+                        prd: c.prd_id,
+                        adr: c.adr_id,
+                        plan: c.plan_id,
+                        validation: c.validation_id,
+                    },
+                    PreparedPrd::from_document(&c.prd),
+                    c.adr,
+                    c.step,
+                    c.repository,
+                    c.base,
+                    c.provider,
+                    c.validation,
                 )
                 .map_err(|e| format!("InvalidBundle: {e}"))?;
                 self.engine
@@ -734,34 +658,26 @@ impl Service {
                     .map(receipt)
                     .map_err(rejected)
             }
-            "Start" => {
+            RequestKind::Start => {
+                let c = protocol::StartCommand::parse(p)?;
                 let start = StartRequest {
                     attempt: e.request,
                     subjects: SliceSubjects {
-                        prd: subject("prd")?,
-                        adr: subject("adr")?,
-                        plan: subject("plan")?,
-                        validation: subject("validation")?,
+                        prd: c.prd,
+                        adr: c.adr,
+                        plan: c.plan,
+                        validation: c.validation,
                     },
                     step: NodeRef {
-                        id: id(get(p, "step")?)?,
+                        id: c.step,
                         revision: Revision(1),
                     },
                 };
                 self.start(request, start)
             }
-            "RecoveryResolve" => {
-                if string(get(p, "digest")?)? != self.recovery.digest() {
-                    return Err("StaleInspection: inspect again".into());
-                }
-                let attempt = id(get(p, "attempt")?)?;
-                let choice = match string(get(p, "choice")?)? {
-                    "ValidateOutput" => RecoveryChoice::ValidateOutput,
-                    "ContinueWithHistory" => RecoveryChoice::ContinueWithHistory,
-                    "ContinueFreshContext" => RecoveryChoice::ContinueFreshContext,
-                    "Hold" => RecoveryChoice::Hold,
-                    _ => return Err("UnknownChoice".into()),
-                };
+            RequestKind::RecoveryResolve => {
+                let protocol::RecoveryResolveCommand { attempt, choice } =
+                    protocol::RecoveryResolveCommand::parse(p, self.recovery.digest())?;
                 let inspection = self.recovery.clone();
                 // The core decides what the inspected OS and repository evidence offers;
                 // a choice it does not offer is refused there, whatever the human sent.
@@ -784,9 +700,9 @@ impl Service {
             }
             // P2-03. The command names the sealed candidate digest the human is looking
             // at; the validation command itself comes only from the approved plan.
-            "Validate" => {
-                let attempt = id(get(p, "attempt")?)?;
-                let candidate = digest(get(p, "candidate")?)?;
+            RequestKind::Validate => {
+                let protocol::ValidateCommand { attempt, candidate } =
+                    protocol::ValidateCommand::parse(p)?;
                 if !self.workers.reap() {
                     return Err("CapacityOne: a run or validation is active".into());
                 }
@@ -833,12 +749,15 @@ impl Service {
                 fields.push(("validation".into(), text("started")));
                 Ok(Json::Object(fields))
             }
-            "CandidateDecision" => {
-                let attempt = id(get(p, "attempt")?)?;
-                let candidate = digest(get(p, "candidate")?)?;
-                match (string(get(p, "action")?)?, get(p, "receipt")?) {
-                    ("Accept", receipt_seq) => {
-                        let reviewed = EventSeq(uint(receipt_seq).map_err(|_| "ReceiptRequired")?);
+            RequestKind::CandidateDecision => {
+                let protocol::CandidateDecisionCommand {
+                    attempt,
+                    candidate,
+                    verdict,
+                } = protocol::CandidateDecisionCommand::parse(p)?;
+                match verdict {
+                    CandidateVerdict::Accept { receipt: reviewed } => {
+                        let reviewed = EventSeq(reviewed);
                         // The candidate must still be the sealed one on disk, now.
                         verify_sealed_candidate(&self.engine, attempt, &candidate)
                             .map_err(|why| format!("CandidateChanged: {why}"))?;
@@ -852,7 +771,7 @@ impl Service {
                             .map(receipt)
                             .map_err(rejected)
                     }
-                    ("Reject", Json::Null) => self
+                    CandidateVerdict::Reject => self
                         .engine
                         .execute(request, move |tx| {
                             tx.reject_candidate(attempt, &candidate, origin)?;
@@ -860,13 +779,10 @@ impl Service {
                         })
                         .map(receipt)
                         .map_err(rejected),
-                    _ => Err("UnknownDecision".into()),
                 }
             }
-            "RecoveryStart" => {
-                if string(get(p, "digest")?)? != self.recovery.digest() {
-                    return Err("StaleInspection: inspect again".into());
-                }
+            RequestKind::RecoveryStart => {
+                protocol::reviewed_inspection(p, self.recovery.digest())?;
                 let inspection = self.recovery.clone();
                 self.engine
                     .execute(request, move |tx| {
@@ -882,20 +798,12 @@ impl Service {
     /// P2-03 read-only review queries. Changed paths and the diff are derived from the
     /// repository each time, after the sealed digest is re-checked; nothing here reads a
     /// path, file list or test result supplied by a provider or by the client.
-    fn review_query(&mut self, e: &Envelope) -> Result<Json, String> {
+    fn review_query(&mut self, kind: RequestKind, e: &Envelope) -> Result<Json, String> {
         let p = &e.payload;
-        let fields: &[&str] = match e.kind.as_str() {
-            "Candidate" => &["attempt"],
-            "CandidateChanges" => &["attempt", "candidate", "offset", "limit"],
-            "CandidateDiff" => &["attempt", "candidate", "offset"],
-            _ => &["attempt", "receipt", "offset"],
-        };
-        if !matches!(p, Json::Object(f) if f.len() == fields.len()
-            && fields.iter().all(|k| f.iter().any(|(name, _)| name == k)))
-        {
+        if !kind.shaped(p) {
             return Err("InvalidPayload: unexpected or missing fields".into());
         }
-        let attempt = id(get(p, "attempt")?)?;
+        let attempt = protocol::attempt(p)?;
         let mut reader = self.engine.reader().map_err(|e| e.to_string())?;
         let page = |body: &str, offset: u64, complete: bool| {
             let total = body.chars().count() as u64;
@@ -912,17 +820,17 @@ impl Service {
                 ("text", text(chunk)),
             ])
         };
-        match e.kind.as_str() {
-            "Candidate" => reader
+        match kind {
+            RequestKind::Candidate => reader
                 .read(|v| v.ipc_candidate(attempt))
                 .map_err(|e| e.to_string()),
-            "CandidateChanges" => {
-                let candidate = digest(get(p, "candidate")?)?;
-                let offset = usize::try_from(uint(get(p, "offset")?)?).map_err(|_| "Offset")?;
-                let limit = uint(get(p, "limit")?)?;
-                if limit == 0 || limit > u64::from(MAX_PAGE) {
-                    return Err("Limit".into());
-                }
+            RequestKind::CandidateChanges => {
+                let protocol::CandidateChangesQuery {
+                    candidate,
+                    offset,
+                    limit,
+                    ..
+                } = protocol::CandidateChangesQuery::parse(p)?;
                 let plan = reader
                     .read(|v| v.attempt_validation_plan(attempt))
                     .map_err(|e| e.to_string())?;
@@ -964,7 +872,7 @@ impl Service {
                                 .changes()
                                 .iter()
                                 .skip(offset)
-                                .take(limit as usize)
+                                .take(limit)
                                 .map(|c| {
                                     object([
                                         (
@@ -984,17 +892,21 @@ impl Service {
                     ),
                 ]))
             }
-            "CandidateDiff" => {
-                let candidate = digest(get(p, "candidate")?)?;
-                let offset = uint(get(p, "offset")?)?;
+            RequestKind::CandidateDiff => {
+                let protocol::CandidateDiffQuery {
+                    candidate, offset, ..
+                } = protocol::CandidateDiffQuery::parse(p)?;
                 drop(reader);
                 let (diff, complete) = candidate_diff(&self.engine, attempt, &candidate)
                     .map_err(|why| format!("CandidateUnavailable: {why}"))?;
                 Ok(page(&diff, offset, complete))
             }
             _ => {
-                let event = uint(get(p, "receipt")?)?;
-                let offset = uint(get(p, "offset")?)?;
+                let protocol::ValidationReportQuery {
+                    receipt: event,
+                    offset,
+                    ..
+                } = protocol::ValidationReportQuery::parse(p)?;
                 let found = reader
                     .read(|v| v.validation_receipts(attempt))
                     .map_err(|e| e.to_string())?
@@ -1148,18 +1060,6 @@ impl Service {
         .map(Some)
     }
 }
-/// A lowercase SHA-256 digest as protocol text.
-fn digest(value: &Json) -> Result<String, String> {
-    let s = string(value)?;
-    if s.len() != 64
-        || !s
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err("expected a SHA-256 digest".into());
-    }
-    Ok(s.to_owned())
-}
 fn receipt(r: Receipt) -> Json {
     object([
         ("acknowledged", Json::Bool(true)),
@@ -1209,20 +1109,7 @@ fn status_json(s: CloseStatus) -> Json {
 }
 
 fn control(e: &Envelope) -> bool {
-    matches!(
-        e.kind.as_str(),
-        "PrepareClose"
-            | "CancelClose"
-            | "ConfirmClose"
-            | "CancelAttempt"
-            | "HumanDecision"
-            | "Hello"
-            | "Start"
-            | "RecoveryResolve"
-            | "RecoveryStart"
-            | "Validate"
-            | "CandidateDecision"
-    )
+    RequestKind::named(&e.kind).is_some_and(|k| k.spec().control)
 }
 
 /// Dedicated bounded input/output channels. A full bulk queue returns Busy; it cannot

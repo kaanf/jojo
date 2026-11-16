@@ -193,7 +193,7 @@ final class UITestDriver {
             return model.workspace.recovery.count == Int(condition.dropFirst("recovery=".count))
         case _ where condition.hasPrefix("choices="):
             // The choices the helper offers for the first listed subject, e.g. `choices=[Hold]`.
-            return model.workspace.recovery.first?.assessment.contains("choices: " + condition.dropFirst("choices=".count)) == true
+            return model.workspace.recovery.first?.structured?.choicesText == String(condition.dropFirst("choices=".count))
         case _ where condition.hasPrefix("admission="):
             return model.workspace.admission == condition.dropFirst("admission=".count)
         default:

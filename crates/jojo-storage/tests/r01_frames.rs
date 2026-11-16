@@ -164,8 +164,16 @@ fn record(h: &mut H) {
     h.send("snapshot before hello", "Snapshot", object([]));
     h.at("hello 1.0", 0, "Hello", object([]));
     h.at("hello 1.2", 2, "Hello", object([("junk", n(1))]));
-    h.send("close command while incompatible", "CancelClose", object([]));
-    h.send("decision while incompatible", "HumanDecision", decision(&[]));
+    h.send(
+        "close command while incompatible",
+        "CancelClose",
+        object([]),
+    );
+    h.send(
+        "decision while incompatible",
+        "HumanDecision",
+        decision(&[]),
+    );
     h.send("slice command while incompatible", "Start", object([]));
     h.send("hello 1.1", "Hello", object([]));
     let mut other = h.envelope(1, "Hello", object([]));
@@ -274,7 +282,11 @@ fn record(h: &mut H) {
         object([("after", n(100_000)), ("limit", n(1))]),
     );
     h.send("event detail seq", "EventDetail", object([("seq", bad())]));
-    h.send("event detail offset", "EventDetail", object([("seq", n(1))]));
+    h.send(
+        "event detail offset",
+        "EventDetail",
+        object([("seq", n(1))]),
+    );
     h.send(
         "log two faults",
         "Log",
@@ -423,7 +435,10 @@ fn record(h: &mut H) {
         ("decision action type", vec![("action", n(1))]),
         ("decision action name", vec![("action", text("Nope"))]),
         ("decision on nothing", vec![]),
-        ("decision revoke on nothing", vec![("action", text("Revoke"))]),
+        (
+            "decision revoke on nothing",
+            vec![("action", text("Revoke"))],
+        ),
     ] {
         let mut e = h.envelope(1, "HumanDecision", decision(&overrides));
         e.revision = Some(1);
@@ -432,7 +447,11 @@ fn record(h: &mut H) {
 
     // Close commands. PrepareClose itself is not sent: this helper stays open.
     h.send("cancel close empty", "CancelClose", object([]));
-    h.send("cancel close bad", "CancelClose", object([("ticket", bad())]));
+    h.send(
+        "cancel close bad",
+        "CancelClose",
+        object([("ticket", bad())]),
+    );
     h.send(
         "cancel close unknown",
         "CancelClose",
@@ -495,10 +514,7 @@ fn record(h: &mut H) {
             "import identities first",
             vec![("prd_id", bad()), ("adr_id", bad()), ("prd", text("{"))],
         ),
-        (
-            "import adr id",
-            vec![("adr_id", bad()), ("plan_id", bad())],
-        ),
+        ("import adr id", vec![("adr_id", bad()), ("plan_id", bad())]),
         (
             "import plan id",
             vec![("plan_id", bad()), ("validation_id", bad())],
@@ -535,7 +551,10 @@ fn record(h: &mut H) {
             "import feature before adr",
             vec![("feature", bad()), ("adr", n(1))],
         ),
-        ("import adr before step", vec![("adr", n(1)), ("step", bad())]),
+        (
+            "import adr before step",
+            vec![("adr", n(1)), ("step", bad())],
+        ),
         (
             "import step before repository",
             vec![("step", bad()), ("repository", bad())],
@@ -600,7 +619,12 @@ fn record(h: &mut H) {
         "RecoveryStart",
         object([("digest", text("stale"))]),
     );
-    h.at("inspect 1.1", 1, "RecoveryInspect", object([("junk", n(1))]));
+    h.at(
+        "inspect 1.1",
+        1,
+        "RecoveryInspect",
+        object([("junk", n(1))]),
+    );
     let digest = {
         let r = h.service.request(&Envelope {
             major: 1,
@@ -721,7 +745,11 @@ fn record(h: &mut H) {
         "Candidate",
         object([("attempt", hex(9)), ("extra", n(1))]),
     );
-    h.send("candidate unknown", "Candidate", object([("attempt", hex(9))]));
+    h.send(
+        "candidate unknown",
+        "Candidate",
+        object([("attempt", hex(9))]),
+    );
     let changes = |attempt: Json, candidate: Json, offset: Json, limit: Json| {
         object([
             ("attempt", attempt),
@@ -790,7 +818,11 @@ fn record(h: &mut H) {
         diff(hex(9), sha('a'), n(0)),
     );
     let report = |attempt: Json, receipt: Json, offset: Json| {
-        object([("attempt", attempt), ("receipt", receipt), ("offset", offset)])
+        object([
+            ("attempt", attempt),
+            ("receipt", receipt),
+            ("offset", offset),
+        ])
     };
     h.send("report empty", "ValidationReport", object([]));
     h.send(

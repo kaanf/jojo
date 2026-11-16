@@ -10,16 +10,17 @@ Read this first in a new session. Updated 2026-11-16. Update it whenever a step 
 | Phase 2 (P2-01 … P2-05) | Done. The one live Codex attempt ran; the human accepted its candidate on 2026-11-16. |
 | **M0** (close-out of Phase 2) | **Done** |
 | **Refactor R-03** (one data-driven gate) | **Done**, with the open points below |
-| **Refactor R-01** (typed protocol messages) | **Next. Not started.** |
+| **Refactor R-01** (typed protocol messages) | **Done** (2026-11-16). Details: [DESIGN_ROADMAP_DIFFERENCES.md](DESIGN_ROADMAP_DIFFERENCES.md), E4 |
+| Refactor R-02 (split the long functions) | Optional, not started. Needs its own GO |
 | Design wave 1, M1 … M6 | Not started |
 
-## Next step: Refactor R-01
+## Next step: design wave 1 and M1, or Refactor R-02 first
 
-Defined in [REFACTOR_PLAN.md](../planning/REFACTOR_PLAN.md), section R-01. In short: one typed definition of each protocol message in `jojo-domain`, `service.rs` dispatching on an enum, the recovery assessment sent as structured fields in addition to the existing text, and the Swift app reading those fields instead of matching debug text. Behaviour must not change; the existing protocol tests are the oracle.
+The human chooses. The roadmap order is design wave 1 and M1 (Claude Code adapter) in parallel, then M2 (Feature Chat lead agent), M3 (project record and plan runner), M4 (validation, review, repair), M5 (push and draft PR). The order and the reasons are in [SOURCE_FIRST_REUSE_MAP.md](SOURCE_FIRST_REUSE_MAP.md), section 3.
 
-Before starting, ask the human once more whether to `git init` (asked three times, not yet answered). Without it, take a backup as was done before M0.
+Refactor R-02 ([REFACTOR_PLAN.md](../planning/REFACTOR_PLAN.md)) splits `supervise`, `spawn_guarded`, `handle` and `slice_command`. R-01 made the helper part cheap (`service.rs` now matches on `RequestKind`, one arm per request). It is not required for M1. Ask before starting it.
 
-After R-01: design wave 1 and M1 (Claude Code adapter) in parallel, then M2 (Feature Chat lead agent), M3 (project record and plan runner), M4 (validation, review, repair), M5 (push and draft PR). The order and the reasons are in [SOURCE_FIRST_REUSE_MAP.md](SOURCE_FIRST_REUSE_MAP.md), section 3.
+What R-01 left for a later step: the Recovery tab still shows the `assessment` debug text and offers all four choice buttons for every subject. The structured fields (`RecoveryRow.structured`) are there to show blockers and only the offered choices; that is a visible change and belongs to design wave 1.
 
 ## The three documents
 
@@ -38,7 +39,15 @@ python3 scripts/verify.py              # everything, including 17 GUI scenarios 
 python3 scripts/verify.py --skip gui   # without the GUI stage; result is passed but complete: false
 ```
 
-Requirements live in `scripts/gates/current.json`; the result goes to `verification/gate-m0-result.json` and `.log`. Last full run (2026-11-16): 97 script tests, 396 Rust tests, 35 Swift tests, 17 GUI scenarios, no failures.
+Requirements live in `scripts/gates/current.json`; the result goes to `verification/gate-r01-result.json` and `.log` (the M0 result stays in `gate-m0-result.json`). Last full run (2026-11-16, after R-01): 104 script tests, 403 Rust tests, 39 Swift tests, 17 GUI scenarios, no failures. Rust test names in `required` are written as the test runner prints them, with the module path for unit tests (`protocol::tests::…`).
+
+The twelve P2-04 rehearsal scenarios are run by hand (they passed after R-01; evidence in `~/JojoDisposable/r01-rehearsal/20261116T034931Z`):
+
+```sh
+R=~/JojoDisposable/r01-rehearsal/$(date -u +%Y%m%dT%H%M%SZ); mkdir -p $R; chmod 700 $R
+cd scripts && python3 gui_p2_04.py --app ../macos/JojoApp/.build/debug/JojoApp --helper ../target/debug/jojo-helper \
+  --fixture ../target/debug/jojo-codex-fixture --root $R --out $R/result.json
+```
 
 When a step adds tests, raise the minimums and add the new test names to `required` in the gate file. The old `scripts/verify_p*.py` are historical and are not run.
 
@@ -54,11 +63,10 @@ When a step adds tests, raise the minimums and add the new test names to `requir
 
 ## Open decisions
 
-1. `git init` for the Jojo project.
-2. Standing authorization for runs in registered repositories, instead of a GO per step and per live attempt. **No further live provider run is authorized.**
-3. Whether a write the provider's own sandbox allows (`/tmp`) stays a stop condition.
-4. Parallel capacity for the demo (2 proposed; the design shows 3 overall, 2 per repository).
-5. A written record of the weft owner's permission.
+1. Standing authorization for runs in registered repositories, instead of a GO per step and per live attempt. **No further live provider run is authorized.**
+2. Whether a write the provider's own sandbox allows (`/tmp`) stays a stop condition.
+3. Parallel capacity for the demo (2 proposed; the design shows 3 overall, 2 per repository).
+4. A written record of the weft owner's permission.
 
 ## Known gaps
 
@@ -70,7 +78,9 @@ When a step adds tests, raise the minimums and add the new test names to `requir
 
 ## Working notes for an assistant
 
-- The project is not a Git repository. Backup taken before M0: `~/Projects/jojo-backups/pre-m0-20261115T165918Z.tar.gz`.
+- The project is a local Git repository since 2026-11-16 (branch `main`, no remote; the human chose `git init`). `1f6d981` is the tree before R-01. `research/upstream` and `__pycache__` are excluded in `.git/info/exclude`, not in `.gitignore`, because the historical gate scripts hash `.gitignore`. Nothing is pushed without the human. Older backup, before M0: `~/Projects/jojo-backups/pre-m0-20261115T165918Z.tar.gz`.
+- Protocol changes: add the request to `SPECS` in `crates/jojo-domain/src/protocol.rs` and, if the app sends it, to `Request` in `Protocol.swift`; `scripts/tests/test_protocol_fields.py` fails until both agree. `crates/jojo-storage/tests/r01_frames.rs` pins 168 answers; when an answer changes on purpose, change that line of `EXPECTED` and say so in the change log.
+- The boundary guard treats the bare word `Command` as a process launch anywhere outside the process crates, in type and variant names too (`Class::Mutation` is named that way for this reason).
 - The architecture boundary guard (`scripts/check_p1_01_boundaries.py`) forbids `include_str!`, `unsafe`, FFI, network types and filesystem access outside the allowed crates, in tests too. Run `python3 -m unittest discover -s scripts/tests` after touching Rust or scripts.
 - Tests run inside the gate's sandbox cannot execute `/bin/ps`. Use the injected inspector (`inspector()`, `JOJO_TEST_PS`), never the free `verify_identity`. A test that passes with plain `cargo test` can still fail in the gate.
 - Fourteen historical reports and the nine `research/upstream` pins are hash-checked by the gate. Add new documents; do not edit those.

@@ -82,7 +82,7 @@ public final class HelperClient {
             self.epoch = epoch
             self.connection = compatible ? .ready(epoch: epoch) : .incompatible(epoch: epoch)
         }
-        write(Envelope(session: session, epoch: 0, id: id, type: "Hello"))
+        write(Envelope(session: session, epoch: 0, id: id, type: Request.Hello.rawValue))
     }
 
     public func query(_ type: String, _ payload: [String: JSON] = [:], _ completion: @escaping (Reply) -> Void) {
@@ -91,6 +91,24 @@ public final class HelperClient {
             return completion(.unanswered("helper unavailable"))
         }
         send(type, payload, nil, completion)
+    }
+
+    /// A typed query. A payload that is not exactly the request's fields is a client
+    /// defect: it is answered here as an error and no frame is sent.
+    public func query(_ request: Request, _ payload: [String: JSON] = [:], _ completion: @escaping (Reply) -> Void) {
+        guard request.accepts(payload) else { return completion(.error("InvalidClientPayload: \(request.rawValue)")) }
+        query(request.rawValue, payload, completion)
+    }
+
+    /// A typed command; see `query(_:_:_:)`. Nothing is sent or left outstanding on a mismatch.
+    @discardableResult
+    public func command(_ request: Request, _ payload: [String: JSON] = [:], revision: Int64? = nil,
+                        _ completion: @escaping (Reply) -> Void) -> String? {
+        guard request.accepts(payload) else {
+            completion(.error("InvalidClientPayload: \(request.rawValue)"))
+            return nil
+        }
+        return command(request.rawValue, payload, revision: revision, completion)
     }
 
     /// Returns the command identity, or nil when no mutation may be sent.

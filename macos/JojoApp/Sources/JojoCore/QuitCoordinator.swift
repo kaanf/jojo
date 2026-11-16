@@ -220,7 +220,7 @@ public final class QuitCoordinator {
         }
         phase = .cancelling(ticket: t)
         finishReply(false)
-        client.command("CancelClose", ["ticket": .text(t)]) { [weak self] reply in
+        client.command(.CancelClose, ["ticket": .text(t)]) { [weak self] reply in
             guard let self, case .cancelling = self.phase else { return }
             switch reply {
             case .response:
@@ -241,7 +241,7 @@ public final class QuitCoordinator {
             return
         }
         phase = .confirming(ticket: t)
-        client.command("ConfirmClose", ["ticket": .text(t)]) { [weak self] reply in
+        client.command(.ConfirmClose, ["ticket": .text(t)]) { [weak self] reply in
             guard let self, case .confirming = self.phase else { return }
             switch reply {
             case .response:
@@ -343,7 +343,7 @@ public final class QuitCoordinator {
         var remaining = Set(client.outstandingCommands.keys)
         var unsettled: [String] = []
         for id in remaining.sorted() {
-            client.query("Receipt", ["command": .text(id)]) { [weak self] reply in
+            client.query(.Receipt, ["command": .text(id)]) { [weak self] reply in
                 guard let self, case .reconciling = self.phase else { return }
                 remaining.remove(id)
                 if case .response(let p) = reply, p["acknowledged"] == .bool(true), p["command"] == .text(id) {
@@ -366,7 +366,7 @@ public final class QuitCoordinator {
         ticket = nil
         readyWithoutTicket = false
         phase = .preparing
-        let sent = client.command("PrepareClose", [:]) { [weak self] reply in
+        let sent = client.command(.PrepareClose) { [weak self] reply in
             guard let self, case .preparing = self.phase else { return }
             switch reply {
             case .response(let p):
@@ -395,7 +395,7 @@ public final class QuitCoordinator {
     private func pollStatus() {
         guard !statusInFlight else { return }
         statusInFlight = true
-        client.query("CloseStatus") { [weak self] reply in
+        client.query(.CloseStatus) { [weak self] reply in
             guard let self else { return }
             self.statusInFlight = false
             if case .response(let p) = reply { self.applyStatus(p) }

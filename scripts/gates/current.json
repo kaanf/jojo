@@ -1,10 +1,14 @@
 {
-  "artifact": "gate-m0",
-  "scope": "Tree after M0 (escaped-descendant stop, real Codex 0.169.0 parser test, ownership lock release). Offline; fixture agents only; no live provider execution, credential access, push or merge.",
-  "boundary_tests_min": 87,
+  "artifact": "gate-r01",
+  "scope": "Tree after Refactor R-01 (typed protocol messages; Recovery rows carry the assessment as structured fields for protocol 1.1). Offline; fixture agents only; no live provider execution, credential access, push or merge.",
+  "boundary_tests_min": 104,
   "rust": {
-    "passed_min": 396,
+    "passed_min": 403,
     "required": [
+      "r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages",
+      "r01_recovery_rows_carry_the_assessment_as_structured_fields_for_1_1_only",
+      "protocol::tests::r01_table_is_in_kind_order_with_unique_names_and_fields",
+      "protocol::tests::r01_hello_lists_and_minor_gating_are_the_1_0_and_1_1_vocabularies",
       "m0_real_0_169_0_stream_normalizes_to_one_successful_turn",
       "t09_known_escaped_child_is_signalled_after_an_identity_check_and_confirmed_absent",
       "p2_04_1_a_descendant_that_left_the_group_is_stopped_by_the_guard_through_the_parent_chain",
@@ -29,7 +33,7 @@
     ]
   },
   "swift": {
-    "tests_min": 35
+    "tests_min": 39
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,

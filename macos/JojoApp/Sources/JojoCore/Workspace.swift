@@ -76,7 +76,15 @@ public struct RecoveryRow: Equatable, Sendable, Identifiable {
     /// Worktree path, durable offsets and process findings (evidence locations).
     public let findings: String
     public let detailComplete: Bool
+    /// The assessment as structured fields (protocol 1.1); nil from an older helper.
+    public let structured: RecoveryAssessment?
     public var id: String { attempt }
+
+    public init(attempt: String, assessment: String, findings: String, detailComplete: Bool,
+                structured: RecoveryAssessment? = nil) {
+        (self.attempt, self.assessment, self.findings) = (attempt, assessment, findings)
+        (self.detailComplete, self.structured) = (detailComplete, structured)
+    }
 }
 
 /// A reviewed recovery choice as protocol 1.1 names it. Which of them is permitted for a
@@ -156,7 +164,7 @@ public final class WorkspaceModel {
 
     /// Snapshot pages share one committed cursor; SnapshotChanged discards and reloads.
     private func loadSnapshot(after: String, cursor: Int64?, collected: [SnapshotRow], attempt: Int) {
-        client.query("Snapshot", ["section": .text("aggregates"), "after": .text(after),
+        client.query(.Snapshot, ["section": .text("aggregates"), "after": .text(after),
                                   "cursor": cursor.map(JSON.int) ?? .null, "limit": .int(8)]) { [weak self] reply in
             guard let self else { return }
             switch reply {
@@ -185,11 +193,12 @@ public final class WorkspaceModel {
     }
 
     private func loadRecovery(offset: Int, collected: [RecoveryRow]) {
-        client.query("Recovery", ["offset": .int(Int64(offset)), "limit": .int(8)]) { [weak self] reply in
+        client.query(.Recovery, ["offset": .int(Int64(offset)), "limit": .int(8)]) { [weak self] reply in
             guard let self, case .response(let p) = reply else { return }
             let page = (p["rows"]?.items ?? []).compactMap { r -> RecoveryRow? in
                 guard let a = r["attempt"]?.string, let s = r["assessment"]?.string, let f = r["findings"]?.string else { return nil }
-                return RecoveryRow(attempt: a, assessment: s, findings: f, detailComplete: r["detail_complete"] == .bool(true))
+                return RecoveryRow(attempt: a, assessment: s, findings: f, detailComplete: r["detail_complete"] == .bool(true),
+                                   structured: RecoveryAssessment(row: r))
             }
             if page.count == 8, collected.count < 256 {
                 return self.loadRecovery(offset: offset + 8, collected: collected + page)
@@ -203,7 +212,7 @@ public final class WorkspaceModel {
     /// Committed events after the snapshot cursor; any new event reloads the projection.
     public func pollEvents() {
         guard let seq = snapshotSeq, !loading else { return }
-        client.query("Events", ["after": .int(seq), "limit": .int(1)]) { [weak self] reply in
+        client.query(.Events, ["after": .int(seq), "limit": .int(1)]) { [weak self] reply in
             if case .list(let rows) = reply, !rows.isEmpty { self?.refresh() }
         }
     }
@@ -214,7 +223,7 @@ public final class WorkspaceModel {
             onChange?()
             return
         }
-        client.query("ReviewBundle", ["subject": .text(subject)]) { [weak self] reply in
+        client.query(.ReviewBundle, ["subject": .text(subject)]) { [weak self] reply in
             guard let self else { return }
             switch reply {
             case .response(let p):
@@ -238,7 +247,7 @@ public final class WorkspaceModel {
         reviewStale = true
         status = "\(action.rawValue) sent; awaiting acknowledgement"
         onChange?()
-        client.command("HumanDecision", bundle.decision(action), revision: bundle.revision) { [weak self] reply in
+        client.command(.HumanDecision, bundle.decision(action), revision: bundle.revision) { [weak self] reply in
             guard let self else { return }
             switch reply {
             case .response(let p):
@@ -254,7 +263,7 @@ public final class WorkspaceModel {
 
     /// A fresh helper inspection; resolution and the reviewed start bind its digest.
     public func inspectRecovery() {
-        client.query("RecoveryInspect") { [weak self] reply in
+        client.query(.RecoveryInspect) { [weak self] reply in
             guard let self else { return }
             switch reply {
             case .response(let p):
@@ -273,7 +282,7 @@ public final class WorkspaceModel {
     /// evidence does not offer; a refusal changes nothing and is never retried here.
     public func resolveRecovery(_ attempt: String, _ choice: RecoveryChoice) {
         guard Identity.valid(attempt), !recoveryDigest.isEmpty else { return }
-        slice("RecoveryResolve", ["digest": .text(recoveryDigest), "attempt": .text(attempt),
+        slice(.RecoveryResolve, ["digest": .text(recoveryDigest), "attempt": .text(attempt),
                                   "choice": .text(choice.rawValue)],
               sent: "Recovery choice \(choice.rawValue) sent for \(attempt)") { p in
             "Recovery choice \(choice.rawValue) committed for \(attempt): \(p["response"]?.string ?? "")"
@@ -283,7 +292,7 @@ public final class WorkspaceModel {
     /// The human's start after reviewing the inspection on screen: opens admission only.
     public func startAfterRecovery() {
         guard !recoveryDigest.isEmpty else { return }
-        slice("RecoveryStart", ["digest": .text(recoveryDigest)], sent: "Reviewed start sent") { _ in
+        slice(.RecoveryStart, ["digest": .text(recoveryDigest)], sent: "Reviewed start sent") { _ in
             "Admission open after reviewed recovery; nothing was started"
         } refused: { "Reviewed start refused (\($0)); admission is unchanged" }
     }
@@ -295,12 +304,12 @@ public final class WorkspaceModel {
             onChange?()
             return
         }
-        slice("Start", payload, sent: "Start sent; awaiting acknowledgement") { p in
+        slice(.Start, payload, sent: "Start sent; awaiting acknowledgement") { p in
             "Start accepted for attempt \(p["attempt"]?.string ?? "?") (\(p["dispatch"]?.string ?? "?")); follow the run in Runs"
         } refused: { "Start refused (\($0)); nothing was started" }
     }
 
-    private func slice(_ type: String, _ payload: [String: JSON], sent: String,
+    private func slice(_ type: Request, _ payload: [String: JSON], sent: String,
                        accepted: @escaping ([String: JSON]) -> String, refused: @escaping (String) -> String) {
         guard !commandPending else {
             status = "A command is still unanswered; it will be reconciled by receipt, not sent again"
@@ -317,27 +326,27 @@ public final class WorkspaceModel {
                 self.commandPending = false
                 self.status = accepted(p)
                 self.refresh()
-                if type.hasPrefix("Recovery") { self.inspectRecoveryQuietly() }
+                if type == .RecoveryResolve || type == .RecoveryStart { self.inspectRecoveryQuietly() }
             case .error(let code):
                 self.commandPending = false
                 self.status = refused(code)
             case .null, .list, .unanswered:
                 // Stays pending: an unknown outcome is reconciled by receipt, never resent.
-                self.status = "\(type) outcome unknown; it will be reconciled by receipt, not resent"
+                self.status = "\(type.rawValue) outcome unknown; it will be reconciled by receipt, not resent"
             }
             self.onChange?()
         }
     }
 
     private func inspectRecoveryQuietly() {
-        client.query("RecoveryInspect") { [weak self] reply in
+        client.query(.RecoveryInspect) { [weak self] reply in
             if case .response = reply { self?.loadRecovery(offset: 0, collected: []) }
         }
     }
 
     public func cancelAttempt(_ attempt: String) {
         guard Identity.valid(attempt) else { return }
-        client.command("CancelAttempt", ["attempt": .text(attempt)]) { [weak self] reply in
+        client.command(.CancelAttempt, ["attempt": .text(attempt)]) { [weak self] reply in
             guard let self else { return }
             switch reply {
             case .response:
@@ -432,7 +441,7 @@ extension WorkspaceModel {
         }
         candidateLoad += 1
         let load = candidateLoad
-        client.query("Candidate", ["attempt": .text(attempt)]) { [weak self] reply in
+        client.query(.Candidate, ["attempt": .text(attempt)]) { [weak self] reply in
             guard let self, load == self.candidateLoad else { return }
             guard case .response(let p) = reply, let review = CandidateReview(p) else {
                 self.candidate = nil
@@ -448,12 +457,12 @@ extension WorkspaceModel {
             self.onChange?()
             if let digest = review.candidate {
                 self.loadChanges(load, attempt, digest, offset: 0, collected: [])
-                self.loadText("CandidateDiff", ["attempt": .text(attempt), "candidate": .text(digest)], load, offset: 0, collected: "") {
+                self.loadText(.CandidateDiff, ["attempt": .text(attempt), "candidate": .text(digest)], load, offset: 0, collected: "") {
                     self.diff = $0
                 }
             }
             if let receipt = review.receipt {
-                self.loadText("ValidationReport", ["attempt": .text(attempt), "receipt": .int(receipt)], load, offset: 0, collected: "") {
+                self.loadText(.ValidationReport, ["attempt": .text(attempt), "receipt": .int(receipt)], load, offset: 0, collected: "") {
                     self.validationReport = $0
                 }
             } else {
@@ -464,7 +473,7 @@ extension WorkspaceModel {
     }
 
     private func loadChanges(_ load: Int, _ attempt: String, _ digest: String, offset: Int64, collected: [ChangedFile]) {
-        client.query("CandidateChanges", ["attempt": .text(attempt), "candidate": .text(digest), "offset": .int(offset),
+        client.query(.CandidateChanges, ["attempt": .text(attempt), "candidate": .text(digest), "offset": .int(offset),
                                           "limit": .int(8)]) { [weak self] reply in
             guard let self, load == self.candidateLoad else { return }
             switch reply {
@@ -493,7 +502,7 @@ extension WorkspaceModel {
         }
     }
 
-    private func loadText(_ type: String, _ payload: [String: JSON], _ load: Int, offset: Int64, collected: String,
+    private func loadText(_ type: Request, _ payload: [String: JSON], _ load: Int, offset: Int64, collected: String,
                           _ done: @escaping (String) -> Void) {
         var page = payload
         page["offset"] = .int(offset)
@@ -520,7 +529,7 @@ extension WorkspaceModel {
             onChange?()
             return
         }
-        client.query("Log", ["attempt": .text(attempt), "sequence": .int(sequence), "offset": .int(0)]) { [weak self] reply in
+        client.query(.Log, ["attempt": .text(attempt), "sequence": .int(sequence), "offset": .int(0)]) { [weak self] reply in
             guard let self, load == self.candidateLoad else { return }
             var all = collected
             if case .response(let p) = reply, let text = p["text"]?.string {
@@ -538,7 +547,7 @@ extension WorkspaceModel {
             onChange?()
             return
         }
-        slice("Validate", ["attempt": .text(c.attempt), "candidate": .text(digest)],
+        slice(.Validate, ["attempt": .text(c.attempt), "candidate": .text(digest)],
               sent: "Validation requested; awaiting acknowledgement") { p in
             "Validation \(p["validation"]?.string ?? "requested") for \(c.attempt); the result is UNKNOWN until the helper records it"
         } refused: { "Validation refused (\($0)); nothing was run" }
@@ -557,7 +566,7 @@ extension WorkspaceModel {
             return
         }
         let receipt: JSON = action == .Accept ? .int(c.receipt ?? 0) : .null
-        slice("CandidateDecision", ["attempt": .text(c.attempt), "candidate": .text(digest), "receipt": receipt,
+        slice(.CandidateDecision, ["attempt": .text(c.attempt), "candidate": .text(digest), "receipt": receipt,
                                     "action": .text(action.rawValue)],
               sent: "\(action.rawValue) sent; awaiting acknowledgement") { p in
             "Candidate \(action == .Accept ? "accepted" : "rejected") (\(p["response"]?.string ?? "")); nothing was merged or pushed"

@@ -22,3 +22,4 @@ pub mod validation;
 pub mod scheduler;
 
 pub mod ipc;
+pub mod protocol;

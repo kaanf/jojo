@@ -943,3 +943,64 @@ fn p2_02_only_the_configured_codex_adapter_can_launch() {
         assert!(h.worktree(command).is_none());
     }
 }
+
+#[test]
+fn r01_recovery_rows_carry_the_assessment_as_structured_fields_for_1_1_only() {
+    let mut h = H::new();
+    let hooks: Hooks = Box::new(|| LaunchHooks {
+        after_issue: Some(Box::new(|| panic!("helper killed between issue and spawn"))),
+        ..LaunchHooks::default()
+    });
+    h.open(Some(h.codex()), Some(ps()), Some(hooks));
+    let repository = h.register();
+    h.import_and_approve(&repository, "Codex");
+    h.open_admission();
+    assert_eq!(dispatch(&h.start(900)), "launched");
+    until(|| h.s().workers.reap());
+    h.crash(Some(ps()));
+
+    let page = || object([("offset", number(0)), ("limit", number(8))]);
+    let row = |e: &Envelope| -> Vec<(String, Json)> {
+        let Json::List(rows) = get(&e.payload, "rows").unwrap() else {
+            panic!("rows is a list")
+        };
+        assert_eq!(rows.len(), 1);
+        let Json::Object(fields) = &rows[0] else {
+            panic!("a row is an object")
+        };
+        fields.clone()
+    };
+    // A 1.0 frame gets the row exactly as before.
+    let old = row(&h.frame(5_000, 0, "Recovery", page()));
+    let names = |fields: &[(String, Json)]| -> Vec<String> {
+        fields.iter().map(|(k, _)| k.clone()).collect()
+    };
+    assert_eq!(
+        names(&old),
+        ["attempt", "assessment", "findings", "detail_complete"]
+    );
+    // A 1.1 frame gets the same four fields, then the assessment as structured fields.
+    let new = row(&h.frame(5_001, 1, "Recovery", page()));
+    assert_eq!(new[..4], old[..]);
+    assert_eq!(
+        names(&new[4..]),
+        ["blockers", "blockers_complete", "process_absent", "choices"]
+    );
+    let field = |k: &str| &new.iter().find(|(name, _)| name == k).unwrap().1;
+    let Json::List(blockers) = field("blockers") else {
+        panic!("blockers is a list")
+    };
+    // The structured fields say what the debug text says, without parsing it.
+    let assessment = string(field("assessment")).unwrap();
+    assert!(!blockers.is_empty());
+    for blocker in blockers {
+        assert!(
+            assessment.contains(string(blocker).unwrap()),
+            "{assessment}"
+        );
+    }
+    assert_eq!(field("blockers_complete"), &Json::Bool(true));
+    assert_eq!(field("process_absent"), &Json::Bool(false));
+    assert_eq!(field("choices"), &Json::List(vec![text("Hold")]));
+    assert!(assessment.ends_with("choices: [Hold] }"), "{assessment}");
+}
