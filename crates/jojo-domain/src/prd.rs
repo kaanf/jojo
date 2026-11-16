@@ -269,8 +269,13 @@ impl PrdDocument {
     /// Reads a document from bounded JSON. Every member of the schema must be present
     /// (an empty list is written as `[]`); nothing is defaulted, trimmed or ignored.
     pub fn import(input: &[u8]) -> Result<Self, PrdError> {
-        let root = json::parse(input)?;
-        let mut members = Members::of(&root, "")?;
+        Self::from_json(&json::parse(input)?)
+    }
+
+    /// The same strict reading of a document that is already parsed, for content that
+    /// arrives as a member of a larger object (M2: the lead agent's reply).
+    pub fn from_json(root: &Json) -> Result<Self, PrdError> {
+        let mut members = Members::of(root, "")?;
         match members.take("schema_version")? {
             (Json::Int(version), _) if *version == i64::from(PRD_SCHEMA_VERSION) => {}
             (Json::Int(version), path) => {

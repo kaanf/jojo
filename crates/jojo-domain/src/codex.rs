@@ -87,6 +87,26 @@ pub fn exec_argv(worktree: &Path) -> Result<Vec<String>, ProviderError> {
     .to_vec())
 }
 
+/// Parser fingerprint of a lead agent turn (M2): the same record shapes as
+/// [`CODEX_EXEC_JSONL`], without the item kind that changes a path.
+pub const CODEX_DISCOVERY_JSONL: &str = "jojo.codex.discovery-jsonl.0.169.0/1";
+
+/// The complete argument vector for one fresh, ephemeral `exec` run in `repository` under
+/// the CLI's read-only sandbox: [`exec_argv`] with the other sandbox policy.
+pub fn discovery_argv(repository: &Path) -> Result<Vec<String>, ProviderError> {
+    let mut argv = exec_argv(repository)?;
+    argv[5] = "read-only".into();
+    Ok(argv)
+}
+
+/// Accepts only the byte-exact vector [`discovery_argv`] produces for `repository`.
+pub fn check_discovery_argv(args: &[String], repository: &Path) -> Result<(), ProviderError> {
+    match discovery_argv(repository) {
+        Ok(golden) if golden == args => Ok(()),
+        _ => Err(ProviderError::InvalidSpec),
+    }
+}
+
 /// Accepts only the byte-exact vector [`exec_argv`] produces for `worktree`.
 pub fn check_exec_argv(args: &[String], worktree: &Path) -> Result<(), ProviderError> {
     match exec_argv(worktree) {

@@ -3,7 +3,7 @@
   "scope": "Tree after design wave 1, app shell (theme tokens for dark and light, sidebar, toolbar, status components; Swift app only), on top of M1 (Claude Code adapter, production stream profile for claude 2.1.311, helper --claude-* options, Start dispatch by provider). Offline; fixture agents only; no live provider execution, credential access, push or merge.",
   "boundary_tests_min": 105,
   "rust": {
-    "passed_min": 421,
+    "passed_min": 430,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -26,7 +26,16 @@
       "t09_wrong_start_time_or_boot_is_never_signalled",
       "p2_03_closing_while_validation_is_active_stops_the_validator_and_leaves_no_verdict",
       "p2_03_real_helper_runs_start_to_settlement_validation_and_acceptance_over_pipes",
-      "dw1_approved_plan_query_returns_the_stored_steps_edges_and_revision_read_only"
+      "dw1_approved_plan_query_returns_the_stored_steps_edges_and_revision_read_only",
+      "m2_golden_discovery_vectors_are_byte_exact_and_read_only",
+      "m2_turn_request_is_one_bounded_run_of_the_pinned_profile",
+      "m2_turn_environment_is_exactly_the_providers_own_variables",
+      "m2_real_read_only_streams_normalize_to_one_successful_turn_with_a_json_reply",
+      "m2_claude_turn_is_held_to_the_read_only_envelope",
+      "m2_codex_turn_refuses_a_changed_path_and_keeps_every_other_rule",
+      "m2_discovery_reply_is_read_strictly",
+      "m2_plan_reply_is_a_small_graph_with_scopes_and_a_check_per_step",
+      "m2_prompts_carry_only_the_humans_words_and_stored_content"
     ],
     "ignored": [
       "child_fixture",

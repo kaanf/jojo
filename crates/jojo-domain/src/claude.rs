@@ -115,6 +115,55 @@ pub fn print_argv() -> Vec<String> {
     .to_vec()
 }
 
+/// Parser fingerprint of a lead agent turn (M2): the same record shapes as
+/// [`CLAUDE_PRINT_STREAM_JSON`], held to the read-only envelope below.
+pub const CLAUDE_DISCOVERY_STREAM_JSON: &str = "jojo.claude.discovery-stream-json.2.1.311/1";
+/// The built-in tools of a lead agent turn, as the CLI lists them on its first record:
+/// nothing that writes, runs a command or reaches the network.
+pub const CLAUDE_DISCOVERY_TOOLS: [&str; 3] = ["Glob", "Grep", "Read"];
+/// The permission mode a lead agent turn asks for. Nothing is granted beyond the tools;
+/// with `--permission-prompts none` anything that would ask is denied.
+pub const CLAUDE_DISCOVERY_PERMISSION_MODE: &str = "manual";
+/// What the pinned release reports on its first record for that mode (observed
+/// 2026-11-16, `~/JojoDisposable/m2-probes/20261116T161559Z/claude-a`).
+pub const CLAUDE_DISCOVERY_REPORTED_MODE: &str = "default";
+
+/// The complete argument vector for one fresh, unsaved, restricted, read-only `--print`
+/// run in the process working directory: [`print_argv`] with the three read tools and
+/// without the mode that applies edits.
+pub fn discovery_argv() -> Vec<String> {
+    [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--input-format",
+        "text",
+        "--restricted",
+        "--strict-mcp-config",
+        "--tools",
+        "Read,Glob,Grep",
+        "--permission-mode",
+        CLAUDE_DISCOVERY_PERMISSION_MODE,
+        "--permission-prompts",
+        "none",
+        "--no-session-persistence",
+        "--disable-slash-commands",
+        "--no-chrome",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// Accepts only the byte-exact vector [`discovery_argv`] produces.
+pub fn check_discovery_argv(args: &[String]) -> Result<(), ProviderError> {
+    if discovery_argv() == args {
+        Ok(())
+    } else {
+        Err(ProviderError::InvalidSpec)
+    }
+}
+
 /// Accepts only the byte-exact vector [`print_argv`] produces.
 pub fn check_print_argv(args: &[String]) -> Result<(), ProviderError> {
     if print_argv() == args {

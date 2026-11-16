@@ -74,6 +74,9 @@ pub struct Continuation {
 pub enum Role {
     Developer,
     Validator,
+    /// M2: the lead agent of a Feature Chat turn. Read-only; it is never launched from a
+    /// `LaunchSpec`, only from a `planner::TurnSpec`.
+    Planner,
 }
 /// Product approvals are references only; tool permission cannot create these.
 #[derive(Clone, Debug, Eq, PartialEq)]

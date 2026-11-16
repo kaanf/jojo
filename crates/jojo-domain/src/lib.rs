@@ -11,6 +11,7 @@ pub mod identity;
 pub mod json;
 pub mod outcome;
 pub mod paths;
+pub mod planner;
 pub mod policy;
 pub mod prd;
 pub mod provider;

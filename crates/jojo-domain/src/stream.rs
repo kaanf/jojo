@@ -28,9 +28,17 @@
 //! release, run with the one argument vector `crate::claude` can express. It is equally
 //! fail-closed, and it additionally holds the first record of a run to the approved
 //! envelope: the listed tools, the permission mode, no MCP server and no API key.
-pub use crate::claude::CLAUDE_PRINT_STREAM_JSON;
-use crate::claude::{CLAUDE_PERMISSION_MODE, CLAUDE_TOOLS};
-pub use crate::codex::CODEX_EXEC_JSONL;
+//!
+//! The two lead agent profiles (M2, [`CLAUDE_DISCOVERY_STREAM_JSON`] and
+//! [`CODEX_DISCOVERY_JSONL`]) are the production profiles with a read-only envelope: the
+//! Claude Code one accepts only the three read tools and the mode the CLI reports for
+//! them, the Codex one refuses the item kind that changes a path. Both were observed once
+//! on the pinned releases (2026-11-16) and model nothing beyond the production shapes.
+use crate::claude::{
+    CLAUDE_DISCOVERY_REPORTED_MODE, CLAUDE_DISCOVERY_TOOLS, CLAUDE_PERMISSION_MODE, CLAUDE_TOOLS,
+};
+pub use crate::claude::{CLAUDE_DISCOVERY_STREAM_JSON, CLAUDE_PRINT_STREAM_JSON};
+pub use crate::codex::{CODEX_DISCOVERY_JSONL, CODEX_EXEC_JSONL};
 use crate::provider::{EventPayload, ProviderError, ProviderKind, SessionRef, TerminalStatus};
 use serde_json::Value;
 
@@ -179,6 +187,10 @@ enum Profile {
     CodexExec,
     /// Production Claude Code `--print` stream-json, pinned release, fail-closed.
     ClaudePrint,
+    /// Lead agent turn on Claude Code: `ClaudePrint` with the read-only envelope.
+    ClaudeDiscovery,
+    /// Lead agent turn on Codex: `CodexExec` without path changes.
+    CodexDiscovery,
 }
 
 /// One normalizer per attempt stdout. Stderr is captured but never parsed as protocol.
@@ -201,6 +213,8 @@ impl StreamNormalizer {
             CODEX_EXEC_JSON => Profile::Codex,
             CODEX_EXEC_JSONL => Profile::CodexExec,
             CLAUDE_PRINT_STREAM_JSON => Profile::ClaudePrint,
+            CLAUDE_DISCOVERY_STREAM_JSON => Profile::ClaudeDiscovery,
+            CODEX_DISCOVERY_JSONL => Profile::CodexDiscovery,
             _ => return Err(ProviderError::FingerprintMismatch),
         };
         Ok(Self {
@@ -216,8 +230,10 @@ impl StreamNormalizer {
 
     pub fn provider(&self) -> ProviderKind {
         match self.profile {
-            Profile::Claude | Profile::ClaudePrint => ProviderKind::ClaudeCode,
-            Profile::Codex | Profile::CodexExec => ProviderKind::Codex,
+            Profile::Claude | Profile::ClaudePrint | Profile::ClaudeDiscovery => {
+                ProviderKind::ClaudeCode
+            }
+            Profile::Codex | Profile::CodexExec | Profile::CodexDiscovery => ProviderKind::Codex,
         }
     }
 
@@ -279,8 +295,10 @@ impl StreamNormalizer {
         match self.profile {
             Profile::Claude => self.claude(&kind, &value, out),
             Profile::Codex => self.codex(&kind, &value, out),
-            Profile::CodexExec => self.codex_exec(&kind, &value, out),
-            Profile::ClaudePrint => self.claude_print(&kind, &value, out),
+            Profile::CodexExec | Profile::CodexDiscovery => self.codex_exec(&kind, &value, out),
+            Profile::ClaudePrint | Profile::ClaudeDiscovery => {
+                self.claude_print(&kind, &value, out)
+            }
         }
     }
 
@@ -575,6 +593,10 @@ impl StreamNormalizer {
                     return self.violation(out, "item without type");
                 };
                 let phase = &kind["item.".len()..];
+                // A lead agent turn reads only: a changed path is outside its envelope.
+                if self.profile == Profile::CodexDiscovery && item_type == "file_change" {
+                    return self.violation(out, "tool outside the approved envelope");
+                }
                 match (item_type, phase) {
                     ("agent_message", "completed") => {
                         match item.get("text").and_then(Value::as_str) {
@@ -625,6 +647,12 @@ impl StreamNormalizer {
         let identifier = |v: &Value, key: &str| {
             text(v, key).filter(|s| !s.is_empty() && s.len() <= MAX_IDENTIFIER_BYTES)
         };
+        // The envelope of this profile: the tools and the permission mode of its vector.
+        let (allowed, mode): (&[&str], &str) = if self.profile == Profile::ClaudeDiscovery {
+            (&CLAUDE_DISCOVERY_TOOLS, CLAUDE_DISCOVERY_REPORTED_MODE)
+        } else {
+            (&CLAUDE_TOOLS, CLAUDE_PERMISSION_MODE)
+        };
         let subtype = text(v, "subtype");
         let init = kind == "system" && subtype.as_deref() == Some("init");
         // Every record after the first belongs to the session the first one named.
@@ -656,9 +684,9 @@ impl StreamNormalizer {
                     .get("mcp_servers")
                     .and_then(Value::as_array)
                     .is_some_and(Vec::is_empty);
-                if tools != CLAUDE_TOOLS
+                if tools != allowed
                     || !no_servers
-                    || text(v, "permissionMode").as_deref() != Some(CLAUDE_PERMISSION_MODE)
+                    || text(v, "permissionMode").as_deref() != Some(mode)
                     || text(v, "apiKeySource").as_deref() != Some("none")
                 {
                     return self.violation(out, "init outside the approved envelope");
@@ -705,7 +733,7 @@ impl StreamNormalizer {
                                 return self.violation(out, "tool_use without a usable id");
                             };
                             let approved = text(block, "name")
-                                .is_some_and(|name| CLAUDE_TOOLS.contains(&name.as_str()));
+                                .is_some_and(|name| allowed.contains(&name.as_str()));
                             if !approved {
                                 return self.violation(out, "tool outside the approved envelope");
                             }
