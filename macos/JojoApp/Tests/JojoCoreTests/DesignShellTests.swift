@@ -161,7 +161,7 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.opaqueSidebar, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 2030)
+            .frame(width: 1120, height: 2270)
             guard let directory else { continue }
             try write(shell, to: directory, "shell-\(name).png")
         }
@@ -655,6 +655,185 @@ final class DesignShellTests: XCTestCase {
             }
         }
     }
+
+    // MARK: Source Control (docs/design/screens/SOURCE_CONTROL.md)
+
+    private static let controlDiff = """
+    diff --git a/Sources/Invite.swift b/Sources/Invite.swift
+    index 3f1c2aa..9d04e1b 100644
+    --- a/Sources/Invite.swift
+    +++ b/Sources/Invite.swift
+    @@ -12,4 +12,5 @@ struct Invite {
+         let token: String
+    -    var uses = 1
+    +    var uses: Int
+    +    var revoked = false
+         let lobby: String
+     }
+    diff --git a/Tests/InviteTests.swift b/Tests/InviteTests.swift
+    new file mode 100644
+    index 0000000..7d1a2c3
+    --- /dev/null
+    +++ b/Tests/InviteTests.swift
+    @@ -0,0 +1,3 @@
+    +import XCTest
+    +
+    +final class InviteTests: XCTestCase {}
+    diff --git a/Sources/LegacyInvite.swift b/Sources/LegacyInvite.swift
+    deleted file mode 100644
+    index 5b2e9f1..0000000
+    --- a/Sources/LegacyInvite.swift
+    +++ /dev/null
+    @@ -1,2 +0,0 @@
+    -struct LegacyInvite {}
+    -
+    diff --git a/Package.resolved b/Package.resolved
+    index 1111111..2222222 100644
+    --- a/Package.resolved
+    +++ b/Package.resolved
+    @@ -3 +3 @@
+    -  "version" : 2
+    +  "version" : 3
+    """
+
+    /// The loaded attempt as Source Control reads it, with the kinds the helper sends.
+    private func control(_ scope: ValidationVerdict = .fail) -> SourceControlState {
+        var loaded = verification()
+        loaded.changedFiles = [ChangedFile(path: "Sources/Invite.swift", kind: "Modified", scope: "ALLOWED"),
+                               ChangedFile(path: "Tests/InviteTests.swift", kind: "Added", scope: "ALLOWED"),
+                               ChangedFile(path: "Sources/LegacyInvite.swift", kind: "Deleted", scope: "ALLOWED")]
+        if scope != .pass {
+            loaded.changedFiles += [ChangedFile(path: "Package.resolved", kind: "Modified", scope: "OUT_OF_SCOPE"),
+                                    ChangedFile(path: "scripts/gates/current.json", kind: "Modified", scope: "BASELINE"),
+                                    ChangedFile(path: "notes.txt", kind: "TypeChanged", scope: "LATER")]
+        }
+        (loaded.scope, loaded.diff) = (scope, Self.controlDiff)
+        return SourceControlState(loaded: loaded, base: "9c1e4b2a71f0de5d2c1aa41d07aa3e9ac21f0b6d")
+    }
+
+    func test_dw1_source_control_badges_and_paths_follow_the_core_words() {
+        let badges = ["Added", "Modified", "Deleted", "TypeChanged", "Renamed"].map(SourceControlState.change)
+        XCTAssertEqual(badges.map(\.letter), ["A", "M", "D", "T", "?"])
+        XCTAssertEqual(badges.map(\.tone), [.ok, .warn, .danger, .warn, .neutral])
+        XCTAssertEqual(badges.map(\.name), ["Added", "Modified", "Deleted", "Type changed", "Renamed"],
+                       "a kind this app does not know is named by the core's word, never guessed")
+        XCTAssertEqual(SourceControlState.split("src/main/kotlin/lobby/LobbyController.kt").name, "LobbyController.kt")
+        XCTAssertEqual(SourceControlState.split("src/main/kotlin/lobby/LobbyController.kt").directory, "src/main/kotlin/lobby")
+        XCTAssertEqual(SourceControlState.split("build.gradle.kts").name, "build.gradle.kts")
+        XCTAssertEqual(SourceControlState.split("build.gradle.kts").directory, ".")
+        XCTAssertEqual(control().ends, "9c1e4b2a71f0 → c4c4c4c4c4c4")
+        var reading = control()
+        reading.base = ""
+        XCTAssertEqual(reading.ends, "base → sealed candidate")
+    }
+
+    func test_dw1_source_control_splits_the_diff_by_changed_path_and_counts_its_lines() {
+        let state = control()
+        let sections = state.sections
+        XCTAssertEqual(sections.map(\.path), ["Sources/Invite.swift", "Tests/InviteTests.swift", "Sources/LegacyInvite.swift",
+                                               "Package.resolved"])
+        XCTAssertEqual(sections.map(\.counts), ["+2 −1", "+3", "−2", "+1 −1"])
+        XCTAssertEqual(sections.flatMap(\.lines), DiffLine.parse(state.loaded.diff), "no line of the diff is dropped")
+        XCTAssertEqual(sections[1].lines.first?.text, "diff --git a/Tests/InviteTests.swift b/Tests/InviteTests.swift")
+        XCTAssertNil(sections.first { $0.path == "scripts/gates/current.json" }, "a path without a section has no counts")
+
+        // A header that names no changed path, and lines before the first header, stay in the diff.
+        let stray = DiffLine.parse("warning: note\ndiff --git a/other.txt b/other.txt\n@@ -1 +1 @@\n-a\n+b\n")
+        let unnamed = SourceControlState.sections(of: stray, paths: ["Sources/Invite.swift"])
+        XCTAssertEqual(unnamed.map(\.path), [nil, nil])
+        XCTAssertEqual(unnamed.map(\.lines.count), [1, 4])
+        XCTAssertNil(unnamed[0].counts)
+        XCTAssertTrue(SourceControlState.sections(of: [], paths: []).isEmpty)
+    }
+
+    func test_dw1_source_control_scope_is_the_core_verdict_and_unknown_is_never_in_scope() {
+        let failed = control()
+        XCTAssertEqual(failed.violations.map(\.path), ["Package.resolved", "scripts/gates/current.json"],
+                       "out of scope and protected baseline; a path of unknown scope is not counted as a violation")
+        XCTAssertEqual(failed.scopePill.state, .failed)
+        XCTAssertEqual(failed.scopePill.label, "2 violations")
+        XCTAssertEqual(failed.scopeNotice?.title, "2 changes are outside the approved scope")
+        XCTAssertEqual(failed.scopeNotice?.message, "Package.resolved, scripts/gates/current.json. The core's verdict on the write scope "
+            + "is Failed. There is no command to revert a path.")
+        XCTAssertEqual(failed.scopeNotice?.first, "Package.resolved")
+        XCTAssertEqual(failed.scopeFacts.map(\.name), ["Write scope", "Paths inside scope", "Outside the approved scope",
+                                                       "Protected baseline", "Scope unknown"])
+        XCTAssertEqual(failed.scopeFacts.map(\.state), [.failed, .passed, .failed, .failed, .unknown])
+        XCTAssertEqual(failed.scopeFacts.map(\.label), [nil, "3 of 6", "1", "1", "1"])
+
+        var one = control()
+        one.loaded.changedFiles.removeAll { $0.scope == "BASELINE" }
+        XCTAssertEqual(one.scopePill.label, "1 violation")
+        XCTAssertEqual(one.scopeNotice?.title, "1 change is outside the approved scope")
+        var unmarked = control()
+        unmarked.loaded.changedFiles.removeAll { $0.scope != "ALLOWED" }
+        XCTAssertNil(unmarked.scopePill.label)
+        XCTAssertEqual(unmarked.scopeNotice?.title, "The write scope check failed")
+        XCTAssertNil(unmarked.scopeNotice?.first)
+
+        let passed = control(.pass)
+        XCTAssertEqual(passed.scopePill.state, .passed)
+        XCTAssertEqual(passed.scopePill.label, "In scope")
+        XCTAssertNil(passed.scopeNotice)
+        XCTAssertEqual(passed.scopeFacts.map(\.label), [nil, "3 of 3", "None"])
+        XCTAssertEqual(passed.scopeFacts.map(\.state), [.passed, .passed, .notRun])
+
+        var unknown = control(.unknown)
+        (unknown.loaded.changedFiles, unknown.loaded.scopeDetail, unknown.loaded.diff) = ([], "CandidateTampered", "")
+        XCTAssertEqual(unknown.scopePill.state, .unknown)
+        XCTAssertEqual(unknown.scopeNotice?.danger, false)
+        XCTAssertEqual(unknown.scopeNotice?.message, "The core gave no verdict (CandidateTampered). Unknown is never shown as in scope.")
+        XCTAssertEqual(unknown.scopeFacts.map(\.state), [.unknown])
+        XCTAssertEqual(unknown.scopeFacts.first?.note, "CandidateTampered")
+
+        var reading = control(.notRun)
+        reading.loaded.changedFiles = []
+        XCTAssertEqual(reading.scopePill.state, .notRun)
+        XCTAssertNil(reading.scopeNotice, "a scope that was not read yet is not a finding")
+        var unsealed = control(.unknown)
+        unsealed.loaded = verification(sealed: false)
+        (unsealed.loaded.changedFiles, unsealed.loaded.scope) = ([], .unknown)
+        XCTAssertNil(unsealed.scopeNotice, "without a sealed candidate there is no scope to warn about")
+    }
+
+    /// Review aid, as above: Source Control with test rows in two and three columns and in
+    /// one, with a chosen path, and its passed, unknown, disconnected and empty forms.
+    func test_dw1_source_control_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        var unknown = control(.unknown)
+        (unknown.loaded.changedFiles, unknown.loaded.scopeDetail, unknown.loaded.diff, unknown.base) = ([], "CandidateTampered", "", "")
+        var lost = control()
+        (lost.loaded.connection, lost.loaded.admission) = (.channelLost("pipe closed"), "Closed")
+        var closed = control(.pass)
+        closed.loaded.admission = "Closed"
+        var empty = control()
+        empty.loaded.candidate = nil
+        let opening = CGSize(width: 1120, height: 720), tall = CGSize(width: 1120, height: 1500), wide = CGSize(width: 1440, height: 1000)
+        let cases: [(String, SourceControlState, String?, CGSize)] = [
+            ("source-control", control(), nil, opening), ("source-control-tall", control(), nil, tall),
+            ("source-control-wide", control(), "Package.resolved", wide),
+            ("source-control-missing", control(), "scripts/gates/current.json", opening),
+            ("source-control-narrow", control(), nil, CGSize(width: 900, height: 2100)),
+            ("source-control-passed", closed, nil, wide), ("source-control-unknown", unknown, nil, tall),
+            ("source-control-disconnected", lost, nil, opening), ("source-control-empty", empty, nil, opening),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, selected, size) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.sourceControl), showInspector: {}) {
+                        SourceControlView(state: state, selected: selected)
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
+        }
+    }
 }
 
 /// Every status component and button kind on a card, for the snapshot.
@@ -808,6 +987,32 @@ private struct Gallery: View {
                 }
             }
             .environment(\.offscreen, true)
+            titled("Changed files and change badges") {
+                HStack(alignment: .top, spacing: 16) {
+                    Card(.panelList) {
+                        VStack(spacing: 2) {
+                            ChangedFileRow(name: "LobbyController.kt", directory: "src/main/kotlin/lobby",
+                                           badge: ChangeBadge("M", tone: .warn, name: "Modified"), counts: "+48 −6", selected: true)
+                            ChangedFileRow(name: "InviteTokenRepository.kt", directory: "src/main/kotlin/lobby",
+                                           badge: ChangeBadge("A", tone: .ok, name: "Added"), counts: "+92")
+                            ChangedFileRow(name: "LegacyInvite.kt", directory: "src/main/kotlin/lobby",
+                                           badge: ChangeBadge("D", tone: .danger, name: "Deleted"), counts: "−34")
+                            ChangedFileRow(name: "build.gradle.kts", directory: ".",
+                                           badge: ChangeBadge("M", tone: .warn, name: "Modified"), counts: "+2",
+                                           scope: (.failed, "Out of scope"), flagged: true)
+                        }
+                        .padding(8)
+                    }
+                    .frame(width: 266)
+                    HStack(spacing: 8) {
+                        ChangeBadge("A", tone: .ok, name: "Added")
+                        ChangeBadge("M", tone: .warn, name: "Modified")
+                        ChangeBadge("D", tone: .danger, name: "Deleted")
+                        ChangeBadge("T", tone: .warn, name: "Type changed")
+                        ChangeBadge("?", tone: .neutral, name: "Unknown")
+                    }
+                }
+            }
             StateBlock(symbol: "folder", title: "No projects yet",
                        message: "Create a project or import a folder that already has Git repositories.") {
                 Button("Create Project") {}.buttonStyle(.jojo(.primary, compact: true))

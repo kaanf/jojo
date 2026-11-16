@@ -140,6 +140,8 @@ public final class WorkspaceModel {
     /// Write-scope verdict of the changed paths, with the reason when it is unknown.
     public private(set) var scope = ValidationVerdict.notRun
     public private(set) var scopeDetail = ""
+    /// The base the changed paths were compared with, as the helper names it; empty until they arrive.
+    public private(set) var candidateBase = ""
     public private(set) var diff = ""
     public private(set) var agentLog: [String] = []
     public private(set) var validationReport = ""
@@ -451,7 +453,9 @@ extension WorkspaceModel {
             }
             let changed = self.candidate?.candidate != review.candidate
             self.candidate = review
-            if changed { (self.changedFiles, self.diff, self.agentLog, self.validationReport) = ([], "", [], "") }
+            if changed {
+                (self.changedFiles, self.candidateBase, self.diff, self.agentLog, self.validationReport) = ([], "", "", [], "")
+            }
             self.scope = .notRun
             self.scopeDetail = review.candidate == nil ? "no sealed candidate" : ""
             self.onChange?()
@@ -487,11 +491,13 @@ extension WorkspaceModel {
                     return self.loadChanges(load, attempt, digest, offset: offset + 8, collected: all)
                 }
                 self.changedFiles = all
+                self.candidateBase = p["base"]?.string ?? ""
                 self.scope = ValidationVerdict(helper: p["scope"]?.string)
                 self.scopeDetail = ""
             case .error(let code):
                 // The candidate could not be inspected (for example it was tampered with).
                 self.changedFiles = []
+                self.candidateBase = ""
                 self.scope = .unknown
                 self.scopeDetail = code
             default:

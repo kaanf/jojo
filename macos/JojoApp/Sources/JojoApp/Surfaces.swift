@@ -844,3 +844,67 @@ struct RequestedNotice: View {
         .background(theme.fill2, in: RoundedRectangle(cornerRadius: 8))
     }
 }
+
+// MARK: Source control surfaces (COMPONENTS.md, section 17)
+
+/// The kind of change of a path as one letter on its status color.
+struct ChangeBadge: View {
+    @Environment(\.theme) private var theme
+    let letter: String
+    let tone: Tone
+    /// The kind in words, for the tooltip and for VoiceOver.
+    let name: String
+
+    init(_ letter: String, tone: Tone, name: String) {
+        self.letter = letter
+        self.tone = tone
+        self.name = name
+    }
+
+    var body: some View {
+        Text(letter).font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(theme.foreground(tone))
+            .frame(width: 15, height: 15)
+            .background(theme.foreground(tone).opacity(0.16), in: RoundedRectangle(cornerRadius: 4))
+            .help(name)
+            .accessibilityLabel(name)
+    }
+}
+
+/// One changed path: badge, file name and line counts over its directory and, when the
+/// path is not plainly in scope, an evidence pill.
+struct ChangedFileRow: View {
+    @Environment(\.theme) private var theme
+    let name: String
+    let directory: String
+    let badge: ChangeBadge
+    var counts: String?
+    var scope: (state: EvidenceState, label: String)?
+    /// Outside the approved scope: tinted, with a ring.
+    var flagged = false
+    var selected = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 7)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                badge
+                Text(name).font(.system(size: 12.5)).foregroundStyle(theme.text).lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let counts { Text(counts).textStyle(.mono).foregroundStyle(theme.text3).lineLimit(1) }
+            }
+            HStack(spacing: 6) {
+                Text(directory).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(theme.text3)
+                    .lineLimit(1).truncationMode(.head)
+                if let scope { EvidencePill(scope.state, label: scope.label) }
+            }
+            .padding(.leading, 23)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(selected ? theme.fill : flagged ? theme.danger.opacity(0.08) : Color.clear, in: shape)
+        .overlay { if flagged { shape.strokeBorder(theme.dangerRing, lineWidth: 1) } }
+        .contentShape(shape)
+    }
+}

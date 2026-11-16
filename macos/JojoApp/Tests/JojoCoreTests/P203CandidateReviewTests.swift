@@ -92,9 +92,10 @@ final class P203CandidateReviewTests: XCTestCase {
         XCTAssertFalse(model.commandPending)
 
         load(h, model, view("PASS", receipt: .int(31), validated: digest),
-             changes: ["scope": .text("PASS"), "rows": .list([.object([
+             changes: ["base": .text("9c1e4b2"), "scope": .text("PASS"), "rows": .list([.object([
                  "path": .text("src/feature.rs"), "kind": .text("Added"), "scope": .text("ALLOWED")])])])
         XCTAssertEqual(model.changedFiles, [ChangedFile(path: "src/feature.rs", kind: "Added", scope: "ALLOWED")])
+        XCTAssertEqual(model.candidateBase, "9c1e4b2")
         XCTAssertEqual(model.scope, .pass)
         XCTAssertEqual(model.diff, "+line\n")
         XCTAssertEqual(model.validationReport, "report")

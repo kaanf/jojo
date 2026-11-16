@@ -140,10 +140,12 @@ struct AppShell<Content: View>: View {
                     pid: model.client.processIdentifier)
     }
 
-    /// Work on hold needs the human; attempts are a plain count.
+    /// Work on hold needs the human; attempts are a plain count; Source Control counts the
+    /// loaded attempt's changed paths outside the write scope.
     private var counters: [Screen: SidebarCounter] {
         [.recoveryCenter: SidebarCounter(count: model.workspace.recovery.count, tone: .warn),
-         .agentRuns: SidebarCounter(count: AgentRunsState.attempts(in: model.workspace.rows).count, tone: .neutral)]
+         .agentRuns: SidebarCounter(count: AgentRunsState.attempts(in: model.workspace.rows).count, tone: .neutral),
+         .sourceControl: SidebarCounter(count: SourceControlState.violations(in: model.workspace.changedFiles).count, tone: .danger)]
     }
 }
 
