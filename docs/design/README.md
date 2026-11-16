@@ -40,7 +40,7 @@ The canvas has 23 boards. Which milestone builds which screen, and where the des
 
 ## Open decisions
 
-1. **Font.** System fonts (SF Pro, SF Mono) or bundled Inter and JetBrains Mono. These documents assume the system fonts until decided.
+1. ~~Font.~~ Decided 2026-11-16: system fonts (SF Pro, SF Mono).
 2. **Light values for the components listed in COMPONENTS.md, section 12.** Needed before those components ship in the light appearance.
 3. **Pressed and keyboard-focus states.** Not drawn on the canvas; the system defaults are used until they are.
 4. **The light alternatives (D, E, F).** Whether any of them replaces the reference Dashboard.

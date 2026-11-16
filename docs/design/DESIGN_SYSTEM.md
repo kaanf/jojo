@@ -101,7 +101,7 @@ Floating panels (dialog, command palette, popover, menu) are defined on the dark
 
 The canvas sets Inter for text and JetBrains Mono for identifiers, each with the system font as fallback, and turns on the Inter features `cv11` and `ss01`.
 
-**Open decision (font).** Use the system fonts (SF Pro and SF Mono) or bundle Inter and JetBrains Mono. Both bundled fonts are under the SIL Open Font License. This document assumes the system fonts until the human decides; the sizes and weights below apply either way.
+**Decided 2026-11-16 (the human): the app uses the system fonts**, SF Pro for text and SF Mono for identifiers and code. Inter and JetBrains Mono are not bundled, so the app will not match the canvas glyph for glyph; sizes, weights and tracking below are kept.
 
 Base: 13 pt, line height 1.45, text color `text`.
 
