@@ -1411,6 +1411,152 @@ final class DesignShellTests: XCTestCase {
             }
         }
     }
+
+    // MARK: Execution Plan (docs/design/screens/EXECUTION_PLAN.md)
+
+    private func plan(connection: HelperConnection = .ready(epoch: 7), admission: String = "Open", slice: Bool? = true,
+                      filled: Bool = true, commandPending: Bool = false, outcome: StartOutcome? = nil) -> ExecutionPlanState {
+        let ids = Self.ids
+        return ExecutionPlanState(
+            connection: connection, admission: admission, pid: 4242, slice: slice,
+            subjects: filled ? StartSubjects(prd: ids[0], adr: ids[1], plan: ids[2], validation: ids[3], step: ids[4]) : StartSubjects(),
+            commandPending: commandPending, outcome: outcome)
+    }
+
+    func test_dw1_start_outcome_is_what_the_helper_answered() {
+        let ids = Self.ids
+        let subjects = StartSubjects(prd: ids[0], adr: ids[1], plan: ids[2], validation: ids[3], step: ids[4])
+        let h = Harness()
+        let model = WorkspaceModel(client: h.client)
+        XCTAssertNil(model.startOutcome)
+        // What is not five identities is not sent and leaves no outcome.
+        model.start(StartSubjects())
+        XCTAssertNil(model.startOutcome)
+
+        model.start(subjects)
+        XCTAssertEqual(model.startOutcome, .sent)
+        let first = h.fake.last("Start")!
+        h.fake.error(first, "StartRefused: missing or stale approval: plan")
+        XCTAssertEqual(model.startOutcome, .refused("StartRefused: missing or stale approval: plan"))
+        XCTAssertEqual(model.status, "Start refused (StartRefused: missing or stale approval: plan); nothing was started",
+                       "the status line keeps its words")
+
+        model.start(subjects)
+        let second = h.fake.last("Start")!
+        h.fake.reply(second, ["acknowledged": .bool(true), "operation_completed": .bool(false), "command": .text(second.id),
+                              "epoch": .int(7), "event_seq": .int(30), "response": .text("accepted attempt=\(second.id)"),
+                              "replayed": .bool(false), "attempt": .text(second.id), "dispatch": .text("launched")])
+        XCTAssertEqual(model.startOutcome, .accepted(attempt: second.id, dispatch: "launched"))
+        XCTAssertTrue(model.status.contains("Start accepted for attempt \(second.id) (launched)"), model.status)
+
+        // A lost answer is unknown, stays pending, and a further click changes nothing.
+        model.start(subjects)
+        h.fake.breakChannel("pipe closed")
+        XCTAssertEqual(model.startOutcome, .unknown)
+        XCTAssertTrue(model.commandPending)
+        model.start(subjects)
+        XCTAssertEqual(model.startOutcome, .unknown)
+        XCTAssertEqual(h.fake.count("Start"), 3)
+    }
+
+    func test_dw1_execution_plan_start_needs_a_connected_core_open_admission_and_five_identities() {
+        XCTAssertNil(plan().startBlocked)
+        XCTAssertEqual(ExecutionPlanState.fields.map(\.label), ["PRD", "ADR", "Plan", "Validation plan", "Step"])
+
+        for connection in [HelperConnection.notStarted, .handshaking, .incompatible(epoch: 7), .channelLost("pipe closed"), .ended(status: 1),
+                           .launchFailed("no helper")] {
+            XCTAssertEqual(plan(connection: connection).startBlocked, "Unavailable: the core is not connected.", "\(connection)")
+            XCTAssertFalse(plan(connection: connection, admission: "Closed").admissionClosed, "admission is not stated without a connection")
+        }
+        XCTAssertEqual(plan(slice: false).startBlocked, "The core has no slice configuration; it cannot start a step.")
+        XCTAssertNil(plan(slice: nil).startBlocked, "a helper that does not say is asked")
+        XCTAssertEqual(plan(admission: "Closed").startBlocked, "Admission is closed. The core refuses a Start until it is open.")
+        XCTAssertNil(plan(admission: "").startBlocked, "before the first snapshot the helper decides")
+        XCTAssertEqual(plan(commandPending: true).startBlocked, "Unavailable while a command awaits the core.")
+        XCTAssertEqual(plan(filled: false).startBlocked, "Enter all five identities.")
+
+        var typed = plan()
+        typed.subjects.prd = "/bin/sh"
+        typed.subjects.step = Self.ids[4].uppercased()
+        XCTAssertEqual(typed.startBlocked, "Not an identity: PRD, Step.")
+        XCTAssertTrue(typed.invalid(.prd))
+        XCTAssertFalse(typed.invalid(.adr))
+        typed.subjects.adr = ""
+        XCTAssertFalse(typed.invalid(.adr), "an empty field is not marked")
+        XCTAssertEqual(typed.startBlocked, "Enter all five identities.")
+        // What the screen lets through is exactly what the model sends.
+        XCTAssertNotNil(plan().subjects.payload)
+        XCTAssertNil(typed.subjects.payload)
+    }
+
+    func test_dw1_execution_plan_says_a_refusal_in_words_and_shows_no_plan_and_no_capacity() {
+        XCTAssertEqual(ExecutionPlanState.refusal("AdmissionClosed").message, "Admission is closed. Nothing was started.")
+        XCTAssertTrue(ExecutionPlanState.refusal("StartRefused: missing or stale approval: validation plan").message.contains("Approval Inbox"))
+        XCTAssertTrue(ExecutionPlanState.refusal("StartRefused: step is not part of the approved plan").message.contains("approved plan"))
+        XCTAssertEqual(ExecutionPlanState.refusal("StartFailed: spawn; command 0a is committed and nothing was launched").title,
+                       "The Start did not launch")
+        // A code this app does not know is not explained away.
+        let unseen = ExecutionPlanState.refusal("SomethingNew: detail")
+        XCTAssertEqual(unseen.title, "The core refused the Start")
+        XCTAssertEqual(unseen.message, "Nothing was started. The core's reason is below.")
+
+        // Slice configuration, in words; nothing is stated without a connection.
+        XCTAssertEqual(plan().sliceLine.value, "Present")
+        XCTAssertEqual(plan(slice: nil).sliceLine.form, .missing)
+        XCTAssertEqual(plan(connection: .ended(status: 1)).sliceLine.value, "Unknown: the core is not connected.")
+        XCTAssertEqual(plan(connection: .ended(status: 1)).status.admission, "Admission unknown")
+
+        // D4 is open: no number anywhere. D2: the decision in force, marked as not built.
+        let missing = ExecutionPlanState.missing
+        XCTAssertNil(missing.map(\.value).joined().rangeOfCharacter(from: .decimalDigits))
+        XCTAssertEqual(missing.first { $0.label == "Repair" }?.value, "Decided, not built: automatic, at most two tries, then a human hold.")
+        XCTAssertEqual(missing.first { $0.label == "Parallel capacity" }?.value, "Not reported, and not decided.")
+        XCTAssertEqual(Set(missing.map(\.label)).count, missing.count)
+
+        // The app has no request that returns a plan or pauses admission; the screen has no counter.
+        XCTAssertFalse(Request.allCases.contains { $0.rawValue.localizedCaseInsensitiveContains("plan") || $0.rawValue.localizedCaseInsensitiveContains("pause") })
+        XCTAssertTrue(MainView.built.contains(.executionPlan))
+    }
+
+    /// Review aid, as above: Execution Plan empty, filled, with a wrong identity, and after
+    /// each answer of the core.
+    func test_dw1_execution_plan_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        let opening = CGSize(width: 1120, height: 900), tall = CGSize(width: 1120, height: 1100)
+        var wrong = plan()
+        wrong.subjects.plan = "plan-rev-3"
+        let cases: [(String, ExecutionPlanState, CGSize)] = [
+            ("execution-plan-empty", plan(filled: false), opening),
+            ("execution-plan-ready", plan(), opening),
+            ("execution-plan-invalid", wrong, opening),
+            ("execution-plan-narrow", plan(), CGSize(width: 900, height: 900)),
+            ("execution-plan-requested", plan(commandPending: true, outcome: .sent), opening),
+            ("execution-plan-accepted", plan(outcome: .accepted(attempt: Self.ids[1], dispatch: "launched")), tall),
+            ("execution-plan-refused", plan(outcome: .refused("StartRefused: missing or stale approval: plan")), tall),
+            ("execution-plan-unknown", plan(commandPending: true, outcome: .unknown), tall),
+            ("execution-plan-admission-closed", plan(admission: "Closed"), tall),
+            ("execution-plan-no-slice", plan(slice: false), opening),
+            ("execution-plan-loading", plan(connection: .handshaking, admission: ""), opening),
+            ("execution-plan-incompatible", plan(connection: .incompatible(epoch: 7)), tall),
+            ("execution-plan-disconnected", plan(connection: .channelLost("pipe closed")), tall),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, size) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.executionPlan), showInspector: {}) {
+                        ExecutionPlanView(state: state)
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
+        }
+    }
 }
 
 /// Every status component and button kind on a card, for the snapshot.

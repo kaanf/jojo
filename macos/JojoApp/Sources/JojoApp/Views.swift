@@ -15,7 +15,6 @@ struct MainView: View {
                     QuitBanner(model: model).padding(EdgeInsets(top: 20, leading: 20, bottom: 0, trailing: 20))
                     ZStack(alignment: .topLeading) {
                         Group {
-                            shown(.executionPlan) { StartView(model: model) }
                             if !MainView.built.contains(screen) { NotBuiltYet(screen: screen) }
                         }
                         .padding(.horizontal, 20)
@@ -23,6 +22,7 @@ struct MainView: View {
                         shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
                         shown(.agentRuns) { AgentRunsScreen(model: model, open: { screen = $0 }) }
                         shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
+                        shown(.executionPlan) { ExecutionPlanScreen(model: model, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                         shown(.settings) { SettingsScreen(model: model) }
                         shown(.sourceControl) { SourceControlScreen(model: model, open: { screen = $0 }) }
@@ -168,38 +168,6 @@ enum QuitText {
         case .exitTimeout: return "The helper did not exit after its ready receipt."
         case .channelLost(let r): return "The helper channel was lost (\(r)). State is unknown; nothing is assumed stopped."
         case .unexpectedState(let s): return "Unexpected close state: \(s). Quit again to retry."
-        }
-    }
-}
-
-/// One human Start for one approved plan step. It names identities only; what is launched
-/// is fixed by the helper's configuration and decided by the helper.
-struct StartView: View {
-    @ObservedObject var model: AppModel
-    @State private var subjects = StartSubjects()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Start runs one approved plan step in a Jojo-owned worktree. The helper refuses it unless admission is open, every approval is current and no earlier work is on hold.")
-                .foregroundStyle(.secondary)
-            Grid(alignment: .leading) {
-                field("PRD", $subjects.prd)
-                field("ADR", $subjects.adr)
-                field("Plan", $subjects.plan)
-                field("Validation plan", $subjects.validation)
-                field("Step", $subjects.step)
-            }
-            Button("Start") { model.workspace.start(subjects) }
-                .disabled(model.workspace.commandPending)
-            Spacer()
-        }
-        .padding(8)
-    }
-
-    private func field(_ name: String, _ value: Binding<String>) -> some View {
-        GridRow {
-            Text(name)
-            TextField("identity (32 hex)", text: value).font(.system(.body, design: .monospaced))
         }
     }
 }

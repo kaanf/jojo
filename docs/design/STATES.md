@@ -43,10 +43,10 @@ The right column names what exists in the app and protocol now. Rows without a s
 |---|---|
 | Disconnected | `HelperConnection.channelLost`, `.ended`, `.launchFailed` |
 | Recovery required | Snapshot `admission` is not `Open`; `Recovery` rows exist |
-| Requested, awaiting core | `WorkspaceModel.commandPending`; `HelperClient.outstandingCommands` (the Approval Inbox and Specifications read an outstanding `HumanDecision` there) |
-| Unknown outcome | Validation state `UNKNOWN`; an attempt outcome the core could not classify; recovery subjects with blockers |
+| Requested, awaiting core | `WorkspaceModel.commandPending`; `HelperClient.outstandingCommands` (the Approval Inbox and Specifications read an outstanding `HumanDecision` there); `WorkspaceModel.startOutcome` is `sent` for a Start on Execution Plan |
+| Unknown outcome | Validation state `UNKNOWN`; an attempt outcome the core could not classify; recovery subjects with blockers; `WorkspaceModel.startOutcome` is `unknown` for a Start without a usable answer |
 | Stale | `StaleInspection` and `StaleCandidate` refusals; `WorkspaceModel.reviewStale` for a document review after a decision was sent or refused. The age of an inspection is not reported by the helper yet |
-| Error | An `Error` reply to a query; `WorkspaceModel.eventsLoad` is `failed` for the event journal of Activity & Audit |
+| Error | An `Error` reply to a query; `WorkspaceModel.startOutcome` is `refused` with the code of a refused Start; `WorkspaceModel.eventsLoad` is `failed` for the event journal of Activity & Audit |
 | Loading | A query without a reply yet; `WorkspaceModel.eventsLoad` is `loading` for the event journal; `HelperConnection.notStarted` and `.handshaking` for the Hello answer in the Core section of Settings & Providers |
 | Empty | An empty page of rows |
 | Permission denied | No source yet |

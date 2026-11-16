@@ -142,6 +142,19 @@ public struct StartSubjects: Equatable, Sendable {
     }
 }
 
+/// What became of the last Start of this session, as the helper answered it. Accepted is
+/// not completed: the attempt's result is a separate read.
+public enum StartOutcome: Equatable, Sendable {
+    /// Sent; no answer yet.
+    case sent
+    /// The helper's receipt: the attempt it names and its word for the dispatch.
+    case accepted(attempt: String, dispatch: String)
+    /// The code of the helper's error answer; nothing was started.
+    case refused(String)
+    /// No usable answer. The command stays outstanding and is never sent again.
+    case unknown
+}
+
 /// Reviewed recovery choices (SHUTDOWN_RECOVERY), in `RecoveryChoice` order. Sent only by
 /// an explicit click, bound to the digest of the inspection on screen.
 public let recoveryChoices = [
@@ -165,6 +178,8 @@ public final class WorkspaceModel {
     public private(set) var status = ""
     /// A Start or recovery command is unanswered; the same control cannot send again.
     public private(set) var commandPending = false
+    /// The last Start of this session; nil until one was sent.
+    public private(set) var startOutcome: StartOutcome?
     /// P2-03 candidate review. Every field is the helper's answer; nothing is inferred here.
     public private(set) var candidate: CandidateReview?
     public private(set) var changedFiles: [ChangedFile] = []
@@ -393,9 +408,15 @@ public final class WorkspaceModel {
             onChange?()
             return
         }
-        slice(.Start, payload, sent: "Start sent; awaiting acknowledgement") { p in
-            "Start accepted for attempt \(p["attempt"]?.string ?? "?") (\(p["dispatch"]?.string ?? "?")); follow the run in Runs"
-        } refused: { "Start refused (\($0)); nothing was started" }
+        // A Start that is not sent (another command is unanswered) leaves the last outcome.
+        if !commandPending { startOutcome = .sent }
+        slice(.Start, payload, sent: "Start sent; awaiting acknowledgement") { [weak self] p in
+            self?.startOutcome = .accepted(attempt: p["attempt"]?.string ?? "?", dispatch: p["dispatch"]?.string ?? "?")
+            return "Start accepted for attempt \(p["attempt"]?.string ?? "?") (\(p["dispatch"]?.string ?? "?")); follow the run in Runs"
+        } refused: { [weak self] code in
+            self?.startOutcome = .refused(code)
+            return "Start refused (\(code)); nothing was started"
+        }
     }
 
     private func slice(_ type: Request, _ payload: [String: JSON], sent: String,
@@ -422,6 +443,7 @@ public final class WorkspaceModel {
             case .null, .list, .unanswered:
                 // Stays pending: an unknown outcome is reconciled by receipt, never resent.
                 self.status = "\(type.rawValue) outcome unknown; it will be reconciled by receipt, not resent"
+                if type == .Start { self.startOutcome = .unknown }
             }
             self.onChange?()
         }
