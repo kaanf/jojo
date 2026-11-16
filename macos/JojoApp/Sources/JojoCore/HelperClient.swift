@@ -32,6 +32,32 @@ public enum Reply: Equatable, Sendable {
     case unanswered(String)
 }
 
+/// What the helper's Hello answer says beside the epoch and the compatibility: the limits of
+/// the channel, the requests it offers and whether it holds a slice configuration. A field
+/// the answer does not carry stays nil or empty. Hello's `admission` is a fixed text, not the
+/// session's admission (the snapshot has that), and is not kept.
+public struct HelperHello: Equatable, Sendable {
+    public var maxFrame: Int64?
+    public var maxPage: Int64?
+    public var slice: Bool?
+    public var commands: [String]
+    public var queries: [String]
+
+    public init(maxFrame: Int64? = nil, maxPage: Int64? = nil, slice: Bool? = nil, commands: [String] = [], queries: [String] = []) {
+        self.maxFrame = maxFrame
+        self.maxPage = maxPage
+        self.slice = slice
+        self.commands = commands
+        self.queries = queries
+    }
+
+    init(_ payload: [String: JSON]) {
+        let names = { (key: String) in (payload[key]?.string ?? "").split(separator: " ").map(String.init) }
+        self.init(maxFrame: payload["max_frame"]?.integer, maxPage: payload["max_page"]?.integer,
+                  slice: payload["slice"]?.boolean, commands: names("commands"), queries: names("queries"))
+    }
+}
+
 /// Request/response correlation over one helper session. Mutating commands are tracked
 /// until answered; unanswered ones stay outstanding so quitting must reconcile them by
 /// receipt lookup under the same identity, never by resending with a new identity.
@@ -42,6 +68,8 @@ public final class HelperClient {
         didSet { if connection != oldValue { onConnectionChange?(connection) } }
     }
     public private(set) var epoch: Int64 = 0
+    /// The rest of the Hello answer of this session; nil until the helper has answered.
+    public private(set) var hello: HelperHello?
     public private(set) var outstandingCommands: [String: String] = [:]
     public var onConnectionChange: ((HelperConnection) -> Void)?
     /// Helper-initiated frames (ShutdownReady/ShutdownFailure). Validation is the caller's.
@@ -80,6 +108,7 @@ public final class HelperClient {
                 return
             }
             self.epoch = epoch
+            self.hello = HelperHello(p)
             self.connection = compatible ? .ready(epoch: epoch) : .incompatible(epoch: epoch)
         }
         write(Envelope(session: session, epoch: 0, id: id, type: Request.Hello.rawValue))

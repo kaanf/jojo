@@ -24,6 +24,7 @@ struct MainView: View {
                         shown(.agentRuns) { AgentRunsScreen(model: model, open: { screen = $0 }) }
                         shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
+                        shown(.settings) { SettingsScreen(model: model) }
                         shown(.sourceControl) { SourceControlScreen(model: model, open: { screen = $0 }) }
                         shown(.specifications) { SpecificationsScreen(model: model, open: { screen = $0 }) }
                         shown(.verification) { VerificationScreen(model: model, open: { screen = $0 }) }
@@ -43,7 +44,7 @@ struct MainView: View {
 
     /// Destinations that have a screen today; the others show `NotBuiltYet`.
     static let built: Set<Screen> = [.activity, .agentRuns, .approvalInbox, .recoveryCenter, .executionPlan,
-                                     .sourceControl, .specifications, .verification]
+                                     .settings, .sourceControl, .specifications, .verification]
 
     private func shown(_ target: Screen, @ViewBuilder _ content: () -> some View) -> some View {
         content()

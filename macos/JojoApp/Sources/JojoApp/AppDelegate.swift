@@ -66,11 +66,14 @@ final class AppModel: ObservableObject {
     let workspace: WorkspaceModel
     let trace: Tracer
     let transport: ProcessHelperTransport?
+    /// What the app was started with; Settings & Providers shows what it passed to the helper.
+    let options: LaunchOptions
     /// The delegate's single quit entry (set at launch).
     var quit: (QuitSource) -> Void = { _ in }
 
     init(options: LaunchOptions, trace: Tracer) {
         self.trace = trace
+        self.options = options
         let transport = options.helper.map {
             ProcessHelperTransport(.init(executable: $0, dataRoot: options.dataRoot, worktreeRoot: options.worktreeRoot,
                                          home: ProcessInfo.processInfo.environment["HOME"], slice: options.slice))

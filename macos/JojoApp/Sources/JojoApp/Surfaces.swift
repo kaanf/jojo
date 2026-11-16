@@ -1282,3 +1282,112 @@ struct RecordRow: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
+
+// MARK: Settings surfaces (COMPONENTS.md, section 21)
+
+/// The tile of a settings section: a solid color that stays the same in both appearances,
+/// with a white glyph. 20 × 20 in the section list, 28 × 28 in the title of the section.
+struct SectionTile: View {
+    @Environment(\.theme) private var theme
+    let symbol: String
+    let color: RGBA
+    var size: CGFloat = 20
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(color.color)
+            .frame(width: size, height: size)
+            .overlay(Image(systemName: symbol).font(.system(size: size * 0.55, weight: .medium)).foregroundStyle(theme.onAccent))
+            .accessibilityHidden(true)
+    }
+}
+
+/// One item of a section list: tile and name. The row is a plain view; the screen wraps it
+/// in a button.
+struct SectionItem: View {
+    @Environment(\.theme) private var theme
+    let title: String
+    let symbol: String
+    let color: RGBA
+    var selected = false
+
+    var body: some View {
+        HStack(spacing: 9) {
+            SectionTile(symbol: symbol, color: color)
+            Text(title).textStyle(.body).foregroundStyle(theme.text).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 30)
+        .background(selected ? theme.accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 7))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// How the value of a setting reads: a sentence, a path or identifier, or the statement
+/// that there is no value ("Not reported").
+enum SettingForm: Equatable, Sendable {
+    case plain, identifier, missing
+}
+
+/// The value of a setting as read-only text in one of the three forms.
+struct SettingText: View {
+    @Environment(\.theme) private var theme
+    let value: String
+    var form = SettingForm.plain
+
+    var body: some View {
+        switch form {
+        case .plain: Text(value).textStyle(.body).foregroundStyle(theme.text2)
+        case .identifier: Text(value).font(.system(size: 11.5, design: .monospaced)).tracking(-0.115).foregroundStyle(theme.text)
+        case .missing: Text(value).textStyle(.body).foregroundStyle(theme.text3)
+        }
+    }
+}
+
+/// One setting of a settings card: a label, its value and an optional trailing part (a pill
+/// or a note); a hairline below unless last. Nothing in it can be changed.
+struct SettingLine<Value: View, Trailing: View>: View {
+    @Environment(\.theme) private var theme
+    let label: String
+    var last = false
+    @ViewBuilder let value: () -> Value
+    @ViewBuilder let trailing: () -> Trailing
+
+    init(_ label: String, last: Bool = false, @ViewBuilder value: @escaping () -> Value, @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.label = label
+        self.last = last
+        self.value = value
+        self.trailing = trailing
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text(label).textStyle(.body).foregroundStyle(theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 170, alignment: .leading)
+            value()
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            trailing()
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(theme.hairline).frame(height: 1) } }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension SettingLine where Value == SettingText {
+    init(_ label: String, _ value: String, form: SettingForm = .plain, last: Bool = false, @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.init(label, last: last, value: { SettingText(value: value, form: form) }, trailing: trailing)
+    }
+}
+
+extension SettingLine where Value == SettingText, Trailing == EmptyView {
+    init(_ label: String, _ value: String, form: SettingForm = .plain, last: Bool = false) {
+        self.init(label, value, form: form, last: last) { EmptyView() }
+    }
+}

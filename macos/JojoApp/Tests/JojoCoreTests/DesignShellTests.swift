@@ -161,7 +161,7 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.opaqueSidebar, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 3360)
+            .frame(width: 1120, height: 3640)
             guard let directory else { continue }
             try write(shell, to: directory, "shell-\(name).png")
         }
@@ -1245,6 +1245,172 @@ final class DesignShellTests: XCTestCase {
             }
         }
     }
+
+    // MARK: Settings & Providers (docs/design/screens/SETTINGS.md)
+
+    func test_dw1_helper_client_keeps_the_rest_of_the_hello_answer() {
+        let fake = FakeHelper()
+        fake.autoHello = false
+        let client = HelperClient(transport: fake)
+        client.start()
+        XCTAssertNil(client.hello, "nothing is known before the helper answers")
+        fake.reply(fake.sent[0], ["compatible": .bool(true), "epoch": .int(7), "max_frame": .int(1_048_576), "max_page": .int(8),
+                                  "admission": .text("closed until reviewed recovery start"),
+                                  "commands": .text("PrepareClose Start"), "queries": .text("Snapshot Events Log"), "slice": .bool(true)])
+        XCTAssertEqual(client.connection, .ready(epoch: 7))
+        XCTAssertEqual(client.hello, HelperHello(maxFrame: 1_048_576, maxPage: 8, slice: true,
+                                                 commands: ["PrepareClose", "Start"], queries: ["Snapshot", "Events", "Log"]))
+
+        // An answer without the fields leaves them unknown, never false or zero.
+        let bare = FakeHelper()
+        let older = HelperClient(transport: bare)
+        older.start()
+        XCTAssertEqual(older.hello, HelperHello())
+    }
+
+    private static let claudeDigest = String(repeating: "9f3c", count: 16)
+
+    private func settings(_ section: SettingsSection = .claude, connection: HelperConnection = .ready(epoch: 7),
+                          launch: SettingsLaunch? = nil) -> SettingsState {
+        let options = LaunchOptions.parse([
+            "JojoApp", "--helper", "/Applications/Jojo.app/Contents/MacOS/jojo-helper", "--data-root", "/Users/dev/JojoDisposable/data",
+            "--disposable-root", "/Users/dev/JojoDisposable/run", "--claude-executable", "/Users/dev/.local/share/claude/versions/2.1.311",
+            "--claude-version", "2.1.311 (Claude Code)", "--claude-sha256", Self.claudeDigest, "--claude-home", "/Users/dev/.claude-home",
+            "--claude-user", "dev-account", "--claude-auth", "native-subscription",
+        ])
+        return SettingsState(
+            connection: connection, admission: "Open", pid: 4242,
+            hello: HelperHello(maxFrame: 1_048_576, maxPage: 8, slice: true,
+                               commands: ["PrepareClose", "CancelClose", "ConfirmClose", "CancelAttempt", "HumanDecision", "Start", "RecoveryResolve",
+                                          "RecoveryStart", "Validate", "CandidateDecision"],
+                               queries: ["Snapshot", "Events", "Log", "Receipt", "CloseStatus", "ReviewBundle", "Recovery", "RecoveryInspect",
+                                         "Candidate", "CandidateChanges", "CandidateDiff", "ValidationReport", "EventDetail"]),
+            launch: launch ?? SettingsLaunch(options), section: section)
+    }
+
+    private func values(_ page: SettingsPage) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: page.groups.flatMap(\.lines).map { ($0.label, $0.value) })
+    }
+
+    func test_dw1_settings_show_the_launch_options_of_a_provider_and_nothing_that_could_be_a_credential() {
+        let state = settings()
+        let claude = state.page(.claude)
+        XCTAssertEqual(claude.groups.map(\.title), ["Passed to the core at launch", "Authentication", "Reported by the core"])
+        let shown = values(claude)
+        XCTAssertEqual(shown["Path"], "/Users/dev/.local/share/claude/versions/2.1.311")
+        XCTAssertEqual(shown["Version"], "2.1.311 (Claude Code)")
+        XCTAssertEqual(shown["SHA-256 digest"], Self.claudeDigest)
+        XCTAssertEqual(shown["Sign-in"], "Attested at launch as native-subscription. The sign-in itself is not checked.")
+        XCTAssertEqual(shown["Slice configuration"], "Present. The core does not say which providers it holds.")
+        // The home directory and the account name are options too; no section shows them.
+        for section in SettingsSection.allCases {
+            let page = state.page(section)
+            let text = (page.groups.flatMap(\.lines).flatMap { [$0.value] + $0.names } + [page.footnote ?? "", page.notice ?? ""]).joined(separator: " ")
+            XCTAssertFalse(text.contains(".claude-home"), "\(section)")
+            XCTAssertFalse(text.contains("dev-account"), "\(section)")
+        }
+        // Nothing reads as confirmed: no pill on a provider's lines.
+        XCTAssertTrue(claude.groups.flatMap(\.lines).allSatisfy { $0.trailing == .none })
+
+        // A provider without options says so and shows no example.
+        let codex = state.page(.codex)
+        XCTAssertEqual(codex.empty?.title, "No Codex options were passed at launch")
+        XCTAssertEqual(codex.groups.map(\.title), ["Reported by the core"])
+    }
+
+    func test_dw1_settings_core_section_says_what_the_sidebar_says_and_only_what_hello_reported() {
+        let state = settings(.core)
+        let shown = values(state.page)
+        let sidebar = ShellStatus(connection: .ready(epoch: 7), admission: "Open", pid: 4242)
+        XCTAssertEqual(shown["Core"], sidebar.core)
+        XCTAssertEqual(shown["Session"], sidebar.session)
+        XCTAssertEqual(shown["Admission"], sidebar.admission)
+        XCTAssertEqual(shown["Largest frame"], "1048576 bytes")
+        XCTAssertEqual(shown["Largest page"], "8 rows")
+        let lines = state.page.groups.flatMap(\.lines)
+        XCTAssertEqual(lines.first { $0.label == "Compatibility" }?.trailing, .evidence(.passed, "Compatible"))
+        XCTAssertEqual(lines.first { $0.label == "Queries" }?.names.last, "EventDetail")
+
+        var mismatch = settings(.core, connection: .incompatible(epoch: 7))
+        XCTAssertEqual(mismatch.page.groups.flatMap(\.lines).first { $0.label == "Compatibility" }?.trailing, .evidence(.failed, "Mismatch"))
+        mismatch.hello = HelperHello()
+        XCTAssertEqual(values(mismatch.page)["Largest frame"], SettingsState.notReported, "a missing field is not a zero")
+
+        // What an earlier session answered is not shown as current once the helper is gone.
+        for connection in [HelperConnection.channelLost("pipe closed"), .ended(status: 1), .launchFailed("no helper"), .handshaking, .notStarted] {
+            let gone = settings(.core, connection: connection)
+            XCTAssertNil(gone.reported, "\(connection)")
+            XCTAssertEqual(gone.page.groups.map(\.title), ["Connection"], "\(connection)")
+            XCTAssertEqual(values(gone.page)["Admission"], "Admission unknown")
+            XCTAssertEqual(gone.slice.form, .missing)
+        }
+        XCTAssertEqual(settings(.core, connection: .handshaking).page.notice, "Waiting for the core's answer…")
+        XCTAssertEqual(settings(.core, connection: .ended(status: 1)).page.notice, "Nothing is reported while the core is not connected.")
+    }
+
+    func test_dw1_settings_state_open_decisions_and_missing_values_without_an_example() {
+        let state = settings()
+        XCTAssertEqual(SettingsSection.groups.flatMap { $0 }, SettingsSection.allCases, "every section is in the list once")
+        XCTAssertEqual(SettingsSection.allCases.map(\.title),
+                       ["Claude Code", "Codex", "Core", "Executable discovery", "Defaults & concurrency", "Git & GitHub", "Workspace storage",
+                        "Evidence retention", "Security & approvals", "Keyboard shortcuts", "Appearance"])
+
+        // D4 is open: no capacity is shown, neither the board's nor the roadmap's.
+        let concurrency = state.page(.defaults).groups[1].lines
+        XCTAssertTrue(concurrency.allSatisfy { $0.form == .missing })
+        XCTAssertNil(concurrency.map(\.value).joined().rangeOfCharacter(from: .decimalDigits))
+        // D2: the board's validator line no longer holds.
+        XCTAssertFalse(values(state.page(.defaults))["Validator"]!.contains("no agent"))
+        XCTAssertEqual(values(state.page(.defaults))["Repair"], "Decided, not built: automatic, at most two tries, then a human hold.")
+        // D3: a changed binary is refused today, not warned about.
+        XCTAssertTrue(values(state.page(.discovery))["Changed binary"]!.hasPrefix("Refused, not warned"))
+        // Approvals in force: four kinds, no approve-all.
+        XCTAssertEqual(values(state.page(.git))["Combined approval"], "None. There is no approve-all.")
+        XCTAssertTrue(values(state.page(.security))["Approval kinds"]!.contains("There is no approve-all."))
+
+        XCTAssertEqual(values(state.page(.storage))["App data"], "/Users/dev/JojoDisposable/data")
+        XCTAssertEqual(values(state.page(.storage))["Disposable root"], "/Users/dev/JojoDisposable/run")
+        XCTAssertEqual(state.page(.git).groups[0].lines[0].form, .missing, "no worktree root was passed")
+        XCTAssertEqual(state.page(.shortcuts).groups[0].lines.compactMap(\.keys), ["⌘Q", "⌘0", "⌥⌘I"])
+
+        // The app sends no request that writes a setting.
+        XCTAssertFalse(Request.allCases.contains { $0.rawValue.localizedCaseInsensitiveContains("setting") || $0.rawValue.localizedCaseInsensitiveContains("config") })
+        XCTAssertTrue(MainView.built.contains(.settings))
+    }
+
+    /// Review aid, as above: Settings & Providers in each section, and its empty, loading,
+    /// incompatible and disconnected forms.
+    func test_dw1_settings_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        let opening = CGSize(width: 1120, height: 720), tall = CGSize(width: 1120, height: 900)
+        var cases: [(String, SettingsState, CGSize)] = SettingsSection.allCases.map {
+            ("settings-\($0.rawValue)", settings($0), $0 == .core ? tall : opening)
+        }
+        cases += [
+            ("settings-narrow", settings(.claude), CGSize(width: 900, height: 720)),
+            ("settings-empty", settings(.claude, launch: SettingsLaunch()), opening),
+            ("settings-loading", settings(.core, connection: .handshaking), opening),
+            ("settings-incompatible", settings(.core, connection: .incompatible(epoch: 7)), tall),
+            ("settings-disconnected", settings(.core, connection: .channelLost("pipe closed")), opening),
+            ("settings-disconnected-provider", settings(.claude, connection: .ended(status: 1)), opening),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, size) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.settings), showInspector: {}) {
+                        SettingsView(state: state)
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
+        }
+    }
 }
 
 /// Every status component and button kind on a card, for the snapshot.
@@ -1525,6 +1691,33 @@ private struct Gallery: View {
                                       subject: "e5f6a7b8e5f6", record: "event 64")
                             RecordRow(type: "EngineStarted", text: "previous_epoch=6;previous_shutdown=CLEAN", mono: true,
                                       record: "event 62", last: true)
+                        }
+                    }
+                }
+            }
+            titled("Section items, section tiles and setting lines") {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(spacing: 1) {
+                        SectionItem(title: "Claude Code", symbol: "sparkle", color: RGBA(0xC2643A), selected: true)
+                        SectionItem(title: "Codex", symbol: "chevron.left.forwardslash.chevron.right", color: RGBA(0x3C3C44))
+                        SectionItem(title: "Security & approvals", symbol: "lock.shield", color: RGBA(0xB5402F))
+                        HStack(spacing: 10) {
+                            SectionTile(symbol: "sparkle", color: RGBA(0xC2643A), size: 28)
+                            SectionTile(symbol: "paintbrush", color: RGBA(0x7B4FD6), size: 28)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(EdgeInsets(top: 10, leading: 8, bottom: 0, trailing: 8))
+                    }
+                    .frame(width: 220)
+                    Card(.panelList) {
+                        VStack(spacing: 0) {
+                            SettingLine("Path", "/opt/homebrew/bin/claude", form: .identifier)
+                            SettingLine("Version", "Detected at launch · capability check passed") { EvidencePill(.passed, label: "Compatible") }
+                            SettingLine("Approval binding", "Exact revision and content hash") {
+                                Text("Always on").textStyle(.meta).foregroundStyle(theme.text3)
+                            }
+                            SettingLine("Command palette") { KeyCap("⌘K") } trailing: { EmptyView() }
+                            SettingLine("Parallel attempts", "Not reported", form: .missing, last: true)
                         }
                     }
                 }
