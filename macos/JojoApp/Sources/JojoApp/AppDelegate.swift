@@ -8,10 +8,13 @@ struct LaunchOptions {
     var worktreeRoot: String?
     var trace: String?
     var script: String?
-    /// P2-02 slice options, forwarded to the helper exactly as given at launch.
+    /// P2-02 slice options and the M1 Claude Code options, forwarded to the helper exactly
+    /// as given at launch.
     var slice: [String] = []
     static let sliceOptions: Set<String> = ["--disposable-root", "--codex-executable", "--codex-version",
-                                            "--codex-sha256", "--codex-home", "--codex-auth"]
+                                            "--codex-sha256", "--codex-home", "--codex-auth",
+                                            "--claude-executable", "--claude-version", "--claude-sha256",
+                                            "--claude-home", "--claude-user", "--claude-auth"]
 
     static func parse(_ arguments: [String]) -> LaunchOptions {
         var o = LaunchOptions()
