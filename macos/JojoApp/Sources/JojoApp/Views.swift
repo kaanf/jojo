@@ -16,7 +16,6 @@ struct MainView: View {
                     QuitBanner(model: model).padding(EdgeInsets(top: 20, leading: 20, bottom: 0, trailing: 20))
                     ZStack(alignment: .topLeading) {
                         Group {
-                            shown(.agentRuns) { RunsView(model: model) }
                             shown(.approvalInbox) { ReviewView(model: model, subject: $subject) }
                             shown(.executionPlan) { StartView(model: model) }
                             shown(.verification) { CandidateView(model: model) }
@@ -24,6 +23,7 @@ struct MainView: View {
                         }
                         .padding(.horizontal, 20)
                         // A redesigned screen fills the content area and sets its own padding.
+                        shown(.agentRuns) { AgentRunsScreen(model: model, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -165,26 +165,6 @@ enum QuitText {
         case .channelLost(let r): return "The helper channel was lost (\(r)). State is unknown; nothing is assumed stopped."
         case .unexpectedState(let s): return "Unexpected close state: \(s). Quit again to retry."
         }
-    }
-}
-
-struct RunsView: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        List(model.workspace.rows) { row in
-            HStack(alignment: .top) {
-                VStack(alignment: .leading) {
-                    Text("\(row.kind) \(row.subject)").font(.system(.body, design: .monospaced))
-                    Text(row.value + (row.detailComplete ? "" : " … (partial)")).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if row.kind == "attempt" {
-                    Button("Cancel Task") { model.workspace.cancelAttempt(row.subject) }
-                }
-            }
-        }
-        .overlay { if model.workspace.rows.isEmpty { Text("No runs or artifacts.").foregroundStyle(.secondary) } }
     }
 }
 

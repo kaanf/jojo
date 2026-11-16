@@ -1,8 +1,8 @@
-import JojoCore
 import SwiftUI
 import XCTest
 
 @testable import JojoApp
+@testable import JojoCore
 
 /// Design wave 1: tokens, status model and shell against docs/design.
 @MainActor
@@ -161,7 +161,7 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.opaqueSidebar, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 1240)
+            .frame(width: 1120, height: 1560)
             guard let directory else { continue }
             try write(shell, to: directory, "shell-\(name).png")
         }
@@ -337,6 +337,147 @@ final class DesignShellTests: XCTestCase {
             }
         }
     }
+
+    // MARK: Agent Runs (docs/design/screens/AGENT_RUNS.md)
+
+    private static let ids = ["1a2b3c4d", "5e6f7a8b", "9c0d1e2f", "a1b2c3d4", "e5f6a7b8"].map { String(repeating: $0, count: 4) }
+
+    /// The `Candidate` answer of one attempt, as the helper sends it.
+    private func result(_ attempt: String, sealed: Bool = true, outcome: String = "Succeeded", reason: String = "exit 0",
+                        validation: String = "PASS", decision: String = "NONE", records: Int64 = 3) -> CandidateReview {
+        CandidateReview(["attempt": .text(attempt), "sealed": .bool(sealed), "outcome": .text(sealed ? outcome : ""),
+                         "reason": .text(sealed ? reason : ""), "provider_terminal": .text(sealed ? "result: success" : ""),
+                         "candidate": sealed ? .text(String(repeating: "c4", count: 20)) : .null, "log_records": .int(records),
+                         "validation": .object(["state": .text(validation), "detail": .text(""), "receipt": .int(4),
+                                                "candidate": .text(String(repeating: "c4", count: 20)), "reasons": .list([])]),
+                         "decision": .text(decision)])!
+    }
+
+    private var runs: AgentRunsState {
+        let ids = Self.ids
+        return AgentRunsState(
+            connection: .ready(epoch: 7), admission: "Open",
+            attempts: [AttemptRecord(id: ids[0], record: "RESERVED", worktree: "CREATING"), AttemptRecord(id: ids[1], record: "RESERVED"),
+                       AttemptRecord(id: ids[2], record: "RESERVED", worktree: "CREATING"),
+                       AttemptRecord(id: ids[3], record: "RESERVED", recordComplete: false), AttemptRecord(id: ids[4], record: "RESERVED")],
+            recovery: [held(ids[1], blockers: ["process state unknown"]), held(ids[2], absent: true, choices: RecoveryChoice.allCases)],
+            result: result(ids[0]),
+            log: ["stdout: $ swift test", "stdout: Test Suite 'All tests' passed", "result: success"], commandPending: false)
+    }
+
+    func test_dw1_agent_runs_lists_the_snapshot_attempts_with_their_worktree_record() {
+        let ids = Self.ids
+        let rows = [SnapshotRow(key: "artifact:\(ids[4])", value: "digest", detailComplete: true),
+                    SnapshotRow(key: "scheduler_attempt:\(ids[1])", value: "RESERVED", detailComplete: true),
+                    SnapshotRow(key: "scheduler_attempt:\(ids[0])", value: "RESERVED", detailComplete: false),
+                    SnapshotRow(key: "worktree_admin:\(ids[0])", value: "CREATING", detailComplete: true),
+                    SnapshotRow(key: "worktree_admin:\(ids[3])", value: "CREATING", detailComplete: true)]
+        XCTAssertEqual(AgentRunsState.attempts(in: rows),
+                       [AttemptRecord(id: ids[1], record: "RESERVED"),
+                        AttemptRecord(id: ids[0], record: "RESERVED", recordComplete: false, worktree: "CREATING")],
+                       "only attempt rows, in the snapshot's order; a worktree record alone is not an attempt")
+        XCTAssertEqual(AgentRunsState.attempts(in: []), [])
+    }
+
+    func test_dw1_agent_runs_state_is_what_the_core_reported_and_never_running() {
+        let ids = Self.ids
+        var state = runs
+        XCTAssertEqual(state.runs.map(\.pill.label), ["Succeeded", "Unknown", "Confirmed dead", "Not loaded", "Not loaded"])
+        XCTAssertEqual(state.runs.map(\.pill.state), [.completed, .recoveryRequired, .recoveryRequired, .idle, .idle])
+        XCTAssertEqual(state.runs[3].line, "Scheduler record: RESERVED")
+        XCTAssertEqual(state.runs[1].line, "Held in Recovery Center")
+        for (outcome, expected) in [("Failed", OperationalState.failed), ("Interrupted", .recoveryRequired), ("Cancelled", .idle)] {
+            state.result = result(ids[3], outcome: outcome)
+            XCTAssertEqual(state.runs[3].pill.state, expected, outcome)
+            XCTAssertEqual(state.runs[3].pill.label, outcome)
+            XCTAssertEqual(state.runs[0].pill.label, "Not loaded", "one result is loaded at a time")
+        }
+        state.result = result(ids[3], sealed: false)
+        XCTAssertEqual(state.runs[3].pill.label, "Not sealed", "an unsealed attempt may be running or not; the core does not say")
+        // A hold outranks a loaded result.
+        state.result = result(ids[1])
+        XCTAssertEqual(state.runs[1].pill.label, "Unknown")
+        for run in state.runs { XCTAssertNotEqual(run.pill.state, .running) }
+    }
+
+    func test_dw1_agent_runs_recorded_facts_and_console_say_what_is_loaded() {
+        let ids = Self.ids
+        var state = runs
+        XCTAssertEqual(state.runs[0].facts.map(\.text),
+                       ["Scheduler record: RESERVED", "Worktree record: CREATING", "Result sealed: Succeeded · exit 0", "Validation: PASS"])
+        XCTAssertEqual(state.runs[0].facts.map(\.tone), [.ok, .ok, .ok, .ok])
+        XCTAssertEqual(state.runs[1].facts.last, TimelineEntry(text: "Held for recovery: process state unknown", tone: .danger))
+        XCTAssertEqual(state.runs[3].facts.map(\.text), ["Scheduler record: RESERVED … (partial)"])
+        XCTAssertEqual(state.console(state.runs[0]).map(\.text), state.log)
+        XCTAssertEqual(state.console(state.runs[3]).map(\.text), ["Not loaded."])
+        state.result = result(ids[3], outcome: "Failed", reason: "exit 1", validation: "UNKNOWN", decision: "REJECTED", records: 80)
+        XCTAssertEqual(state.runs[3].facts.suffix(3).map(\.tone), [.danger, .neutral, .neutral], "unknown is neither success nor failure")
+        XCTAssertEqual(state.console(state.runs[3]).last, ConsoleLine(id: 3, text: "… (16 later records are not loaded)", kind: .status(.warn)))
+        state.log = []
+        XCTAssertEqual(state.console(state.runs[3]).map(\.text), ["Reading the log records…"])
+        state.result = result(ids[3], sealed: false, records: 0)
+        XCTAssertEqual(state.console(state.runs[3]).map(\.text), ["No log records."])
+        XCTAssertEqual(state.runs[3].facts.last, TimelineEntry(text: "No sealed result yet", tone: .neutral))
+    }
+
+    func test_dw1_agent_runs_cancel_needs_a_connected_core_and_an_open_unheld_attempt() {
+        var state = runs
+        XCTAssertEqual(state.cancelBlocked(state.runs[0]), "The result is already sealed.")
+        XCTAssertEqual(state.cancelBlocked(state.runs[1]), "On hold: resolve it in Recovery Center first.")
+        XCTAssertNil(state.cancelBlocked(state.runs[3]))
+        state.commandPending = true
+        XCTAssertEqual(state.cancelBlocked(state.runs[3]), "Unavailable while a command awaits the core.")
+        state.commandPending = false
+        state.connection = .ended(status: 1)
+        XCTAssertEqual(state.cancelBlocked(state.runs[3]), "Unavailable: the core is not connected.")
+        XCTAssertEqual(state.link, .lost)
+        XCTAssertFalse(state.loading)
+        state.admission = "Closed"
+        XCTAssertFalse(state.admissionClosed, "admission is stated only while the core is connected")
+        state.connection = .ready(epoch: 7)
+        XCTAssertTrue(state.admissionClosed)
+        state.attempts = nil
+        XCTAssertTrue(state.loading)
+        XCTAssertEqual(state.runs, [])
+    }
+
+    /// Review aid, as above: Agent Runs with test rows, at the opening size and wide, and its
+    /// empty, loading and disconnected forms.
+    func test_dw1_agent_runs_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        let ids = Self.ids
+        var lost = runs
+        lost.connection = .channelLost("pipe closed")
+        var closed = runs
+        closed.admission = "Closed"
+        var nothing = runs
+        nothing.attempts = []
+        var loading = runs
+        loading.attempts = nil
+        let opening = CGSize(width: 1120, height: 720), wide = CGSize(width: 1440, height: 1000)
+        let cases: [(String, AgentRunsState, String?, CGSize)] = [
+            ("agent-runs", runs, nil, opening), ("agent-runs-wide", runs, nil, wide), ("agent-runs-held", closed, ids[1], wide),
+            ("agent-runs-unloaded", runs, ids[3], CGSize(width: 1120, height: 1100)),
+            ("agent-runs-disconnected", lost, ids[3], wide), ("agent-runs-empty", nothing, nil, opening),
+            ("agent-runs-loading", loading, nil, opening),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, selected, size) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.agentRuns), showInspector: {}) {
+                        AgentRunsView(state: state, selected: selected)
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
+        }
+    }
 }
 
 /// Every status component and button kind on a card, for the snapshot.
@@ -407,6 +548,49 @@ private struct Gallery: View {
                         }
                         Footnote("Footnote: one sentence that says what did not change.")
                         LoadingBlock("Loading attempts…")
+                    }
+                }
+            }
+            HStack(alignment: .top, spacing: 16) {
+                titled("Timeline and summary fields") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Card(CardShape(radius: 10, vertical: 8, horizontal: 14)) {
+                            Timeline([TimelineEntry(text: "Attempt admitted by core · claims granted", time: "09:21:04"),
+                                      TimelineEntry(text: "Supervision lost", tone: .danger, time: "09:29:12"),
+                                      TimelineEntry(text: "No sealed result yet", tone: .neutral),
+                                      TimelineEntry(text: "Running unit tests", tone: .info, time: "09:33:02")])
+                        }
+                        Card(.panel) {
+                            WrappingRow {
+                                LabeledField("Attempt") { Text("att_142_t4_02").textStyle(.mono).foregroundStyle(theme.text) }
+                                LabeledField("State") { OperationalPill(.running, label: "Running · supervised") }
+                                LabeledField("Started") { Text("09:21:04").textStyle(.control).foregroundStyle(theme.text) }
+                                LabeledField("Duration") { Text("12m 08s").textStyle(.control).foregroundStyle(theme.text) }
+                                LabeledField("Base commit") { Text("9c1e4b2").textStyle(.mono).foregroundStyle(theme.text) }
+                            }
+                        }
+                        Console([ConsoleLine(id: 0, text: "$ ./gradlew test --tests InviteServiceTest", kind: .command),
+                                 ConsoleLine(id: 1, text: "> Task :compileKotlin UP-TO-DATE"),
+                                 ConsoleLine(id: 2, text: "InviteServiceTest > creates multi-use token PASSED", kind: .status(.ok)),
+                                 ConsoleLine(id: 3, text: "InviteServiceTest > revokes on lobby close RUNNING", kind: .status(.info)),
+                                 ConsoleLine(id: 4, text: "[supervision lost at 08:57:31]", kind: .status(.warn))])
+                    }
+                }
+                titled("Inspector section, facts and notice") {
+                    Card(.panelList) {
+                        VStack(spacing: 0) {
+                            InspectorSection("Supervision") {
+                                FactGrid {
+                                    Fact("State") { OperationalPill(.running, label: "Running · supervised") }
+                                    Fact("Liveness", "Heartbeat 2s ago")
+                                    Fact("Stopped", "Not stopped")
+                                }
+                            }
+                            InspectorSection("Actions", last: true) {
+                                Button("Cancel Attempt…") {}.buttonStyle(.jojo(.destructive))
+                                NoticeWell("A stopped process is not a successful attempt. Exit is recorded only when the OS confirms it.")
+                            }
+                        }
                     }
                 }
             }

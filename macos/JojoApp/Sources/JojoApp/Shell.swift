@@ -143,7 +143,7 @@ struct AppShell<Content: View>: View {
     /// Work on hold needs the human; attempts are a plain count.
     private var counters: [Screen: SidebarCounter] {
         [.recoveryCenter: SidebarCounter(count: model.workspace.recovery.count, tone: .warn),
-         .agentRuns: SidebarCounter(count: model.workspace.rows.filter { $0.kind == "attempt" }.count, tone: .neutral)]
+         .agentRuns: SidebarCounter(count: AgentRunsState.attempts(in: model.workspace.rows).count, tone: .neutral)]
     }
 }
 

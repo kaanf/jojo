@@ -280,12 +280,12 @@ Built in `macos/JojoApp/Sources/JojoApp`: `Theme.swift` (tokens, typography, car
 | Status well | Dot: `ok` for admission `Open`, `danger` for any other reported value, an empty ring when unknown. Admission is stated only while the helper connection is ready; otherwise "Admission unknown". The identifier is the helper epoch. The second line is the helper connection, because provider availability is not reported yet |
 | Toolbar breadcrumb | "Jojo › screen", and "Jojo › System › screen" for the System group, until projects and features exist |
 | Toolbar, command pending | A "Requested" pill (Waiting form) while `WorkspaceModel.commandPending` is true |
-| Sidebar counters | Recovery Center: subjects on hold, `warn`. Agent Runs: attempts, plain count |
+| Sidebar counters | Recovery Center: subjects on hold, `warn`. Agent Runs: the snapshot's attempt rows, plain count |
 | Destinations without a screen | The Empty form of STATES.md with the destination's glyph and "… is not built yet" |
 
-Four screens that existed before the shell are shown unchanged under these destinations until each is redesigned: Runs under Agent Runs, Review under Approval Inbox, Start under Execution Plan, Candidate under Verification & Evidence. Recovery Center is redesigned ([screens/RECOVERY_CENTER.md](screens/RECOVERY_CENTER.md)).
+Three screens that existed before the shell are shown unchanged under these destinations until each is redesigned: Review under Approval Inbox, Start under Execution Plan, Candidate under Verification & Evidence. Recovery Center ([screens/RECOVERY_CENTER.md](screens/RECOVERY_CENTER.md)) and Agent Runs ([screens/AGENT_RUNS.md](screens/AGENT_RUNS.md)) are redesigned.
 
-Review aid: `JOJO_SNAPSHOT_DIR=<directory> swift test --filter DesignShellTests` writes `shell-dark.png` and `shell-light.png` (the shell with every status component, button kind and shared surface), and each redesigned screen in its states (`recovery-center-…`, `recovery-closed-…`, `launch-review-…`, `recovery-disconnected-…`, `recovery-empty-…`, `recovery-loading-…`), rendered off screen.
+Review aid: `JOJO_SNAPSHOT_DIR=<directory> swift test --filter DesignShellTests` writes `shell-dark.png` and `shell-light.png` (the shell with every status component, button kind and shared surface), and each redesigned screen in its states (`recovery-center-…`, `recovery-closed-…`, `launch-review-…`, `recovery-disconnected-…`, `recovery-empty-…`, `recovery-loading-…`; `agent-runs-…` at the opening size, `agent-runs-wide-…`, `agent-runs-held-…`, `agent-runs-unloaded-…`, `agent-runs-disconnected-…`, `agent-runs-empty-…`, `agent-runs-loading-…`), rendered off screen.
 
 ## 14. Implementation notes: shared surfaces (design wave 1, screens)
 
@@ -306,3 +306,19 @@ Built in `macos/JojoApp/Sources/JojoApp/Surfaces.swift` for the first redesigned
 | `Scrolling` | A vertical scroll view; in the off-screen snapshot (`offscreen` in the environment) the content is laid out in place and clipped |
 
 A redesigned screen fills the content area and sets its own padding; the screens not yet redesigned keep the 20 pt side padding of the shell.
+
+## 15. Implementation notes: attempt surfaces (design wave 1, Agent Runs)
+
+Added to `Surfaces.swift` for Agent Runs ([screens/AGENT_RUNS.md](screens/AGENT_RUNS.md)) and meant for the next screens. The measures are the canvas board's; the values it does not have are named.
+
+| Component | Notes |
+|---|---|
+| `WrappingRow` | A row that continues on further lines when it runs out of width; gap 28, line gap 14 by default. The summary strip's fields |
+| `LabeledField` | One fact of a summary strip: a label in the `meta` style, `text3`, over any value, gap 3 |
+| `Timeline`, `TimelineEntry` | Entries oldest first: padding 5 vertical, gap 12, a 9 pt dot 4 below the top, the sentence at 13 in `text`, an optional time in `mono` `text3`. Dot: the status color of the entry's tone. Not on the canvas: a neutral entry is a 1.5 pt `text4` ring without fill; the connector is 1 pt `hairline` (canvas: white at 10%) and is left out after the last entry |
+| `Console`, `ConsoleLine` | Terminal output: monospaced 12, line height 21, radius 10, padding 12 by 14, selectable, wrapping (no horizontal scroll). Line kinds: plain, command, or a status tone. Not on the canvas: background `#F1F1F4` in light (dark `#111113` from the canvas, no token); ring `cardRing`; plain lines in `text2` and commands in `text` (canvas `text3` and `#E6E6EA`) so that both read on the light console |
+| `InspectorSection` | Title at 11.5 semibold `text3`, padding 12 by 16, gap 8, `hairline` below unless it is the last |
+| `FactGrid`, `Fact` | The two-column facts of an inspector section: labels 104 wide at 12.5 `text3`, values in `text` and allowed to wrap; row gap 7, column gap 10, baseline aligned |
+| `NoticeWell` | One sentence in the `meta` style, `text2`; padding 8 by 10, radius 8, background `fill2` (canvas: white at 4%) |
+
+Not built from the board: the segmented control, the compact lifecycle stepper, the console's search field with its copy and save buttons, and the evidence tags "Recording", "Recorded" and "Truncated". Each needs data the helper does not report yet.

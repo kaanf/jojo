@@ -356,3 +356,236 @@ struct CheckBox: View {
             .frame(width: 14, height: 14)
     }
 }
+
+// MARK: Attempt surfaces (COMPONENTS.md, section 15)
+
+/// One fact of a summary strip: a label in `text3` over its value.
+struct LabeledField<Content: View>: View {
+    @Environment(\.theme) private var theme
+    let label: String
+    @ViewBuilder let content: () -> Content
+
+    init(_ label: String, @ViewBuilder content: @escaping () -> Content) {
+        self.label = label
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label).textStyle(.meta).foregroundStyle(theme.text3)
+            content()
+        }
+    }
+}
+
+/// A row that continues on further lines when it runs out of width.
+struct WrappingRow: Layout {
+    var spacing: CGFloat = 28
+    var lineSpacing: CGFloat = 14
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(width: proposal.width ?? .infinity, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let origins = arrange(width: bounds.width, subviews).origins
+        for (subview, origin) in zip(subviews, origins) {
+            subview.place(at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
+                          proposal: ProposedViewSize(width: bounds.width, height: nil))
+        }
+    }
+
+    private func arrange(width: CGFloat, _ subviews: Subviews) -> (origins: [CGPoint], size: CGSize) {
+        var origins: [CGPoint] = []
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, widest: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            if x > 0, x + size.width > width {
+                (x, y, lineHeight) = (0, y + lineHeight + lineSpacing, 0)
+            }
+            origins.append(CGPoint(x: x, y: y))
+            lineHeight = max(lineHeight, size.height)
+            widest = max(widest, x + size.width)
+            x += size.width + spacing
+        }
+        return (origins, CGSize(width: widest, height: y + lineHeight))
+    }
+}
+
+struct TimelineEntry: Identifiable, Equatable, Sendable {
+    let text: String
+    /// `neutral` is a record that is neither done nor lost: an empty ring.
+    var tone = Tone.ok
+    var time: String?
+    var id: String { text }
+}
+
+/// Entries, oldest first, joined by a connector; the last entry has none.
+struct Timeline: View {
+    @Environment(\.theme) private var theme
+    let entries: [TimelineEntry]
+
+    init(_ entries: [TimelineEntry]) {
+        self.entries = entries
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                HStack(alignment: .top, spacing: 12) {
+                    dot(entry.tone).padding(.top, 4)
+                    Text(entry.text).textStyle(.body).foregroundStyle(theme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let time = entry.time {
+                        Text(time).textStyle(.mono).foregroundStyle(theme.text3)
+                    }
+                }
+                .padding(.vertical, 5)
+                .background(alignment: .topLeading) {
+                    if index < entries.count - 1 {
+                        Rectangle().fill(theme.hairline).frame(width: 1)
+                            .padding(EdgeInsets(top: 18, leading: 4, bottom: -6, trailing: 0))
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dot(_ tone: Tone) -> some View {
+        if tone == .neutral {
+            Circle().strokeBorder(theme.text4, lineWidth: 1.5).frame(width: 9, height: 9)
+        } else {
+            Circle().fill(theme.foreground(tone)).frame(width: 9, height: 9)
+        }
+    }
+}
+
+struct ConsoleLine: Identifiable, Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        case plain, command, status(Tone)
+    }
+
+    let id: Int
+    let text: String
+    var kind = Kind.plain
+}
+
+/// Terminal output: monospaced, selectable, wrapping lines on the console background.
+struct Console: View {
+    @Environment(\.theme) private var theme
+    let lines: [ConsoleLine]
+
+    init(_ lines: [ConsoleLine]) {
+        self.lines = lines
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines) { line in
+                Text(line.text).font(.system(size: 12, design: .monospaced)).foregroundStyle(color(line.kind))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: 21, alignment: .leading)
+            }
+        }
+        .textSelection(.enabled)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .background(Console.background(dark: theme.isDark).color, in: shape)
+        .overlay(shape.strokeBorder(theme.cardRing, lineWidth: 1))
+    }
+
+    /// The canvas has the dark value only.
+    static func background(dark: Bool) -> RGBA {
+        RGBA(dark ? 0x111113 : 0xF1F1F4)
+    }
+
+    private func color(_ kind: ConsoleLine.Kind) -> Color {
+        switch kind {
+        case .plain: return theme.text2
+        case .command: return theme.text
+        case .status(let tone): return theme.foreground(tone)
+        }
+    }
+}
+
+/// One titled block of an inspector, separated from the next by a hairline.
+struct InspectorSection<Content: View>: View {
+    @Environment(\.theme) private var theme
+    let title: String
+    var last = false
+    @ViewBuilder let content: () -> Content
+
+    init(_ title: String, last: Bool = false, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.last = last
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(theme.text3)
+                .accessibilityAddTraits(.isHeader)
+            content()
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(theme.hairline).frame(height: 1) } }
+    }
+}
+
+/// The two-column facts of an inspector section: `Fact` rows.
+struct FactGrid<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 7) { content() }
+    }
+}
+
+struct Fact<Content: View>: View {
+    @Environment(\.theme) private var theme
+    let label: String
+    @ViewBuilder let content: () -> Content
+
+    init(_ label: String, @ViewBuilder content: @escaping () -> Content) {
+        self.label = label
+        self.content = content
+    }
+
+    var body: some View {
+        GridRow {
+            Text(label).font(.system(size: 12.5)).foregroundStyle(theme.text3).frame(width: 104, alignment: .leading)
+            content().foregroundStyle(theme.text).frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+extension Fact where Content == Text {
+    /// A plain value at 12.5 in `text`.
+    init(_ label: String, _ value: String) {
+        self.init(label) { Text(value).font(.system(size: 12.5)) }
+    }
+}
+
+/// A quiet well for the one sentence that says what an action does not mean.
+struct NoticeWell: View {
+    @Environment(\.theme) private var theme
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text).textStyle(.meta).foregroundStyle(theme.text2)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.fill2, in: RoundedRectangle(cornerRadius: 8))
+    }
+}

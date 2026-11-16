@@ -43,7 +43,7 @@
     ]
   },
   "swift": {
-    "tests_min": 54
+    "tests_min": 59
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,
