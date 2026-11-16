@@ -173,6 +173,22 @@ impl Service {
             RequestKind::CancelTurn => self.cancel_turn(request, p),
             RequestKind::RecoveryStart => self.recovery_start(request, p, origin),
             RequestKind::SaveProject => self.save_project(request, p),
+            RequestKind::RunPlan => {
+                let protocol::PlanCommand { plan } = protocol::PlanCommand::parse(p)?;
+                self.engine
+                    .execute(request, move |tx| tx.run_plan(plan))
+                    .map(receipt)
+                    .map_err(rejected)
+            }
+            RequestKind::ControlPlan => {
+                let protocol::ControlPlanCommand { plan, action } =
+                    protocol::ControlPlanCommand::parse(p)?;
+                let action = PlanControl::named(&action).ok_or("UnknownAction")?;
+                self.engine
+                    .execute(request, move |tx| tx.control_plan(plan, action))
+                    .map(receipt)
+                    .map_err(rejected)
+            }
             _ => Err("UnknownType".into()),
         }
     }
@@ -289,12 +305,21 @@ impl Service {
     fn validate(&mut self, request: CommandRequest, e: &Envelope) -> Result<Json, String> {
         let protocol::ValidateCommand { attempt, candidate } =
             protocol::ValidateCommand::parse(&e.payload)?;
+        self.start_validation(request, e.request, attempt, candidate)
+    }
+    /// One host validation run under the command `request`, the human's or the runner's.
+    pub(super) fn start_validation(
+        &mut self,
+        request: CommandRequest,
+        run: OpaqueId,
+        attempt: OpaqueId,
+        candidate: String,
+    ) -> Result<Json, String> {
         // M3: attempts may run beside it; host validations run one at a time.
         if self.workers.running(Work::Validation) != 0 {
             return Err("ValidationBusy: another host validation is running".into());
         }
         let root = validation_root(&self.engine)?;
-        let run = e.request;
         let sealed = candidate.clone();
         let r = self
             .engine
@@ -429,7 +454,11 @@ impl Service {
     /// One human Start: accept durably, then provision, reserve, bind and launch through
     /// the configured adapter. Every refusal that can be known beforehand happens before
     /// anything is committed.
-    fn start(&mut self, request: CommandRequest, start: StartRequest) -> Result<Json, String> {
+    pub(super) fn start(
+        &mut self,
+        request: CommandRequest,
+        start: StartRequest,
+    ) -> Result<Json, String> {
         let with = |r: Receipt, dispatch: &str| {
             let Json::Object(mut fields) = receipt(r) else {
                 unreachable!("receipt is an object")

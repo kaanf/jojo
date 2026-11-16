@@ -55,6 +55,9 @@ pub enum RequestKind {
     ChatIndex,
     SaveProject,
     Projects,
+    RunPlan,
+    ControlPlan,
+    PlanRun,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,7 +120,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 36] = [
+pub const SPECS: [Spec; 39] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -154,6 +157,9 @@ pub const SPECS: [Spec; 36] = [
     spec(K::ChatIndex, "ChatIndex", Query, 2, false, Exact, &[]),
     spec(K::SaveProject, "SaveProject", Mutation, 3, false, Exact, &["project", "revision", "name", "repositories", "instructions", "test_command", "ci_command", "kinds", "default_provider", "capacity"]),
     spec(K::Projects, "Projects", Query, 3, false, Exact, &[]),
+    spec(K::RunPlan, "RunPlan", Mutation, 3, false, Exact, &["plan"]),
+    spec(K::ControlPlan, "ControlPlan", Mutation, 3, true, Exact, &["plan", "action"]),
+    spec(K::PlanRun, "PlanRun", Query, 3, false, Exact, &["plan"]),
 ];
 
 impl RequestKind {
@@ -563,6 +569,39 @@ impl SaveProjectCommand {
     }
 }
 
+/// M3 (protocol 1.3): the human starts, or reads the run of, one approved lead plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlanCommand {
+    pub plan: ArtifactId,
+}
+impl PlanCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            plan: ArtifactId(id(get(p, "plan")?)?),
+        })
+    }
+}
+
+/// M3 (protocol 1.3): Pause, Resume or Cancel the run of one plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ControlPlanCommand {
+    pub plan: ArtifactId,
+    pub action: String,
+}
+impl ControlPlanCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        let plan = ArtifactId(id(get(p, "plan")?)?);
+        let action = string(get(p, "action")?)?;
+        if !matches!(action, "Pause" | "Resume" | "Cancel") {
+            return Err("UnknownAction".into());
+        }
+        Ok(Self {
+            plan,
+            action: action.to_owned(),
+        })
+    }
+}
+
 /// What the human does with one question the lead asked.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QuestionAction {
@@ -899,9 +938,12 @@ mod tests {
         for minor in [3, 9] {
             assert_eq!(
                 names(Mutation, minor),
-                format!("{v12_commands} SaveProject")
+                format!("{v12_commands} SaveProject RunPlan ControlPlan")
             );
-            assert_eq!(names(Query, minor), format!("{v12_queries} Projects"));
+            assert_eq!(
+                names(Query, minor),
+                format!("{v12_queries} Projects PlanRun")
+            );
         }
         assert_eq!(RequestKind::of_frame("SaveProject", 2), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 1), None);
@@ -914,7 +956,7 @@ mod tests {
         assert_eq!(
             control.join(" "),
             "Hello PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision Start \
-             RecoveryResolve RecoveryStart Validate CandidateDecision CancelTurn"
+             RecoveryResolve RecoveryStart Validate CandidateDecision CancelTurn ControlPlan"
         );
     }
 

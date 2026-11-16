@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 
 mod commands;
 mod queries;
+mod runner;
 
 /// Epoch-scoped internal identities occupy the high half; client IDs use the low half.
 /// Unique counter, not wall time, supplies all runtime IDs within the singleton epoch.
@@ -372,6 +373,19 @@ impl Service {
                     tx.close_interrupted_turns().map(|n| format!("closed {n}"))
                 })?;
             }
+            // M3: a run an earlier helper was running comes back paused; the human
+            // resumes it after the recovery review.
+            let running = service
+                .engine
+                .reader()
+                .and_then(|mut r| r.read(|v| v.plans_running()))
+                .map_err(|e| e.to_string())?;
+            if running {
+                service.command("PausePlanRuns", OpaqueId(0), |tx| {
+                    tx.pause_running_plans("the helper started again")
+                        .map(|n| format!("paused {n}"))
+                })?;
+            }
             Ok(service)
         })
     }
@@ -513,7 +527,9 @@ impl Service {
             | RequestKind::ChatTurn
             | RequestKind::AnswerQuestion
             | RequestKind::CancelTurn
-            | RequestKind::SaveProject => {
+            | RequestKind::SaveProject
+            | RequestKind::RunPlan
+            | RequestKind::ControlPlan => {
                 drop(reader);
                 self.slice_command(kind, e)
             }
@@ -708,6 +724,7 @@ pub fn serve(
     let mut emergency_failed = false;
     let mut last_failure = None;
     let mut waiting_since = None;
+    let mut last_tick = Instant::now();
     loop {
         if lost.load(Ordering::SeqCst) && !emergency {
             emergency = true;
@@ -722,6 +739,11 @@ pub fn serve(
                     lost.store(true, Ordering::SeqCst);
                 }
             }
+        }
+        // M3: the plan runner, between requests. A failed pass is retried next time.
+        if !emergency && last_tick.elapsed() >= runner::TICK {
+            last_tick = Instant::now();
+            let _ = service.tick();
         }
         if emergency_failed && service.workers.reap() {
             return 4;

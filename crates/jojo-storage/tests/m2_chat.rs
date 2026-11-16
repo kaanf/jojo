@@ -997,3 +997,163 @@ fn m3_two_steps_run_at_once_and_a_lead_turn_takes_one_unit_of_capacity() {
     // The second attempt was issued before the first one settled.
     assert!(h.event_seq("ProcessLaunchIssued", usage) < h.event_seq("AttemptSettling", api));
 }
+
+// ---- M3: the plan runner ----
+
+impl H {
+    fn plan_run(&mut self, plan: &Json) -> Json {
+        self.ok3("PlanRun", object([("plan", plan.clone())]))
+    }
+
+    /// The state of each step of the run, in plan order.
+    fn step_states(&mut self, plan: &Json) -> Vec<String> {
+        let run = self.plan_run(plan);
+        items(field(&run, &["steps"]))
+            .iter()
+            .map(|s| str_of(s, &["state"]).to_owned())
+            .collect()
+    }
+
+    /// Runner passes until `want` holds for the run.
+    fn run_until(&mut self, plan: &Json, want: impl Fn(&[String]) -> bool) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            self.s().tick().unwrap();
+            let states = self.step_states(plan);
+            if want(&states) {
+                return states;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "run stuck at {states:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn step_field(&mut self, plan: &Json, index: usize, name: &str) -> Json {
+        let run = self.plan_run(plan);
+        field(&items(field(&run, &["steps"]))[index], &[name]).clone()
+    }
+
+    fn control(&mut self, plan: &Json, action: &str) -> String {
+        let r = self.at(
+            3,
+            "ControlPlan",
+            object([("plan", plan.clone()), ("action", text(action))]),
+        );
+        match r.kind.as_str() {
+            "Response" => str_of(&r.payload, &["response"]).to_owned(),
+            _ => str_of(&r.payload, &["code"]).to_owned(),
+        }
+    }
+}
+
+#[test]
+fn m3_a_started_plan_runs_its_ready_steps_validates_them_and_waits_for_the_human() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let (_, _, plan, _, _) = h.approved_kinds_plan(&repository);
+    // Approval alone runs nothing.
+    assert_eq!(h.plan_run(&plan), Json::Null);
+    h.s().tick().unwrap();
+    assert_eq!(h.spawned(), 3, "only the three lead turns ran");
+    let started = h.ok3("RunPlan", object([("plan", plan.clone())]));
+    assert_eq!(str_of(&started, &["response"]), "plan run revision=1");
+    assert!(
+        h.refused3("RunPlan", object([("plan", plan.clone())]))
+            .starts_with("RunRefused: this plan revision was already started")
+    );
+    let run = h.plan_run(&plan);
+    assert_eq!(str_of(&run, &["state"]), "RUNNING");
+    assert_eq!(
+        str_of(&run, &["branch"]),
+        format!("jojo/plan/{}", &str_of(&plan, &[])[..12])
+    );
+    assert_eq!(h.step_states(&plan), ["Ready", "Ready", "Waiting"]);
+    assert_eq!(
+        h.step_field(&plan, 2, "detail"),
+        text("waits for api, usage")
+    );
+    assert_eq!(h.step_field(&plan, 0, "provider"), text("ClaudeCode"));
+    assert_eq!(h.step_field(&plan, 1, "kind"), text("docs"));
+    // One pass starts both independent steps, on two providers, at once.
+    h.s().tick().unwrap();
+    assert_eq!(h.s().workers.running(Work::Attempt), 2);
+    assert_eq!(h.step_states(&plan), ["Running", "Running", "Waiting"]);
+    // Each is validated by the host as soon as it settles; acceptance is the human's.
+    let states = h.run_until(&plan, |s| s[0] == "Review" && s[1] == "Review");
+    assert_eq!(states[2], "Waiting");
+    let api = id(&h.step_field(&plan, 0, "attempt")).unwrap();
+    let usage = id(&h.step_field(&plan, 1, "attempt")).unwrap();
+    assert!(h.event_seq("ProcessLaunchIssued", usage) < h.event_seq("AttemptSettling", api));
+    for attempt in [api, usage] {
+        assert!(matches!(
+            h.read(|v| v.validation_state(attempt)),
+            ValidationState::Passed(_)
+        ));
+        assert!(h.read(|v| v.candidate_acceptance(attempt)).is_none());
+    }
+    // Pause and resume change only admission; Cancel is final.
+    assert_eq!(h.control(&plan, "Pause"), "plan run PAUSED");
+    assert_eq!(str_of(&h.plan_run(&plan), &["state"]), "PAUSED");
+    assert_eq!(h.control(&plan, "Resume"), "plan run RUNNING");
+    assert_eq!(h.control(&plan, "Cancel"), "plan run CANCELLED");
+    assert_eq!(h.step_states(&plan), ["Review", "Review", "Cancelled"]);
+    assert_eq!(
+        h.control(&plan, "Resume"),
+        "PlanRunCancelled: the run was cancelled"
+    );
+}
+
+#[test]
+fn m3_a_rejected_step_stops_only_what_depends_on_it_and_a_restart_pauses_the_run() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let (_, _, plan, _, _) = h.approved_kinds_plan(&repository);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.run_until(&plan, |s| s[0] == "Review" && s[1] == "Review");
+    let decide = |h: &mut H, index: usize| {
+        let attempt = h.step_field(&plan, index, "attempt");
+        let candidate = h.step_field(&plan, index, "candidate");
+        let r = h.at(
+            2,
+            "CandidateDecision",
+            object([
+                ("attempt", attempt),
+                ("candidate", candidate),
+                ("receipt", Json::Null),
+                ("action", text("Reject")),
+            ]),
+        );
+        assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    };
+    // D2 until M4: no retry. The rejected step waits for the human; the other goes on.
+    decide(&mut h, 0);
+    assert_eq!(h.step_states(&plan), ["Failed", "Review", "Waiting"]);
+    assert_eq!(
+        h.step_field(&plan, 0, "detail"),
+        text("the human rejected the candidate")
+    );
+    assert_eq!(str_of(&h.plan_run(&plan), &["state"]), "RUNNING");
+    // A helper that starts again pauses the run.
+    h.open();
+    let run = h.plan_run(&plan);
+    assert_eq!(str_of(&run, &["control"]), "PAUSED");
+    h.ready_again();
+    assert_eq!(h.control(&plan, "Resume"), "plan run RUNNING");
+    // With both independent steps stopped, nothing more can happen without the human.
+    decide(&mut h, 1);
+    assert_eq!(str_of(&h.plan_run(&plan), &["state"]), "HALTED");
+    h.s().tick().unwrap();
+    assert_eq!(h.s().workers.running(Work::Attempt), 0);
+}
+
+impl H {
+    /// After a restart: admission opens again after a reviewed inspection.
+    fn ready_again(&mut self) {
+        let inspected = self.ok("RecoveryInspect", object([]));
+        let digest = str_of(&inspected, &["digest"]).to_owned();
+        self.ok("RecoveryStart", object([("digest", text(digest))]));
+    }
+}

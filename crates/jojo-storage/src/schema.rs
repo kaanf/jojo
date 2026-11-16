@@ -89,6 +89,11 @@ impl MigrationPlan {
                 name: "project records",
                 sql: SCHEMA_V12,
             },
+            Migration {
+                version: 13,
+                name: "plan runs and their integration",
+                sql: SCHEMA_V13,
+            },
         ])
     }
 
@@ -1094,6 +1099,61 @@ CREATE TRIGGER lead_plan_projects_immutable BEFORE UPDATE ON lead_plan_projects 
 CREATE TRIGGER lead_plan_projects_keep BEFORE DELETE ON lead_plan_projects BEGIN SELECT RAISE(ABORT,'immutable lead history'); END;
 "#;
 
+/// M3: the plan runner. A run is one approved plan revision the human started; its state
+/// is the newest control row (append-only). A step the runner could not start is recorded
+/// once, so that it is not retried on every tick. An accepted step is integrated onto the
+/// plan branch exactly once, as a commit or as a conflict.
+const SCHEMA_V13: &str = r#"
+CREATE TABLE plan_runs (
+ plan TEXT NOT NULL CHECK(length(plan)=32),
+ revision INTEGER NOT NULL CHECK(revision>0),
+ prd TEXT NOT NULL CHECK(length(prd)=32), adr TEXT NOT NULL CHECK(length(adr)=32),
+ validation TEXT NOT NULL CHECK(length(validation)=32),
+ repository TEXT NOT NULL REFERENCES local_repositories(id),
+ base TEXT NOT NULL CHECK(length(base) IN (40,64)),
+ branch TEXT NOT NULL,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ PRIMARY KEY(plan, revision));
+CREATE TABLE plan_run_controls (
+ plan TEXT NOT NULL, revision INTEGER NOT NULL, ordinal INTEGER NOT NULL CHECK(ordinal>0),
+ state TEXT NOT NULL CHECK(state IN ('RUNNING','PAUSED','CANCELLED')),
+ reason TEXT NOT NULL,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ PRIMARY KEY(plan, revision, ordinal),
+ FOREIGN KEY(plan, revision) REFERENCES plan_runs(plan, revision));
+CREATE TRIGGER plan_run_controls_append BEFORE INSERT ON plan_run_controls
+WHEN NEW.ordinal IS NOT (SELECT coalesce(max(ordinal),0)+1 FROM plan_run_controls WHERE plan=NEW.plan AND revision=NEW.revision)
+ OR (SELECT state FROM plan_run_controls WHERE plan=NEW.plan AND revision=NEW.revision ORDER BY ordinal DESC LIMIT 1) IS 'CANCELLED'
+BEGIN SELECT RAISE(ABORT,'plan run controls are appended in order and end at CANCELLED'); END;
+CREATE TABLE plan_step_refusals (
+ plan TEXT NOT NULL, revision INTEGER NOT NULL, step TEXT NOT NULL CHECK(length(step)=32),
+ detail TEXT NOT NULL,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ PRIMARY KEY(plan, revision, step),
+ FOREIGN KEY(plan, revision) REFERENCES plan_runs(plan, revision));
+CREATE TABLE plan_integrations (
+ plan TEXT NOT NULL, revision INTEGER NOT NULL, step TEXT NOT NULL CHECK(length(step)=32),
+ attempt TEXT NOT NULL UNIQUE REFERENCES candidate_acceptances(attempt),
+ ordinal INTEGER NOT NULL CHECK(ordinal>0),
+ parent TEXT NOT NULL CHECK(length(parent) IN (40,64)),
+ outcome TEXT NOT NULL CHECK(outcome IN ('INTEGRATED','CONFLICT')),
+ commit_id TEXT CHECK(commit_id IS NULL OR length(commit_id) IN (40,64)),
+ detail TEXT NOT NULL,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ PRIMARY KEY(plan, revision, step),
+ UNIQUE(plan, revision, ordinal),
+ CHECK((outcome='INTEGRATED')=(commit_id IS NOT NULL)),
+ FOREIGN KEY(plan, revision) REFERENCES plan_runs(plan, revision));
+CREATE TRIGGER plan_runs_immutable BEFORE UPDATE ON plan_runs BEGIN SELECT RAISE(ABORT,'immutable plan run'); END;
+CREATE TRIGGER plan_runs_keep BEFORE DELETE ON plan_runs BEGIN SELECT RAISE(ABORT,'immutable plan run'); END;
+CREATE TRIGGER plan_run_controls_immutable BEFORE UPDATE ON plan_run_controls BEGIN SELECT RAISE(ABORT,'immutable plan run'); END;
+CREATE TRIGGER plan_run_controls_keep BEFORE DELETE ON plan_run_controls BEGIN SELECT RAISE(ABORT,'immutable plan run'); END;
+CREATE TRIGGER plan_step_refusals_immutable BEFORE UPDATE ON plan_step_refusals BEGIN SELECT RAISE(ABORT,'immutable plan run'); END;
+CREATE TRIGGER plan_step_refusals_keep BEFORE DELETE ON plan_step_refusals BEGIN SELECT RAISE(ABORT,'immutable plan run'); END;
+CREATE TRIGGER plan_integrations_immutable BEFORE UPDATE ON plan_integrations BEGIN SELECT RAISE(ABORT,'immutable plan integration'); END;
+CREATE TRIGGER plan_integrations_keep BEFORE DELETE ON plan_integrations BEGIN SELECT RAISE(ABORT,'immutable plan integration'); END;
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -1105,7 +1165,7 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 12));
+        assert_eq!((report.from_version, report.to_version), (0, 13));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);

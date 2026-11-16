@@ -122,6 +122,15 @@ impl Service {
                 }
                 reader.read(|v| v.ipc_projects()).map_err(|e| e.to_string())
             }
+            RequestKind::PlanRun => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let q = protocol::PlanCommand::parse(p)?;
+                reader
+                    .read(|v| v.ipc_plan_run(q.plan))
+                    .map_err(|e| e.to_string())
+            }
             _ => unreachable!("not a snapshot query: {kind:?}"),
         }
     }
