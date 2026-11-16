@@ -187,6 +187,10 @@ impl ProcessLaunch {
         if spec.fingerprint.parser == jojo_domain::codex::CODEX_EXEC_JSONL {
             crate::codex::verify_launch(spec, &args, &environment)?;
         }
+        // M1: the same for the production Claude Code profile.
+        if spec.fingerprint.parser == jojo_domain::claude::CLAUDE_PRINT_STREAM_JSON {
+            crate::claude::verify_launch(spec, &args, &environment)?;
+        }
         if args.len() > MAX_ARGS
             || args
                 .iter()

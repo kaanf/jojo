@@ -257,12 +257,20 @@ class BoundaryRegressionTests(unittest.TestCase):
     def test_codex_contract_stays_pure(self):
         self.mutate("crates/jojo-domain/src/codex.rs", '\nfn forbidden() { std::fs::read("x").ok(); }\n')
 
+    def test_claude_contract_and_adapter_stay_offline(self):
+        self.mutate("crates/jojo-domain/src/claude.rs", '\nfn forbidden() { std::fs::read("x").ok(); }\n')
+        for forbidden in ['Command::new("claude");', 'std::env::var("HOME").ok();',
+                          'let _ = "ANTHROPIC_API_KEY";', 'let _ = "/opt/homebrew/bin/claude";']:
+            self.setUp()
+            self.mutate("crates/jojo-storage/src/claude.rs", f'\nfn forbidden() {{ {forbidden} }}\n')
+
     def test_codex_envelope_cannot_be_widened_in_the_process_surface(self):
         self.mutate("crates/jojo-storage/src/process.rs", '\nfn forbidden() { Command::new("codex"); }\n')
 
     def test_helper_cannot_build_os_requests_outside_the_adapter(self):
         for forbidden in ['ProcessLaunch::from_spec(&spec, vec![], vec![]).ok();',
-                          'jojo_domain::codex::exec_argv(std::path::Path::new("/x")).ok();']:
+                          'jojo_domain::codex::exec_argv(std::path::Path::new("/x")).ok();',
+                          'jojo_domain::claude::print_argv();']:
             self.setUp()
             self.mutate("crates/jojo-helper/src/service.rs", f'\nfn forbidden(spec: LaunchSpec) {{ {forbidden} }}\n')
 

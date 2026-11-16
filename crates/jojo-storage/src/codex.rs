@@ -80,7 +80,7 @@ fn resolved(path: &Path) -> bool {
 }
 
 /// SHA-256 of a native executable that passes every structural check.
-fn inspect_executable(path: &Path) -> Result<String, String> {
+pub(crate) fn inspect_executable(path: &Path) -> Result<String, String> {
     let listed = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if listed.file_type().is_symlink() {
         return Err("symbolic link; configure the native binary itself".into());
@@ -117,7 +117,7 @@ fn inspect_executable(path: &Path) -> Result<String, String> {
 }
 
 /// The home is only located: its entries are never listed, opened or hashed.
-fn inspect_home(home: &Path) -> Result<(), String> {
+pub(crate) fn inspect_home(home: &Path) -> Result<(), String> {
     let listed = std::fs::symlink_metadata(home).map_err(|e| format!("{}: {e}", home.display()))?;
     if !listed.is_dir() || !resolved(home) {
         return Err("must be an existing, fully resolved directory".into());

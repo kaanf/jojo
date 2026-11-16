@@ -30,12 +30,17 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(invocation @ (Invocation::Serve(_) | Invocation::ServeSlice(..))) => {
-            let (roots, config) = match invocation {
+            let (roots, config, claude) = match invocation {
                 Invocation::ServeSlice(roots, options) => {
+                    let claude = options.claude.clone();
                     let slice = jojo_helper::service::SliceConfig::new(&roots, options);
-                    (roots, jojo_helper::service::ServiceConfig::slice(slice))
+                    (
+                        roots,
+                        jojo_helper::service::ServiceConfig::slice(slice),
+                        claude,
+                    )
                 }
-                Invocation::Serve(roots) => (roots, Default::default()),
+                Invocation::Serve(roots) => (roots, Default::default(), None),
                 _ => unreachable!("matched serve invocations only"),
             };
             // P2-04.1: every process group this helper starts is guarded by a second
@@ -57,6 +62,7 @@ fn main() -> ExitCode {
                 ) {
                     Ok(mut service) => {
                         service.guard = Some(guard);
+                        service.claude = claude.map(|c| jojo_helper::service::claude_config(*c));
                         ExitCode::from(jojo_helper::service::serve(
                             service,
                             std::io::stdin(),

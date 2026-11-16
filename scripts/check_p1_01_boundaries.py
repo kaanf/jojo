@@ -48,6 +48,12 @@ launch site that starts only the configured guard executable (the helper itself,
 `--agent-guard`) inside the owned process group, with a cleared environment. The guard
 signals only the group it has proven it is a member of. The helper executable gains the
 `--agent-guard` mode and reads its own path; it still builds no OS request.
+M1 adds the Claude Code adapter beside the Codex one, under the same rules (domain
+claude.rs: pure contract; storage claude.rs: executable/home validation and translation)
+and no launch surface. Its provider variables are HOME and USER, passed as values the
+helper's launcher configured; it names no credential store, install location or other
+provider variable. The Codex fixture also speaks the Claude Code stream dialect; it gains no
+file or process operation. The helper still builds no OS request and no argument vector.
 Effect boundaries remain unchanged: no network/live-provider/auth integration,
 no build scripts, no ambient clock in the domain (and now none in storage either).
 
@@ -186,9 +192,9 @@ def source_errors(root: Path, name: str, path: Path) -> list[str]:
             errors.append(f"{relative}: ambient clock access (time must be injected)")
         if re.search(r"\benv\b", production):
             errors.append(f"{relative}: ambient environment access")
-    if name == "jojo-helper" and not is_test and re.search(r"\b(?:from_spec|Supervised|exec_argv)\b", code):
-        # P2-02: Start may reach a process only through CodexAdapter::prepare_launch and the
-        # existing worker registry; the helper never builds an OS request itself.
+    if name == "jojo-helper" and not is_test and re.search(r"\b(?:from_spec|Supervised|exec_argv|print_argv)\b", code):
+        # P2-02, M1: Start may reach a process only through an adapter's prepare_launch and
+        # the existing worker registry; the helper never builds an OS request itself.
         errors.append(f"{relative}: helper must launch only through the provider adapter")
     if name == "jojo-helper":
         reads = re.findall(r'\bvar(?:_os)?\s*\(\s*([^)]*)\)', code)

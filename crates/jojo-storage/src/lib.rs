@@ -64,6 +64,8 @@ mod launch;
 pub use launch::*;
 mod process;
 pub use process::*;
+mod claude;
+pub use claude::*;
 mod codex;
 pub use codex::*;
 mod slice;

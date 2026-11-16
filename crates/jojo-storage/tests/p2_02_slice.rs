@@ -1004,3 +1004,184 @@ fn r01_recovery_rows_carry_the_assessment_as_structured_fields_for_1_1_only() {
     assert_eq!(field("choices"), &Json::List(vec![text("Hold")]));
     assert!(assessment.ends_with("choices: [Hold] }"), "{assessment}");
 }
+
+// M1: the same slice with a Claude Code step. "Claude Code" is the same private fixture
+// executable, which speaks the Claude Code stream dialect when it is launched with the
+// Claude Code argument vector. The installed CLI is never named, located or executed.
+use jojo_domain::claude::{CLAUDE_VERSION, print_argv};
+
+impl H {
+    /// A helper whose launcher configured Claude Code: the fixture, and an empty home.
+    fn with_claude() -> Self {
+        let mut h = Self::new();
+        let home = h.base.join("claude-home");
+        fs::create_dir(&home).unwrap();
+        chmod(&home, 0o700);
+        let config = h.claude();
+        h.s().claude = Some(config);
+        h
+    }
+
+    fn claude(&self) -> ClaudeAdapterConfig {
+        ClaudeAdapterConfig {
+            executable: self.fixture.clone(),
+            version: CLAUDE_VERSION.into(),
+            sha256: sha256_hex(&[&fs::read(&self.fixture).unwrap()]),
+            home: self.base.join("claude-home"),
+            user: "tester".into(),
+            auth: AuthMode::NativeSubscription,
+        }
+    }
+
+    /// Imports and approves a Claude Code bundle whose ADR carries the fixture scenario,
+    /// opens admission and starts attempt 900. Returns its standard output once settled.
+    fn run_claude(&mut self, scenario: &str) -> (AttemptResult, String) {
+        let repository = self.register();
+        let adr =
+            format!("Keep the change inside src/.\nfixture: {scenario}\nNo other file changes.");
+        let bundle = self.bundle(&repository, "ClaudeCode", &adr);
+        for subjects in [vec![PRD], vec![ADR], vec![VALIDATION, PLAN]] {
+            self.ok("ImportBundle", bundle.clone());
+            for subject in subjects {
+                self.approve(subject);
+            }
+        }
+        self.open_admission();
+        assert_eq!(dispatch(&self.start(900)), "launched");
+        let result = self.settled(900);
+        let output = self.worktree(900).unwrap().output;
+        let stdout = fs::read_to_string(output.join("generation-1/stdout.raw")).unwrap();
+        (result, stdout)
+    }
+}
+
+#[test]
+fn m1_claude_code_step_runs_through_the_claude_adapter_and_settles() {
+    let mut h = H::with_claude();
+    let (result, stdout) = h.run_claude("develop src/feature.rs");
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.outcome, AttemptOutcome::Succeeded, "{result:?}");
+    assert!(result.candidate.is_some(), "{result:?}");
+    let record = h.worktree(900).unwrap();
+    assert!(record.path.starts_with(h.base.join("owned")));
+    assert_eq!(
+        fs::read_to_string(record.path.join("src/feature.rs")).unwrap(),
+        "written by fixture\n"
+    );
+    assert!(stdout.contains("\"text\":\"developed\""), "{stdout}");
+    // The user's repository and both provider homes were not written to.
+    assert_eq!(git(&h.repository, &["status", "--porcelain"]), "");
+    assert_eq!(fs::read_dir(h.base.join("claude-home")).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(&h.home).unwrap().count(), 0);
+    assert_eq!(h.launches(), 1);
+    // The same command again is answered from its receipt; nothing runs twice.
+    assert_eq!(dispatch(&h.start(900)), "not repeated");
+    assert_eq!(h.launches(), 1);
+}
+
+#[test]
+fn m1_claude_code_child_receives_exactly_the_golden_arguments_and_two_variables() {
+    let mut h = H::with_claude();
+    let (_, stdout) = h.run_claude("report");
+    let home = h.base.join("claude-home");
+    let reported = format!(
+        "argv={:?} variables={:?}",
+        print_argv(),
+        [format!("HOME={}", home.display()), "USER=tester".to_owned()]
+    );
+    // The fixture prints what it was started with, JSON-escaped inside a text block.
+    let escaped = reported.replace('\\', "\\\\").replace('"', "\\\"");
+    assert!(stdout.contains(&escaped), "{stdout}");
+}
+
+#[test]
+fn m1_claude_code_runs_outside_the_envelope_or_without_sign_in_never_succeed() {
+    for scenario in [
+        "auth-error",
+        "tool-not-approved",
+        "init-not-approved",
+        "unknown-kind",
+        "exit-zero-no-terminal",
+    ] {
+        let mut h = H::with_claude();
+        let (result, stdout) = h.run_claude(scenario);
+        assert_ne!(
+            result.outcome,
+            AttemptOutcome::Succeeded,
+            "{scenario}: {result:?}\n{stdout}"
+        );
+    }
+}
+
+#[test]
+fn m1_only_the_configured_claude_code_adapter_can_launch() {
+    let mut h = H::with_claude();
+    let repository = h.register();
+    h.import_and_approve(&repository, "ClaudeCode");
+    h.open_admission();
+    let good = h.claude();
+    let script = h.base.join("bin/launcher");
+    fs::write(&script, "#!/bin/sh\nexit 99\n").unwrap();
+    chmod(&script, 0o755);
+    let cases: Vec<(Option<ClaudeAdapterConfig>, &str)> = vec![
+        (None, "NoProductionAdapter: ClaudeCode"),
+        (
+            Some(ClaudeAdapterConfig {
+                sha256: "0".repeat(64),
+                ..good.clone()
+            }),
+            "AdapterRejected: Digest",
+        ),
+        (
+            Some(ClaudeAdapterConfig {
+                version: "2.1.312 (Claude Code)".into(),
+                ..good.clone()
+            }),
+            "AdapterRejected: Version",
+        ),
+        (
+            Some(ClaudeAdapterConfig {
+                sha256: sha256_hex(&[&fs::read(&script).unwrap()]),
+                executable: script.clone(),
+                ..good.clone()
+            }),
+            "AdapterRejected: Executable",
+        ),
+        (
+            Some(ClaudeAdapterConfig {
+                auth: AuthMode::ApiKey,
+                ..good.clone()
+            }),
+            "AdapterRejected: Authentication",
+        ),
+        (
+            Some(ClaudeAdapterConfig {
+                home: h.base.join("no-such-home"),
+                ..good.clone()
+            }),
+            "AdapterRejected: Home",
+        ),
+    ];
+    for (i, (claude, expected)) in cases.into_iter().enumerate() {
+        h.s().claude = claude;
+        let refused = code(&h.start(900 + i as u128)).to_owned();
+        assert!(refused.starts_with(expected), "{expected}: {refused}");
+    }
+    // An account name that is not a plain name is refused where the request crosses the
+    // launch boundary: after the command committed, and before anything was started.
+    for (i, claude) in [ClaudeAdapterConfig {
+        user: "two words".into(),
+        ..good.clone()
+    }]
+    .into_iter()
+    .enumerate()
+    {
+        h.s().claude = Some(claude);
+        let refused = code(&h.start(950 + i as u128)).to_owned();
+        assert!(
+            refused.starts_with("StartFailed: AdapterRejected: Launch(Environment("),
+            "{refused}"
+        );
+    }
+    assert_eq!(h.launches(), 0);
+}

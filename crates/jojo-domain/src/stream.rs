@@ -22,6 +22,14 @@
 //! approved envelope or any record after the terminal one can never end in success. The
 //! real stream of that release has not been observed; the profile is conservative, not
 //! certified.
+//!
+//! The production Claude Code profile (M1, [`CLAUDE_PRINT_STREAM_JSON`]) models the record
+//! shapes observed from `claude --print --output-format stream-json` of one pinned
+//! release, run with the one argument vector `crate::claude` can express. It is equally
+//! fail-closed, and it additionally holds the first record of a run to the approved
+//! envelope: the listed tools, the permission mode, no MCP server and no API key.
+pub use crate::claude::CLAUDE_PRINT_STREAM_JSON;
+use crate::claude::{CLAUDE_PERMISSION_MODE, CLAUDE_TOOLS};
 pub use crate::codex::CODEX_EXEC_JSONL;
 use crate::provider::{EventPayload, ProviderError, ProviderKind, SessionRef, TerminalStatus};
 use serde_json::Value;
@@ -169,6 +177,8 @@ enum Profile {
     Codex,
     /// Production Codex `exec --json`, pinned release, fail-closed.
     CodexExec,
+    /// Production Claude Code `--print` stream-json, pinned release, fail-closed.
+    ClaudePrint,
 }
 
 /// One normalizer per attempt stdout. Stderr is captured but never parsed as protocol.
@@ -190,6 +200,7 @@ impl StreamNormalizer {
             CLAUDE_STREAM_JSON => Profile::Claude,
             CODEX_EXEC_JSON => Profile::Codex,
             CODEX_EXEC_JSONL => Profile::CodexExec,
+            CLAUDE_PRINT_STREAM_JSON => Profile::ClaudePrint,
             _ => return Err(ProviderError::FingerprintMismatch),
         };
         Ok(Self {
@@ -205,7 +216,7 @@ impl StreamNormalizer {
 
     pub fn provider(&self) -> ProviderKind {
         match self.profile {
-            Profile::Claude => ProviderKind::ClaudeCode,
+            Profile::Claude | Profile::ClaudePrint => ProviderKind::ClaudeCode,
             Profile::Codex | Profile::CodexExec => ProviderKind::Codex,
         }
     }
@@ -269,6 +280,7 @@ impl StreamNormalizer {
             Profile::Claude => self.claude(&kind, &value, out),
             Profile::Codex => self.codex(&kind, &value, out),
             Profile::CodexExec => self.codex_exec(&kind, &value, out),
+            Profile::ClaudePrint => self.claude_print(&kind, &value, out),
         }
     }
 
@@ -596,6 +608,154 @@ impl StreamNormalizer {
                 self.errored = true;
                 out.push(EventPayload::ProviderError(message(v)));
             }
+            _ => self.violation(out, "unknown record type"),
+        }
+    }
+
+    /// Production profile. Violation texts are fixed strings: provider-controlled bytes
+    /// stay in the raw spool and are never copied into a protocol diagnosis.
+    fn claude_print(&mut self, kind: &str, v: &Value, out: &mut Vec<EventPayload>) {
+        if !v.is_object() {
+            return self.violation(out, "record is not an object");
+        }
+        if self.terminal.is_some() {
+            return self.violation(out, "record after terminal record");
+        }
+        let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).map(str::to_owned);
+        let identifier = |v: &Value, key: &str| {
+            text(v, key).filter(|s| !s.is_empty() && s.len() <= MAX_IDENTIFIER_BYTES)
+        };
+        let subtype = text(v, "subtype");
+        let init = kind == "system" && subtype.as_deref() == Some("init");
+        // Every record after the first belongs to the session the first one named.
+        if !init {
+            let Some(session) = &self.session_id else {
+                return self.violation(out, "record before session init");
+            };
+            if text(v, "session_id").as_ref() != Some(session) {
+                return self.violation(out, "record for another session");
+            }
+        }
+        match (kind, subtype.as_deref()) {
+            ("system", Some("init")) => {
+                let Some(session) = identifier(v, "session_id") else {
+                    return self.violation(out, "init without a usable session_id");
+                };
+                if self.session_id.is_some() {
+                    return self.violation(out, "duplicate init record");
+                }
+                // What the CLI says it will run with must be what was approved: exactly
+                // the file tools, edits only, no MCP server, and a subscription sign-in.
+                let mut tools: Vec<&str> = v
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .map(|t| t.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                tools.sort_unstable();
+                let no_servers = v
+                    .get("mcp_servers")
+                    .and_then(Value::as_array)
+                    .is_some_and(Vec::is_empty);
+                if tools != CLAUDE_TOOLS
+                    || !no_servers
+                    || text(v, "permissionMode").as_deref() != Some(CLAUDE_PERMISSION_MODE)
+                    || text(v, "apiKeySource").as_deref() != Some("none")
+                {
+                    return self.violation(out, "init outside the approved envelope");
+                }
+                let turn = self.next_turn();
+                out.push(self.session(&session, &turn));
+                out.push(EventPayload::TurnStarted { turn: turn.clone() });
+                self.session_id = Some(session);
+                self.open_turn = Some(turn);
+            }
+            ("system", Some(sub @ ("thinking_tokens" | "permission_denied"))) => {
+                // A denial is the envelope holding: the CLI refused, and says so.
+                out.push(EventPayload::Informational(format!("system:{sub}")))
+            }
+            ("system", _) => self.violation(out, "unknown system record"),
+            ("rate_limit_event", _) => out.push(EventPayload::Informational(kind.to_owned())),
+            ("assistant" | "user", _) => {
+                // No tool here starts a subagent; a record that belongs to one is unmodelled.
+                if v.get("parent_tool_use_id").is_some_and(|p| !p.is_null()) {
+                    return self.violation(out, "subagent record");
+                }
+                if let Some(error) = text(v, "error") {
+                    self.errored = true;
+                    out.push(EventPayload::ProviderError(error));
+                }
+                let Some(blocks) = v
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(Value::as_array)
+                else {
+                    return self.violation(out, "message without content blocks");
+                };
+                for block in blocks {
+                    match (kind, text(block, "type").as_deref()) {
+                        ("assistant", Some("text")) => match text(block, "text") {
+                            Some(t) => out.push(EventPayload::TextDelta(t)),
+                            None => self.violation(out, "text block without text"),
+                        },
+                        ("assistant", Some("thinking")) => {
+                            out.push(EventPayload::Informational("assistant:thinking".into()))
+                        }
+                        ("assistant", Some("tool_use")) => {
+                            let Some(id) = identifier(block, "id") else {
+                                return self.violation(out, "tool_use without a usable id");
+                            };
+                            let approved = text(block, "name")
+                                .is_some_and(|name| CLAUDE_TOOLS.contains(&name.as_str()));
+                            if !approved {
+                                return self.violation(out, "tool outside the approved envelope");
+                            }
+                            out.push(EventPayload::ToolStarted { id });
+                        }
+                        ("user", Some("tool_result")) => match identifier(block, "tool_use_id") {
+                            Some(id) => out.push(EventPayload::ToolFinished { id }),
+                            None => {
+                                return self.violation(out, "tool_result without a usable id");
+                            }
+                        },
+                        _ => return self.violation(out, "unknown content block"),
+                    }
+                }
+            }
+            ("result", Some(sub)) => {
+                let Some(turn) = self.open_turn.take() else {
+                    return self.violation(out, "result without an open turn");
+                };
+                let is_error = v.get("is_error").and_then(Value::as_bool);
+                let usage = v.get("usage").filter(|u| u.is_object());
+                let counted = ["input_tokens", "output_tokens"]
+                    .iter()
+                    .all(|k| usage.and_then(|u| u.get(k)).is_some_and(Value::is_u64));
+                Self::usage(out, usage);
+                if v.get("permission_denials")
+                    .and_then(Value::as_array)
+                    .is_some_and(|denied| !denied.is_empty())
+                {
+                    out.push(EventPayload::Informational(
+                        "result:permission_denials".into(),
+                    ));
+                }
+                // Success needs exactly the observed shape of a completed, error-free run.
+                // The CLI reports a failed sign-in as subtype "success" with is_error true.
+                let status = match is_error {
+                    Some(true) => TerminalStatus::Error,
+                    Some(false)
+                        if sub == "success"
+                            && text(v, "terminal_reason").as_deref() == Some("completed")
+                            && counted
+                            && !self.errored =>
+                    {
+                        TerminalStatus::Success
+                    }
+                    _ => TerminalStatus::Unknown,
+                };
+                self.terminal_record(out, turn, status, sub);
+            }
+            ("result", None) => self.violation(out, "result without subtype"),
             _ => self.violation(out, "unknown record type"),
         }
     }

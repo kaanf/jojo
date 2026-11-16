@@ -136,10 +136,16 @@ impl LaunchSpec {
     /// P2-01 launch-envelope amendment: the production Codex profile, and only it, may
     /// name the one non-secret path variable that locates an explicitly selected Codex
     /// home. Every other provider, parser and name keeps the original three-name rule.
+    ///
+    /// M1: the production Claude Code profile, and only it, may name the home directory
+    /// and the account name its sign-in is stored under. Neither is a secret.
     fn provider_variable(&self, name: &str) -> bool {
-        name == crate::codex::CODEX_HOME_VARIABLE
+        (name == crate::codex::CODEX_HOME_VARIABLE
             && self.fingerprint.provider == ProviderKind::Codex
-            && self.fingerprint.parser == crate::codex::CODEX_EXEC_JSONL
+            && self.fingerprint.parser == crate::codex::CODEX_EXEC_JSONL)
+            || (crate::claude::CLAUDE_VARIABLES.contains(&name)
+                && self.fingerprint.provider == ProviderKind::ClaudeCode
+                && self.fingerprint.parser == crate::claude::CLAUDE_PRINT_STREAM_JSON)
     }
 
     /// Structural boundary, not scheduler admission, approval or repository validation.

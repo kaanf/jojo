@@ -3,6 +3,7 @@
 //! Clock and identity effects are supplied by callers; this crate never discovers host state.
 
 pub mod attempt;
+pub mod claude;
 pub mod codex;
 pub mod dependency;
 mod dependency_wire;

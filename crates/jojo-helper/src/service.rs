@@ -5,6 +5,7 @@
 //! carries subject identities only: the executable, its arguments and its environment
 //! come from the Codex adapter configured when the helper was started, never from IPC.
 use crate::SystemClock;
+use jojo_domain::claude::CLAUDE_VARIABLES;
 use jojo_domain::codex::CODEX_HOME_VARIABLE;
 use jojo_domain::dependency::NodeRef;
 use jojo_domain::identity::Revision;
@@ -207,8 +208,61 @@ pub struct Service {
     /// validation process group so that neither can outlive this process. Set by the
     /// helper executable before it serves; `None` only in in-process tests.
     pub guard: Option<PathBuf>,
+    /// M1: the one Claude Code executable a Start may launch, fixed by the helper's
+    /// launcher like the Codex one in `SliceConfig`. `None`: no Claude Code step can start.
+    pub claude: Option<ClaudeAdapterConfig>,
     /// Stop flag of the latest validation run, set on close, emergency and drop.
     validation_stop: Arc<AtomicBool>,
+}
+
+/// The launcher's flags as the adapter's configuration.
+pub fn claude_config(options: crate::ClaudeOptions) -> ClaudeAdapterConfig {
+    ClaudeAdapterConfig {
+        executable: options.executable,
+        version: options.version,
+        sha256: options.sha256,
+        home: options.home,
+        user: options.user,
+        // The launcher's flag is the human's attestation; nothing is inspected.
+        auth: AuthMode::NativeSubscription,
+    }
+}
+
+/// The production adapters. A Start reaches a process only through one of them.
+enum Adapter {
+    Codex(CodexAdapter),
+    Claude(ClaudeAdapter),
+}
+impl Adapter {
+    fn fingerprint(&self) -> &jojo_domain::provider::ProviderFingerprint {
+        match self {
+            Self::Codex(a) => a.fingerprint(),
+            Self::Claude(a) => a.fingerprint(),
+        }
+    }
+    /// The names of the provider variables its launch envelope carries.
+    fn variables(&self) -> Vec<String> {
+        match self {
+            Self::Codex(_) => vec![CODEX_HOME_VARIABLE.to_owned()],
+            Self::Claude(_) => CLAUDE_VARIABLES.map(str::to_owned).to_vec(),
+        }
+    }
+    fn prepare_launch(&self, spec: &LaunchSpec) -> Result<ProcessLaunch, String> {
+        match self {
+            Self::Codex(a) => a
+                .prepare_launch(spec)
+                .map_err(|e| format!("AdapterRejected: {e:?}")),
+            Self::Claude(a) => a
+                .prepare_launch(spec)
+                .map_err(|e| format!("AdapterRejected: {e:?}")),
+        }
+    }
+    fn capabilities(&self) -> &jojo_domain::provider::Capabilities {
+        match self {
+            Self::Codex(a) => a.capabilities(),
+            Self::Claude(a) => a.capabilities(),
+        }
+    }
 }
 impl Service {
     pub fn new(engine: Arc<Engine>) -> Result<Self, String> {
@@ -236,6 +290,7 @@ impl Service {
             config,
             validation_budget: ValidationBudget::DEFAULT,
             guard: None,
+            claude: None,
             validation_stop: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -957,16 +1012,29 @@ impl Service {
             .map_err(|e| e.to_string())?
             .map_err(|why| format!("StartRefused: {why}"))?;
         drop(reader);
-        // The only production adapter. No other provider can be launched by Start.
-        if step.provider != ProviderKind::Codex {
-            return Err(format!("NoProductionAdapter: {:?}", step.provider));
-        }
-        let codex = slice
-            .codex
-            .ok_or("NoProductionAdapter: Codex is not configured")?;
-        let adapter = CodexAdapter::new(codex)
-            .and_then(|adapter| adapter.ready().map(|()| adapter))
-            .map_err(|e| format!("AdapterRejected: {e:?}"))?;
+        // The two production adapters. A provider whose executable the launcher did not
+        // configure cannot be launched by Start.
+        let adapter = match step.provider {
+            ProviderKind::Codex => {
+                let codex = slice
+                    .codex
+                    .ok_or("NoProductionAdapter: Codex is not configured")?;
+                CodexAdapter::new(codex)
+                    .and_then(|adapter| adapter.ready().map(|()| adapter))
+                    .map(Adapter::Codex)
+                    .map_err(|e| format!("AdapterRejected: {e:?}"))?
+            }
+            ProviderKind::ClaudeCode => {
+                let claude = self
+                    .claude
+                    .clone()
+                    .ok_or_else(|| format!("NoProductionAdapter: {:?}", step.provider))?;
+                ClaudeAdapter::new(claude)
+                    .and_then(|adapter| adapter.ready().map(|()| adapter))
+                    .map(Adapter::Claude)
+                    .map_err(|e| format!("AdapterRejected: {e:?}"))?
+            }
+        };
         let repository =
             DisposableRoot::inspect(&slice.disposable_root)?.repository(&step.repository_path)?;
         if repository.id() != step.repository {
@@ -992,20 +1060,15 @@ impl Service {
             )),
         }
     }
-    fn dispatch(&mut self, start: &StartRequest, adapter: &CodexAdapter) -> Result<(), String> {
+    fn dispatch(&mut self, start: &StartRequest, adapter: &Adapter) -> Result<(), String> {
         provision_and_reserve(&self.ctx(), start)?;
         let prepared = slice_launch_spec(
             &self.engine,
             start,
             adapter.fingerprint(),
-            vec![CODEX_HOME_VARIABLE.to_owned()],
+            adapter.variables(),
         )
-        .and_then(|spec| {
-            adapter
-                .prepare_launch(&spec)
-                .map(|launch| (spec, launch))
-                .map_err(|e| format!("AdapterRejected: {e:?}"))
-        });
+        .and_then(|spec| adapter.prepare_launch(&spec).map(|launch| (spec, launch)));
         let (spec, launch) = match prepared {
             Ok(prepared) => prepared,
             Err(why) => {

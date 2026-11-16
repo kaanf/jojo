@@ -34,11 +34,24 @@ pub enum Invocation {
 }
 
 /// The one root under which a repository may be registered, and optionally the one
-/// Codex executable a Start may launch.
+/// Codex executable and the one Claude Code executable a Start may launch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SliceOptions {
     pub disposable_root: PathBuf,
     pub codex: Option<CodexOptions>,
+    pub claude: Option<Box<ClaudeOptions>>,
+}
+
+/// Human-approved Claude Code identity (M1): explicit native binary, recorded version,
+/// approved digest, the home directory and account name its sign-in is stored under, and
+/// the human's attestation of native sign-in.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaudeOptions {
+    pub executable: PathBuf,
+    pub version: String,
+    pub sha256: String,
+    pub home: PathBuf,
+    pub user: String,
 }
 
 /// Human-approved Codex identity: explicit native binary, recorded version, approved
@@ -102,16 +115,23 @@ pub fn parse_invocation(
     let serve = first == "--serve";
     let mut data = None;
     let mut worktrees = None;
-    // Slice options, in order: disposable root, Codex executable, version, digest, home,
+    // Slice options, in order: disposable root; Codex executable, version, digest, home,
+    // sign-in attestation; Claude Code executable, version, digest, home, account name,
     // sign-in attestation. Accepted only with --serve.
-    let mut slice: [Option<OsString>; 6] = Default::default();
-    const SLICE: [&str; 6] = [
+    let mut slice: [Option<OsString>; 12] = Default::default();
+    const SLICE: [&str; 12] = [
         "--disposable-root",
         "--codex-executable",
         "--codex-version",
         "--codex-sha256",
         "--codex-home",
         "--codex-auth",
+        "--claude-executable",
+        "--claude-version",
+        "--claude-sha256",
+        "--claude-home",
+        "--claude-user",
+        "--claude-auth",
     ];
     while let Some(argument) = arguments.next() {
         let value = arguments.next();
@@ -137,7 +157,15 @@ pub fn parse_invocation(
         }
         *destination = Some(PathBuf::from(value.ok_or(ConfigError::MissingValue)?));
     }
-    let [disposable, executable, version, sha256, codex_home, auth] = slice;
+    let [
+        disposable,
+        executable,
+        version,
+        sha256,
+        codex_home,
+        auth,
+        claude @ ..,
+    ] = slice;
     let text = |v: OsString| v.into_string().map_err(|_| ConfigError::Usage);
     let codex = match (executable, version, sha256, codex_home, auth) {
         (None, None, None, None, None) => None,
@@ -155,13 +183,37 @@ pub fn parse_invocation(
         }
         _ => return Err(ConfigError::Usage),
     };
-    let slice = match (disposable, codex) {
-        (None, None) => None,
-        (Some(root), codex) => Some(SliceOptions {
+    let claude = match claude {
+        [None, None, None, None, None, None] => None,
+        [
+            Some(executable),
+            Some(version),
+            Some(sha256),
+            Some(claude_home),
+            Some(user),
+            Some(auth),
+        ] => {
+            if auth != "native-subscription" {
+                return Err(ConfigError::Usage);
+            }
+            Some(Box::new(ClaudeOptions {
+                executable: executable.into(),
+                version: text(version)?,
+                sha256: text(sha256)?,
+                home: claude_home.into(),
+                user: text(user)?,
+            }))
+        }
+        _ => return Err(ConfigError::Usage),
+    };
+    let slice = match (disposable, codex, claude) {
+        (None, None, None) => None,
+        (Some(root), codex, claude) => Some(SliceOptions {
             disposable_root: root.into(),
             codex,
+            claude,
         }),
-        (None, Some(_)) => return Err(ConfigError::Usage),
+        (None, _, _) => return Err(ConfigError::Usage),
     };
     let defaults = if data.is_none() || worktrees.is_none() {
         Some(
@@ -419,6 +471,75 @@ mod tests {
     }
 
     #[test]
+    fn m1_claude_options_are_explicit_complete_and_attested() {
+        const CLAUDE: [&str; 12] = [
+            "--claude-executable",
+            "/test/bin/claude",
+            "--claude-version",
+            "2.1.311 (Claude Code)",
+            "--claude-sha256",
+            "11",
+            "--claude-home",
+            "/test/home",
+            "--claude-user",
+            "tester",
+            "--claude-auth",
+            "native-subscription",
+        ];
+        let both: Vec<&str> = SLICE.iter().chain(&CLAUDE).copied().collect();
+        let Ok(Invocation::ServeSlice(_, options)) = parse_invocation(args(&both), None) else {
+            panic!("slice invocation")
+        };
+        let claude = Box::new(ClaudeOptions {
+            executable: "/test/bin/claude".into(),
+            version: "2.1.311 (Claude Code)".into(),
+            sha256: "11".into(),
+            home: "/test/home".into(),
+            user: "tester".into(),
+        });
+        assert!(options.codex.is_some());
+        assert_eq!(options.claude, Some(claude.clone()));
+        // Claude Code alone, with the disposable root, needs no Codex identity.
+        let alone: Vec<&str> = SLICE[..7].iter().chain(&CLAUDE).copied().collect();
+        let Ok(Invocation::ServeSlice(_, options)) = parse_invocation(args(&alone), None) else {
+            panic!("slice invocation")
+        };
+        assert_eq!((options.codex, options.claude), (None, Some(claude)));
+        // Incomplete, without a disposable root, or not attested as a native subscription.
+        for end in [2, 4, 6, 8, 10] {
+            let partial: Vec<&str> = SLICE[..7].iter().chain(&CLAUDE[..end]).copied().collect();
+            assert_eq!(
+                parse_invocation(args(&partial), None),
+                Err(ConfigError::Usage),
+                "{end}"
+            );
+        }
+        let without_root: Vec<&str> = SLICE[..5].iter().chain(&CLAUDE).copied().collect();
+        assert_eq!(
+            parse_invocation(args(&without_root), None),
+            Err(ConfigError::Usage)
+        );
+        for auth in ["api-key", "unknown", ""] {
+            let mut wrong = alone.clone();
+            *wrong.last_mut().unwrap() = auth;
+            assert_eq!(
+                parse_invocation(args(&wrong), None),
+                Err(ConfigError::Usage),
+                "{auth:?}"
+            );
+        }
+        for unknown in ["--claude-arg", "--claude-model", "--claude-settings"] {
+            let mut extra = alone.clone();
+            extra.extend([unknown, "x"]);
+            assert_eq!(
+                parse_invocation(args(&extra), None),
+                Err(ConfigError::UnknownArgument),
+                "{unknown}"
+            );
+        }
+    }
+
+    #[test]
     fn p2_02_slice_options_are_explicit_complete_and_only_for_serve() {
         let Ok(Invocation::ServeSlice(roots, options)) = parse_invocation(args(&SLICE), None)
         else {
@@ -435,6 +556,7 @@ mod tests {
                     sha256: "00".into(),
                     home: "/test/codex-home".into(),
                 }),
+                claude: None,
             }
         );
         // A disposable root alone enables registration and import, with no adapter.

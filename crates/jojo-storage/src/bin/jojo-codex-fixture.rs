@@ -71,8 +71,153 @@ fn develop(files: &[(&str, &str)]) {
     }
 }
 
+const CLAUDE_SESSION: &str = "fixture-session";
+
+/// One Claude Code stream-json record of the fixture session. `rest` is the record's
+/// other members, without braces.
+fn claude(kind: &str, rest: &str) {
+    line(&format!(
+        r#"{{"type":"{kind}",{rest},"session_id":"{CLAUDE_SESSION}"}}"#
+    ));
+}
+
+fn claude_init(tools: &str) {
+    claude(
+        "system",
+        &format!(
+            r#""subtype":"init","tools":[{tools}],"mcp_servers":[],"permissionMode":"acceptEdits","apiKeySource":"none","claude_code_version":"2.1.311""#
+        ),
+    );
+}
+
+fn claude_text(text: &str) {
+    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+    claude(
+        "assistant",
+        &format!(
+            r#""message":{{"role":"assistant","content":[{{"type":"text","text":"{escaped}"}}]}},"parent_tool_use_id":null"#
+        ),
+    );
+}
+
+fn claude_tool(id: &str, name: &str) {
+    claude(
+        "assistant",
+        &format!(
+            r#""message":{{"role":"assistant","content":[{{"type":"tool_use","id":"{id}","name":"{name}","input":{{}}}}]}},"parent_tool_use_id":null"#
+        ),
+    );
+    claude(
+        "user",
+        &format!(
+            r#""message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"{id}","content":"ok"}}]}},"parent_tool_use_id":null"#
+        ),
+    );
+}
+
+fn claude_result(is_error: bool, reason: &str) {
+    claude(
+        "result",
+        &format!(
+            r#""subtype":"success","is_error":{is_error},"terminal_reason":"{reason}","usage":{{"input_tokens":5,"output_tokens":6}},"permission_denials":[]"#
+        ),
+    );
+}
+
+const CLAUDE_FILE_TOOLS: &str = r#""Edit","Glob","Grep","Read","Write""#;
+
+/// M1: the same stand-in speaking the Claude Code `--print` stream-json dialect, when it
+/// is launched with the argument vector the Claude Code adapter produces. It is not
+/// Claude Code: no provider binary, credential, network or inference is involved.
+fn claude_main(args: &[String], scenario: &str) {
+    if let Some(path) = scenario.strip_prefix("develop ") {
+        claude_init(CLAUDE_FILE_TOOLS);
+        if path.starts_with('/') || path.split('/').any(|part| part == "..") {
+            eprintln!("fixture writes only inside its working directory");
+            std::process::exit(65);
+        }
+        if std::fs::write(path, b"written by fixture\n").is_err() {
+            claude_result(true, "api_error");
+            std::process::exit(1);
+        }
+        claude_tool("toolu_fixture_1", "Write");
+        claude_text("developed");
+        claude_result(false, "completed");
+        return;
+    }
+    match scenario {
+        "ok" => {
+            claude_init(CLAUDE_FILE_TOOLS);
+            claude(
+                "system",
+                r#""subtype":"thinking_tokens","estimated_tokens":50"#,
+            );
+            claude(
+                "rate_limit_event",
+                r#""rate_limit_info":{"status":"allowed"}"#,
+            );
+            claude_tool("toolu_fixture_1", "Read");
+            claude_text("ok");
+            claude_result(false, "completed");
+        }
+        // What actually crossed the OS boundary, as seen from inside the child.
+        "report" => {
+            let mut variables: Vec<String> = std::env::vars()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect();
+            variables.sort();
+            claude_init(CLAUDE_FILE_TOOLS);
+            claude_text(&format!("argv={args:?} variables={variables:?}"));
+            claude_result(false, "completed");
+        }
+        // The shape the CLI printed when it was not signed in: a "success" that is an error.
+        "auth-error" => {
+            claude_init(CLAUDE_FILE_TOOLS);
+            claude(
+                "assistant",
+                r#""message":{"role":"assistant","content":[{"type":"text","text":"Not logged in (synthetic fixture text)"}]},"parent_tool_use_id":null,"error":"authentication_failed""#,
+            );
+            claude_result(true, "api_error");
+            std::process::exit(1);
+        }
+        "unknown-kind" => {
+            claude_init(CLAUDE_FILE_TOOLS);
+            claude("system", r#""subtype":"compact_boundary""#);
+            claude_result(false, "completed");
+        }
+        // A tool that was not approved, used or merely offered.
+        "tool-not-approved" => {
+            claude_init(CLAUDE_FILE_TOOLS);
+            claude_tool("toolu_fixture_1", "Bash");
+            claude_result(false, "completed");
+        }
+        "init-not-approved" => {
+            claude_init(r#""Bash","Edit","Glob","Grep","Read","Write""#);
+            claude_text("ok");
+            claude_result(false, "completed");
+        }
+        "exit-zero-no-terminal" => {
+            claude_init(CLAUDE_FILE_TOOLS);
+            claude_text("partial");
+        }
+        other => {
+            eprintln!("unknown scenario {other:?}");
+            std::process::exit(2);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("-p") {
+        let mut prompt = String::new();
+        let _ = std::io::stdin().read_to_string(&mut prompt);
+        let scenario = prompt
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("fixture: "))
+            .unwrap_or(prompt.trim());
+        return claude_main(&args, scenario);
+    }
     if args.first().map(String::as_str) != Some("exec") {
         eprintln!("fixture accepts only the exec subcommand");
         std::process::exit(64);
