@@ -225,7 +225,7 @@ const LEAD_PLAN_ASKS: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Before
 
 /// M3: a plan under a project record. Each step's title is its own attempt directive, so
 /// that every step of a run writes only its own path; kinds decide two providers.
-const LEAD_PLAN_KINDS: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Two independent steps, then one that needs both.","adr":"# Decision\nThree small files.","steps":[{"key":"api","title":"fixture: develop src/api.txt","kind":"backend","provider":"Codex","depends_on":[],"write_scope":["src/api.txt"],"baseline":[],"tests":["api"],"command":["/usr/bin/true"]},{"key":"usage","title":"fixture: develop src/usage.txt","kind":"docs","provider":null,"depends_on":[],"write_scope":["src/usage.txt"],"baseline":[],"tests":["usage"],"command":["/usr/bin/true"]},{"key":"join","title":"fixture: develop src/join.txt","kind":null,"provider":null,"depends_on":["api","usage"],"write_scope":["src/join.txt"],"baseline":[],"tests":["join"],"command":["/usr/bin/true"]}],"questions":[]}"##;
+const LEAD_PLAN_KINDS: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Two independent steps, then one that needs both.","adr":"# Decision\nThree small files.","steps":[{"key":"api","title":"fixture: develop-after 2 src/api.txt","kind":"backend","provider":"Codex","depends_on":[],"write_scope":["src/api.txt"],"baseline":[],"tests":["api"],"command":["/usr/bin/true"]},{"key":"usage","title":"fixture: develop-after 2 src/usage.txt","kind":"docs","provider":null,"depends_on":[],"write_scope":["src/usage.txt"],"baseline":[],"tests":["usage"],"command":["/usr/bin/true"]},{"key":"join","title":"fixture: develop src/join.txt","kind":null,"provider":null,"depends_on":["api","usage"],"write_scope":["src/join.txt"],"baseline":[],"tests":["join"],"command":["/usr/bin/true"]}],"questions":[]}"##;
 const LEAD_PLAN_UNKNOWN_KIND: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"One step of a kind the project does not have.","adr":"# Decision\nOne file.","steps":[{"key":"ui","title":"Paint it","kind":"frontend","provider":"Codex","depends_on":[],"write_scope":["src/ui.txt"],"baseline":[],"tests":["ui"],"command":["/usr/bin/true"]}],"questions":[]}"##;
 
 /// What the stand-in lead agent does in a turn (M2).
@@ -330,6 +330,23 @@ fn main() {
         .filter_map(|l| l.trim().strip_prefix("fixture: "))
         .next_back()
         .unwrap_or(prompt.trim());
+    // M3: `develop-after <seconds> <path>` waits first (bounded), so that two steps of a
+    // plan are seen running at the same time, then develops like `develop <path>`.
+    let delayed;
+    let scenario = match scenario.strip_prefix("develop-after ") {
+        Some(rest)
+            if !args
+                .iter()
+                .any(|a| a == "Read,Glob,Grep" || a == "read-only") =>
+        {
+            let (seconds, path) = rest.split_once(' ').unwrap_or(("0", rest));
+            let seconds = seconds.parse::<u64>().unwrap_or(0).min(60);
+            std::thread::sleep(Duration::from_secs(seconds));
+            delayed = format!("develop {path}");
+            delayed.as_str()
+        }
+        _ => scenario,
+    };
     if args.first().map(String::as_str) == Some("-p") {
         // M2: the read-only vector of a lead agent turn names the three read tools.
         if args.iter().any(|a| a == "Read,Glob,Grep") {

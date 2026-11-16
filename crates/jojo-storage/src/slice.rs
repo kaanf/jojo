@@ -492,32 +492,9 @@ impl Tx<'_> {
         {
             return Err(deny("validation plan is not the one the plan binds"));
         }
-        // Capacity one, stated directly: no other attempt may be reserved, running,
-        // stopping or held for recovery. The scheduler enforces its own limits as well.
-        let active = self
-            .conn
-            .query_one(
-                "SELECT COUNT(*) FROM approval_attempts WHERE phase<>'FINISHED'",
-                &[],
-                |r| r.int(0),
-            )
-            .map_err(StorageError::from)?;
-        if active != 0 {
-            return Err(deny("CapacityOne: another attempt is active or held"));
-        }
-        // M2: a lead agent turn is a provider run too; the two never overlap.
-        if self
-            .conn
-            .query_optional(
-                "SELECT 1 FROM lead_turns t WHERE NOT EXISTS
-                 (SELECT 1 FROM lead_turn_results r WHERE r.turn=t.turn) LIMIT 1",
-                &[],
-                |r| r.int(0),
-            )?
-            .is_some()
-        {
-            return Err(deny("CapacityOne: a lead turn is active"));
-        }
+        // D4 (M3): attempts that are not finished, held ones included, and a running lead
+        // turn share the global capacity. The scheduler enforces the same limit again.
+        self.capacity_left("a Start")?;
         let step_id = id_to_text(request.step.id);
         // M2: a blocking question the lead asked about this step, and only this step,
         // holds its Start until a human answers or defers it.
@@ -665,11 +642,25 @@ pub fn slice_launch_spec(
                     |r| r.text(0),
                 )
             };
-            Ok((record, vector, decisions, plan, prd, body(s.adr)?, body(s.validation)?))
+            // M3: a step a lead drafted has a key and a title, shown in the approved plan.
+            let step = v.conn.query_optional(
+                "SELECT key,title FROM lead_plan_steps WHERE step=?1",
+                &[Value::Text(&id_to_text(request.step.id))],
+                |r| Ok((r.text(0)?, r.text(1)?)),
+            )?;
+            Ok((record, vector, decisions, plan, prd, body(s.adr)?, body(s.validation)?, step))
         })
         .map_err(|e| e.to_string())?;
-    let (Some(record), Some(vector), decisions, Some(plan), Some(prd), Some(adr), Some(validation)) =
-        found
+    let (
+        Some(record),
+        Some(vector),
+        decisions,
+        Some(plan),
+        Some(prd),
+        Some(adr),
+        Some(validation),
+        step,
+    ) = found
     else {
         return Err("reserved attempt state is incomplete".into());
     };
@@ -688,9 +679,14 @@ pub fn slice_launch_spec(
             .map(|p| format!("- {}\n", p.as_str()))
             .collect::<String>()
     };
+    // M3: the step this attempt does, when a lead drafted the plan; earlier plans have
+    // one step and no section.
+    let step = step.map_or(String::new(), |(key, title)| {
+        format!("# Step\nYou do only this step of the approved plan ({key}):\n{title}\n\n")
+    });
     let prompt = format!(
         "# Task\nImplement the approved change described below in this repository working \
-         directory.\n\n# Product requirements (approved revision {})\n{}\n\n# Architecture \
+         directory.\n\n{step}# Product requirements (approved revision {})\n{}\n\n# Architecture \
          decision (approved)\n{}\n\n# Scope\nYou may modify only:\n{}Do not modify:\n{}",
         prd.revision.0,
         prd.rendered,

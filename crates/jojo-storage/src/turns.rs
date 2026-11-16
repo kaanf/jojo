@@ -657,17 +657,11 @@ impl Tx<'_> {
         if self.admission()? != Admission::Open {
             return Err(deny("AdmissionClosed"));
         }
-        let attempts = self
-            .conn
-            .query_one(
-                "SELECT COUNT(*) FROM approval_attempts WHERE phase<>'FINISHED'",
-                &[],
-                |r| r.int(0),
-            )
-            .map_err(StorageError::from)?;
-        if attempts != 0 || unfinished(self.conn)?.is_some() {
-            return Err(deny("CapacityOne: another run is active or held"));
+        // One turn at a time; a turn takes one unit of the global capacity (D4).
+        if unfinished(self.conn)?.is_some() {
+            return Err(deny("TurnRefused: another lead turn is running"));
         }
+        self.capacity_left("a lead turn")?;
         let repository = id_to_text(request.repository.0);
         if self
             .conn

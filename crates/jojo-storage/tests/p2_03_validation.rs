@@ -811,7 +811,7 @@ fn p2_03_closing_while_validation_is_active_stops_the_validator_and_leaves_no_ve
     // One at a time, and a running validation is never a pass.
     assert_eq!(
         code(&r.validate_frame(811)),
-        "CapacityOne: a run or validation is active"
+        "ValidationBusy: another host validation is running"
     );
     assert!(code(&r.decide(820, "Accept", number(1))).starts_with("StaleCandidate"));
     // Wait until the validator process exists, then the human closes the app.

@@ -69,8 +69,17 @@ pub struct WorkerRuntime {
     pub clock: Arc<SystemClock>,
 }
 
+/// What a worker thread does. M3 runs several at once: attempts up to the capacity, at
+/// most one lead turn and at most one host validation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Work {
+    Attempt,
+    Turn,
+    Validation,
+}
+
 pub struct Workers {
-    handles: Vec<JoinHandle<Result<(), String>>>,
+    handles: Vec<(Work, JoinHandle<Result<(), String>>)>,
     failed: bool,
     emergency_stop: Arc<AtomicBool>,
 }
@@ -120,7 +129,7 @@ impl Workers {
                 Ok(())
             })
             .map_err(|e| e.to_string())?;
-        self.handles.push(handle);
+        self.handles.push((Work::Attempt, handle));
         Ok(())
     }
     /// M2: one lead agent turn. It is not an attempt and is not settled like one; capacity,
@@ -149,7 +158,7 @@ impl Workers {
                 settle_turn(&ctx, &spec, &run).map(drop)
             })
             .map_err(|e| e.to_string())?;
-        self.handles.push(handle);
+        self.handles.push((Work::Turn, handle));
         Ok(())
     }
     /// P2-03: a host validation run. It is not a provider attempt, but it is work this
@@ -162,14 +171,14 @@ impl Workers {
             .name("jojo-validator".into())
             .spawn(work)
             .map_err(|e| e.to_string())?;
-        self.handles.push(handle);
+        self.handles.push((Work::Validation, handle));
         Ok(())
     }
     pub fn reap(&mut self) -> bool {
         let mut i = 0;
         while i < self.handles.len() {
-            if self.handles[i].is_finished() {
-                let h = self.handles.swap_remove(i);
+            if self.handles[i].1.is_finished() {
+                let (_, h) = self.handles.swap_remove(i);
                 if !matches!(h.join(), Ok(Ok(()))) {
                     self.failed = true;
                 }
@@ -181,6 +190,11 @@ impl Workers {
     }
     pub fn failed(&self) -> bool {
         self.failed
+    }
+    /// Reaps finished threads, then counts the live ones of `work`.
+    pub fn running(&mut self, work: Work) -> usize {
+        self.reap();
+        self.handles.iter().filter(|(w, _)| *w == work).count()
     }
 }
 
@@ -799,7 +813,7 @@ pub fn serve(
 
 impl Drop for Workers {
     fn drop(&mut self) {
-        for h in self.handles.drain(..) {
+        for (_, h) in self.handles.drain(..) {
             let _ = h.join();
         }
     }

@@ -289,8 +289,9 @@ impl Service {
     fn validate(&mut self, request: CommandRequest, e: &Envelope) -> Result<Json, String> {
         let protocol::ValidateCommand { attempt, candidate } =
             protocol::ValidateCommand::parse(&e.payload)?;
-        if !self.workers.reap() {
-            return Err("CapacityOne: a run or validation is active".into());
+        // M3: attempts may run beside it; host validations run one at a time.
+        if self.workers.running(Work::Validation) != 0 {
+            return Err("ValidationBusy: another host validation is running".into());
         }
         let root = validation_root(&self.engine)?;
         let run = e.request;
@@ -443,9 +444,7 @@ impl Service {
         };
         let mut reader = self.engine.reader().map_err(|e| e.to_string())?;
         let slice = self.config.slice.clone().ok_or("SliceNotConfigured")?;
-        if !self.workers.reap() {
-            return Err("CapacityOne: a run is active".into());
-        }
+        self.workers.reap();
         let snapshot = reader.snapshot().map_err(|e| e.to_string())?;
         if snapshot.session.admission != Admission::Open {
             return Err("AdmissionClosed".into());
@@ -454,6 +453,11 @@ impl Service {
         if !self.recovery.subjects().is_empty() {
             return Err("RecoveryHold: unresolved recovery subjects".into());
         }
+        // M3: capacity is the core's (D4); it is checked here first, read-only, and again
+        // when the Start is accepted.
+        reader
+            .read(|v| v.capacity_left("a Start"))
+            .map_err(|e| e.to_string())??;
         let step = reader
             .read(|v| v.slice_step(&start.subjects, start.step))
             .map_err(|e| e.to_string())?
@@ -533,9 +537,14 @@ impl Service {
             other => format!("{other:?}"),
         };
         let slice = self.config.slice.clone().ok_or("SliceNotConfigured")?;
-        if !self.workers.reap() {
-            return Err("CapacityOne: a run is active".into());
+        // M3: the core decides capacity (D4) when it accepts the turn.
+        if self.workers.running(Work::Turn) != 0 {
+            return Err("TurnRefused: another lead turn is running".into());
         }
+        self.engine
+            .reader()
+            .and_then(|mut r| r.read(|v| v.capacity_left("a lead turn")))
+            .map_err(|e| e.to_string())??;
         let adapter = self.adapter(c.provider, &slice)?;
         let path = self
             .engine

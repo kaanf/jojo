@@ -44,6 +44,37 @@ fn config(c: &Connection) -> Result<ResourceConfig, StorageError> {
         capacities,
     })
 }
+/// Lead turns that have no result yet (at most one, by the schema).
+fn active_turns(c: &Connection) -> Result<u64, StorageError> {
+    from_db(c.query_one(
+        "SELECT count(*) FROM lead_turns t WHERE NOT EXISTS
+         (SELECT 1 FROM lead_turn_results r WHERE r.turn=t.turn)",
+        &[],
+        |r| r.int(0),
+    )?)
+}
+/// D4 (M3): attempts that are not finished, held ones included, and the running lead turn
+/// share the global capacity.
+fn capacity_left(c: &Connection, what: &str) -> Result<(), String> {
+    let attempts: u64 = from_db(
+        c.query_one(
+            "SELECT count(*) FROM approval_attempts WHERE phase<>'FINISHED'",
+            &[],
+            |r| r.int(0),
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let turns = active_turns(c).map_err(|e| e.to_string())?;
+    let capacity = config(c).map_err(|e| e.to_string())?.capacity("global");
+    if attempts + turns >= capacity {
+        return Err(format!(
+            "CapacityFull: {attempts} attempts and {turns} lead turn use all {capacity} units; \
+             {what} waits"
+        ));
+    }
+    Ok(())
+}
 fn deny(s: impl Into<String>) -> TxError {
     TxError::Rejected(s.into())
 }
@@ -93,6 +124,10 @@ impl ReadView<'_> {
     pub fn resource_config(&self) -> Result<ResourceConfig, StorageError> {
         config(self.conn)
     }
+    /// The capacity check of a Start or a turn, read-only, before anything is committed.
+    pub fn capacity_left(&self, what: &str) -> Result<Result<(), String>, StorageError> {
+        Ok(capacity_left(self.conn, what))
+    }
     pub fn scheduler_queue(&self) -> Result<Vec<QueueStatus>, StorageError> {
         Ok(candidates(self.conn)?
             .into_iter()
@@ -103,6 +138,14 @@ impl ReadView<'_> {
 impl Tx<'_> {
     pub(crate) fn resource_config_now(&self) -> Result<ResourceConfig, StorageError> {
         config(self.conn)
+    }
+    /// Refuses `what` when attempts and the lead turn already use every unit.
+    pub(crate) fn capacity_left(&self, what: &str) -> Result<(), TxError> {
+        capacity_left(self.conn, what).map_err(TxError::Rejected)
+    }
+    /// A running lead turn takes one unit of the global capacity.
+    pub(crate) fn active_turns(&self) -> Result<u64, StorageError> {
+        active_turns(self.conn)
     }
     /// Full immutable configuration snapshot; the writer receipt supplies command CAS/idempotency.
     pub fn configure_resources(
@@ -233,14 +276,13 @@ impl Tx<'_> {
         let mut blocked = vec![];
         for n in needs {
             let held = self.live_claims(&n.key)?;
-            let admin_waiting = self.conn.query_one(
-                "SELECT count(*) FROM owned_worktrees WHERE 'repository:' || repository=?1 AND state IN ('WAITING','CREATING','BLOCKED')",
-                &[Value::Text(&n.key)], |r| r.int(0))? > 0;
-            if admin_waiting {
-                blocked.push(n.key.clone());
-                continue;
-            }
-            let mut occupancy = 0u64;
+            // M3: worktree administration has its own claim and no longer drains the
+            // repository. A running lead turn takes one unit of the global capacity.
+            let mut occupancy = if n.key == "global" {
+                self.active_turns()?
+            } else {
+                0u64
+            };
             for h in &held {
                 let units = self
                     .conn

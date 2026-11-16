@@ -641,7 +641,7 @@ fn m2_acceptance_holds_admission_capacity_and_the_shape_of_a_feature() {
     for request in [&other, &t.request(61, ProviderKind::Codex, "")] {
         assert_eq!(
             refused(request),
-            "CapacityOne: another run is active or held"
+            "TurnRefused: another lead turn is running"
         );
     }
     let (spec, launch) = t.prepare(60, ProviderKind::ClaudeCode);
@@ -707,7 +707,7 @@ fn m2_a_turn_left_by_a_dead_helper_is_closed_as_interrupted_and_holds_nothing() 
     t.recover();
     assert_eq!(
         t.accept(&t.request(71, ProviderKind::Codex, "")),
-        Err("CapacityOne: another run is active or held".into())
+        Err("TurnRefused: another lead turn is running".into())
     );
     assert_eq!(
         t.cmd(|tx| tx.close_interrupted_turns().map(|n| n.to_string())),

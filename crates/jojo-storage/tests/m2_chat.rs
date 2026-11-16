@@ -473,11 +473,11 @@ fn m2_a_running_turn_holds_capacity_and_is_stopped_by_cancel_or_close() {
         str_of(&items(field(&h.chat(0), &["turns"]))[0], &["state"]),
         "Running"
     );
-    // Nothing else runs beside it: neither another turn nor a Start.
+    // One turn at a time; with a capacity of one (no project record) no Start either.
     let another = h.turn_payload(&repository, "Codex", "");
     assert_eq!(
         h.refused("ChatTurn", another),
-        "CapacityOne: a run is active"
+        "TurnRefused: another lead turn is running"
     );
     let start = object([
         ("prd", identity(OpaqueId(1))),
@@ -486,7 +486,10 @@ fn m2_a_running_turn_holds_capacity_and_is_stopped_by_cancel_or_close() {
         ("validation", identity(OpaqueId(4))),
         ("step", identity(OpaqueId(5))),
     ]);
-    assert!(h.refused("Start", start).starts_with("CapacityOne"));
+    assert_eq!(
+        h.refused("Start", start),
+        "CapacityFull: 0 attempts and 1 lead turn use all 1 units; a Start waits"
+    );
     until(|| h.spawned() == 1);
     h.ok("CancelTurn", object([("turn", identity(OpaqueId(2001)))]));
     until(|| h.s().workers.reap());
@@ -889,4 +892,108 @@ fn m3_a_plan_with_a_task_kind_the_project_does_not_have_drafts_nothing() {
         "{row:?}"
     );
     assert_eq!(field(&row, &["plan"]), &Json::Null);
+}
+
+impl H {
+    /// The sample project's plan, every document approved. Returns the requirements, the
+    /// four subjects and the three step identities (api, usage, join).
+    fn approved_kinds_plan(&mut self, repository: &str) -> (Json, Json, Json, Json, Vec<OpaqueId>) {
+        h_save_project(self, repository);
+        let prd = self.approved_requirements(repository);
+        let row = self.drafted_plan(repository, 4003, "fixture: lead-kinds");
+        let plan = field(&row, &["plan"]).clone();
+        let (adr, plan_id, validation) = (
+            field(&plan, &["adr"]).clone(),
+            field(&plan, &["plan"]).clone(),
+            field(&plan, &["validation"]).clone(),
+        );
+        self.approve(&adr);
+        self.approve(&validation);
+        self.approve(&plan_id);
+        let steps = items(field(&plan, &["steps"]))
+            .iter()
+            .map(|s| id(field(s, &["step"])).unwrap())
+            .collect();
+        (prd, adr, plan_id, validation, steps)
+    }
+
+    fn event_seq(&mut self, kind: &str, attempt: OpaqueId) -> u64 {
+        let prefix = format!("{:032x}", attempt.0);
+        let mut reader = self.s().engine.reader().unwrap();
+        reader
+            .events_after(EventSeq(0), 10_000)
+            .unwrap()
+            .iter()
+            .find(|e| e.kind == kind && e.payload.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("no {kind} for {prefix}"))
+            .seq
+            .0
+    }
+}
+
+fn h_save_project(h: &mut H, repository: &str) {
+    let payload = h.project_payload(3001, 0, repository);
+    h.ok3("SaveProject", payload);
+}
+
+#[test]
+fn m3_two_steps_run_at_once_and_a_lead_turn_takes_one_unit_of_capacity() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let (prd, adr, plan, validation, steps) = h.approved_kinds_plan(&repository);
+    let start = |step: OpaqueId| {
+        object([
+            ("prd", prd.clone()),
+            ("adr", adr.clone()),
+            ("plan", plan.clone()),
+            ("validation", validation.clone()),
+            ("step", identity(step)),
+        ])
+    };
+    // One attempt and the lead turn fill the capacity of two.
+    let api = h.at(2, "Start", start(steps[0]));
+    assert_eq!(
+        str_of(&api.payload, &["dispatch"]),
+        "launched",
+        "{:?}",
+        api.payload
+    );
+    let turn = h.turn_payload(&repository, "Codex", "fixture: lead-hang 30");
+    let r = h.frame(2101, 2, "ChatTurn", turn);
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    assert_eq!(
+        h.refused("Start", start(steps[1])),
+        "CapacityFull: 1 attempts and 1 lead turn use all 2 units; a Start waits"
+    );
+    h.ok("CancelTurn", object([("turn", identity(OpaqueId(2101)))]));
+    until(|| h.s().workers.running(Work::Turn) == 0);
+    // Two attempts, on two providers, at the same time; the turn now waits.
+    let usage = h.at(2, "Start", start(steps[1]));
+    assert_eq!(
+        str_of(&usage.payload, &["dispatch"]),
+        "launched",
+        "{:?}",
+        usage.payload
+    );
+    let again = h.turn_payload(&repository, "Codex", "fixture: lead");
+    let refused = h.refused("ChatTurn", again);
+    assert!(refused.starts_with("CapacityFull: "), "{refused}");
+    until(|| h.s().workers.reap());
+    assert!(!h.s().workers.failed());
+    let (api, usage) = (
+        id(field(&api.payload, &["attempt"])).unwrap(),
+        id(field(&usage.payload, &["attempt"])).unwrap(),
+    );
+    for attempt in [api, usage] {
+        let result = h
+            .read(|v| v.attempt_result(attempt))
+            .expect("sealed result");
+        assert_eq!(
+            result.outcome,
+            jojo_domain::attempt::AttemptOutcome::Succeeded,
+            "{result:?}"
+        );
+    }
+    // The second attempt was issued before the first one settled.
+    assert!(h.event_seq("ProcessLaunchIssued", usage) < h.event_seq("AttemptSettling", api));
 }

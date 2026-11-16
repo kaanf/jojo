@@ -21,6 +21,11 @@ type IoResult<T> = Result<T, String>;
 fn io<T>(r: std::io::Result<T>) -> IoResult<T> {
     r.map_err(|e| e.to_string())
 }
+/// The exclusive claim of one repository's worktree administration (M3). It used to be
+/// the repository's execution key, which made a worktree wait for every running attempt.
+pub fn admin_key(repo: RepositoryId) -> String {
+    format!("worktree-admin:{:032x}", repo.0.0)
+}
 fn deny(s: &str) -> TxError {
     TxError::Rejected(s.into())
 }
@@ -389,8 +394,16 @@ impl Tx<'_> {
                 Value::Text(&id_to_text(attempt)),Value::Text(&id_to_text(repo.id.0)),Value::Int(to_db(self.epoch.0)?),Value::Text(text_path(&root.path).map_err(|e|deny(&e))?),Value::Text(&root.filesystem),Value::Text(text_path(&repo.path).map_err(|e|deny(&e))?),Value::Text(text_path(&repo.common).map_err(|e|deny(&e))?),Value::Text(&repo.filesystem),Value::Text(base),predecessor.map(id_to_text).as_deref().map_or(Value::Null,Value::Text),Value::Text(&marker)])?;
             self.append_event("WorktreeRequested", None, &marker)?;
         }
-        let key = repository_key(repo.id);
-        if !self.live_claims(&key)?.is_empty() {
+        // M3: worktree administration serializes only with itself. Running attempts of
+        // the same repository hold shared execution claims and no longer hold it back.
+        // A claim on the repository left by an earlier helper (quarantined, or of another
+        // epoch) still blocks every new writer until recovery settles it.
+        let key = admin_key(repo.id);
+        let stale = self
+            .live_claims(&repository_key(repo.id))?
+            .iter()
+            .any(|c| c.state != ClaimState::Active || c.epoch != self.epoch);
+        if stale || !self.live_claims(&key)?.is_empty() {
             return Ok("WAITING".into());
         }
         let holder = AggregateKey::new("worktree_admin", attempt);
@@ -416,7 +429,7 @@ impl Tx<'_> {
             .claim
             .ok_or_else(|| deny("missing administration claim"))?;
         if !self
-            .live_claims(&repository_key(record.repository))?
+            .live_claims(&admin_key(record.repository))?
             .iter()
             .any(|c| c.id == claim && c.epoch == self.epoch && c.state == ClaimState::Active)
         {

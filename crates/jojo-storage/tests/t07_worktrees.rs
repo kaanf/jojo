@@ -367,20 +367,18 @@ fn t07_independent_repositories_can_administer_simultaneously() {
     );
 }
 #[test]
-fn t07_admin_waiter_drains_shared_scheduler_claims() {
+fn t07_worktree_administration_runs_beside_shared_scheduler_claims() {
     let f = F::new();
     f.create(101);
     f.create(102);
     let cfg = f.queued(&[f.repo.clone(), f.repo.clone()], 2);
     assert_eq!(f.reserve(cfg, &[101]), vec![OpaqueId(101)]);
-    assert_eq!(f.begin(103), "WAITING");
-    assert!(f.reserve(cfg, &[102]).is_empty());
-    f.cmd(|tx| {
-        tx.retire_unissued_reservation(OpaqueId(101))?;
-        Ok("retired".into())
-    })
-    .unwrap();
+    // M3: administration has its own exclusive claim; an attempt that runs in the
+    // repository does not hold back the next worktree, and that worktree does not drain
+    // the repository's admissions.
     assert_eq!(f.begin(103), "CREATING");
+    assert_eq!(f.begin(104), "WAITING");
+    assert_eq!(f.reserve(cfg, &[102]), vec![OpaqueId(102)]);
 }
 #[test]
 fn t07_concurrent_administration_has_one_owner() {

@@ -252,6 +252,7 @@ struct ExecutionPlanState: Equatable {
             ("AdmissionClosed", refused, "Admission is closed. Nothing was started."),
             ("SliceNotConfigured", refused, "The core has no slice configuration. Nothing was started."),
             ("CapacityOne", refused, "Another attempt is active or on hold. Nothing was started."),
+            ("CapacityFull", refused, "Every unit of parallel capacity is in use by attempts or a lead turn. Nothing was started."),
             ("RecoveryHold", refused, "Earlier work is on hold. Resolve it in Recovery Center. Nothing was started."),
             ("StartRefused: missing or stale approval", refused,
              "An approval is missing or no longer current. Review the document in the Approval Inbox. Nothing was started."),
