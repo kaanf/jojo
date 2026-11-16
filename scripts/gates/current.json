@@ -3,7 +3,7 @@
   "scope": "Tree after design wave 1, app shell (theme tokens for dark and light, sidebar, toolbar, status components; Swift app only), on top of M1 (Claude Code adapter, production stream profile for claude 2.1.311, helper --claude-* options, Start dispatch by provider). Offline; fixture agents only; no live provider execution, credential access, push or merge.",
   "boundary_tests_min": 105,
   "rust": {
-    "passed_min": 420,
+    "passed_min": 421,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -25,7 +25,8 @@
       "t09_escaped_descendant_holding_output_produces_unconfirmed_stop",
       "t09_wrong_start_time_or_boot_is_never_signalled",
       "p2_03_closing_while_validation_is_active_stops_the_validator_and_leaves_no_verdict",
-      "p2_03_real_helper_runs_start_to_settlement_validation_and_acceptance_over_pipes"
+      "p2_03_real_helper_runs_start_to_settlement_validation_and_acceptance_over_pipes",
+      "dw1_approved_plan_query_returns_the_stored_steps_edges_and_revision_read_only"
     ],
     "ignored": [
       "child_fixture",

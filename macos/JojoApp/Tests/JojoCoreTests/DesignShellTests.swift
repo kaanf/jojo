@@ -1524,8 +1524,10 @@ final class DesignShellTests: XCTestCase {
         XCTAssertEqual(missing.first { $0.label == "Parallel capacity" }?.value, "Not reported, and not decided.")
         XCTAssertEqual(Set(missing.map(\.label)).count, missing.count)
 
-        // The app has no request that returns a plan or pauses admission; the screen has no counter.
-        XCTAssertFalse(Request.allCases.contains { $0.rawValue.localizedCaseInsensitiveContains("plan") || $0.rawValue.localizedCaseInsensitiveContains("pause") })
+        // The one request about a plan reads the approved one; nothing pauses admission. The screen has no counter.
+        XCTAssertEqual(Request.allCases.filter { $0.rawValue.localizedCaseInsensitiveContains("plan") }, [.ApprovedPlan])
+        XCTAssertEqual(Request.ApprovedPlan.fields, ["after"])
+        XCTAssertFalse(Request.allCases.contains { $0.rawValue.localizedCaseInsensitiveContains("pause") })
         XCTAssertTrue(MainView.built.contains(.executionPlan))
     }
 

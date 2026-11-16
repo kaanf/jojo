@@ -10,6 +10,7 @@ public enum Request: String, CaseIterable, Sendable {
     case Start, RecoveryResolve, RecoveryStart, Validate, CandidateDecision
     case Snapshot, Events, Log, Receipt, CloseStatus, ReviewBundle, Recovery
     case RecoveryInspect, Candidate, CandidateChanges, CandidateDiff, ValidationReport
+    case ApprovedPlan
 
     public var fields: [String] {
         switch self {
@@ -36,6 +37,7 @@ public enum Request: String, CaseIterable, Sendable {
         case .CandidateChanges: return ["attempt", "candidate", "offset", "limit"]
         case .CandidateDiff: return ["attempt", "candidate", "offset"]
         case .ValidationReport: return ["attempt", "receipt", "offset"]
+        case .ApprovedPlan: return ["after"]
         }
     }
 

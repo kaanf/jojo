@@ -507,6 +507,15 @@ impl Service {
                     ])
                 }))
             }
+            RequestKind::ApprovedPlan => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let q = protocol::ApprovedPlanQuery::parse(p)?;
+                reader
+                    .read(|v| v.ipc_approved_plan(q.after))
+                    .map_err(|e| e.to_string())
+            }
             RequestKind::HumanDecision => {
                 if !kind.shaped(p) {
                     return Err("InvalidDecisionPayload".into());

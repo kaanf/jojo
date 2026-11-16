@@ -10,6 +10,7 @@ use jojo_domain::attempt::AttemptOutcome;
 use jojo_domain::dependency::*;
 use jojo_domain::identity::*;
 use jojo_domain::ipc::*;
+use jojo_domain::json::Json;
 use jojo_domain::provider::*;
 use jojo_domain::recovery::RecoveryChoice;
 use jojo_domain::shutdown::{CloseState, ShutdownOutcome};
@@ -530,4 +531,147 @@ fn t15_same_repository_preprovisioned_worktrees_overlap_only_under_elevated_poli
     assert_eq!(admitted.len(), 1, "{admitted:?}");
     let waiting = if admitted[0].1 == 101 { 102 } else { 101 };
     assert_eq!(s.record(waiting).state, "READY");
+}
+
+/// One `ApprovedPlan` query as the native shell sends it (protocol 1.1).
+fn approved_plan(s: &mut S, after: Json) -> Envelope {
+    s.requests += 1;
+    let e = Envelope {
+        major: 1,
+        minor: 1,
+        session: OpaqueId(5),
+        epoch: s.e().epoch().0,
+        request: OpaqueId(100_000 + s.requests),
+        revision: None,
+        kind: "ApprovedPlan".into(),
+        payload: object([("after", after)]),
+    };
+    s.ui().request(&e)
+}
+
+fn field(value: &Json, key: &str) -> Json {
+    get(value, key).unwrap().clone()
+}
+
+fn list(value: &Json, key: &str) -> Vec<Json> {
+    match field(value, key) {
+        Json::List(items) => items,
+        other => panic!("{key} is not a list: {other:?}"),
+    }
+}
+
+#[test]
+fn dw1_approved_plan_query_returns_the_stored_steps_edges_and_revision_read_only() {
+    let mut s = S::new(2, &[(0, ClaudeCode), (1, Codex), (0, ClaudeCode)]);
+    let pr = EvidenceRequirement {
+        kind: EvidenceKind::PrMerged,
+        evidence_id: "dw1-step1-pr".into(),
+        observation_revision: R1,
+        binding: EvidenceBinding {
+            sources: vec![s.base(1)],
+            environment: Some("test-env".into()),
+            artifact_digest: None,
+            contract: None,
+            validation_plan: None,
+            test_inventory: vec![],
+            output: None,
+        },
+        max_age_ms: 3_600_000,
+    };
+    // Nothing is stored, then a plan is stored but not approved: nothing to return.
+    assert_eq!(approved_plan(&mut s, Json::Null).payload, Json::Null);
+    s.author_prd();
+    s.approve(PRD);
+    s.author_adr().unwrap();
+    s.approve(ADR);
+    let p = s.feature_plan(vec![evidence_edge(31, 1, 3, pr.clone())]);
+    s.put_plan(&p, None);
+    assert_eq!(approved_plan(&mut s, Json::Null).payload, Json::Null);
+    s.approve(PLAN);
+    let events = s.read(|v| v.event_cursor()).0;
+
+    let r = approved_plan(&mut s, Json::Null);
+    assert_eq!(r.kind, "Response", "{r:?}");
+    let plan = r.payload;
+    assert_eq!(field(&plan, "plan"), identity(PLAN.0));
+    assert_eq!(field(&plan, "revision"), number(1));
+    assert_eq!(field(&plan, "prd"), identity(PRD.0));
+    assert_eq!(field(&plan, "adr"), identity(ADR.0));
+    assert_eq!(
+        field(&plan, "digest"),
+        text(s.read(|v| v.execution_plan(PLAN, R1)).unwrap().digest)
+    );
+    // This fixture stores no validation document, so none is named.
+    assert_eq!(field(&plan, "validation"), Json::Null);
+    assert_eq!(
+        field(&plan, "validation_digest"),
+        text(p.validation_digest.clone())
+    );
+    assert_eq!(field(&plan, "next"), Json::Null);
+    let steps = list(&plan, "steps");
+    assert_eq!(steps.len(), 3);
+    for (i, (repo, provider)) in [(0, "ClaudeCode"), (1, "Codex"), (0, "ClaudeCode")]
+        .into_iter()
+        .enumerate()
+    {
+        let step = steps
+            .iter()
+            .find(|v| field(v, "step") == identity(OpaqueId(i as u128 + 1)))
+            .unwrap();
+        assert_eq!(field(step, "revision"), number(1));
+        assert_eq!(field(step, "provider"), text(provider));
+        assert_eq!(field(step, "repository"), identity(s.repos[repo].0.id().0));
+        assert_eq!(field(step, "priority"), number(0));
+        assert_eq!(field(step, "repository_mode"), text("Shared"));
+        let sources = list(step, "sources");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(field(&sources[0], "commit"), text(s.repos[repo].1.clone()));
+        assert_eq!(field(&sources[0], "snapshot"), Json::Null);
+    }
+    let edges = list(&plan, "edges");
+    assert_eq!(edges.len(), 1);
+    assert_eq!(field(&edges[0], "edge"), identity(OpaqueId(31)));
+    assert_eq!(field(&edges[0], "prerequisite"), identity(OpaqueId(1)));
+    assert_eq!(field(&edges[0], "dependent"), identity(OpaqueId(3)));
+    assert_eq!(field(&edges[0], "predicate"), text("Evidence"));
+    assert_eq!(field(&edges[0], "evidence"), text("dw1-step1-pr"));
+    assert_eq!(field(&edges[0], "evidence_kind"), text("PrMerged"));
+    assert_eq!(field(&edges[0], "artifact"), Json::Null);
+    let approvals = list(&plan, "approvals");
+    assert_eq!(approvals.len(), 2);
+    assert_eq!(field(&approvals[0], "artifact"), identity(PRD.0));
+
+    // The one approved plan is also the last: nothing follows it.
+    assert_eq!(approved_plan(&mut s, identity(PLAN.0)).payload, Json::Null);
+    // The request does not exist for a 1.0 frame, and takes exactly its one field.
+    let old = s.request("ApprovedPlan", object([("after", Json::Null)]), None);
+    assert_eq!(field(&old.payload, "code"), text("UnknownType"));
+    // A read: no event was committed by any of the queries above.
+    assert_eq!(s.read(|v| v.event_cursor()).0, events);
+
+    // A newer revision that is not approved makes the approval stale: nothing is sent
+    // until the human approves it, and then the new revision is.
+    s.put_plan(&s.feature_plan(vec![]), Some(R1));
+    assert_eq!(approved_plan(&mut s, Json::Null).payload, Json::Null);
+    s.approve(PLAN);
+    let plan = approved_plan(&mut s, Json::Null).payload;
+    assert_eq!(field(&plan, "revision"), number(2));
+    assert_eq!(list(&plan, "edges").len(), 0);
+
+    // A second approved plan is answered after the first, one plan per answer.
+    let second = ArtifactId(OpaqueId(904));
+    let copy = s.feature_plan(vec![]);
+    s.cmd(move |tx| {
+        tx.put_execution_plan(second, None, PRD, ADR, &copy, "DW1 second plan")?;
+        Ok("plan".into())
+    })
+    .unwrap();
+    assert_eq!(field(&plan, "next"), Json::Null);
+    s.approve(second);
+    let first = approved_plan(&mut s, Json::Null).payload;
+    assert_eq!(field(&first, "plan"), identity(PLAN.0));
+    assert_eq!(field(&first, "next"), identity(PLAN.0));
+    let last = approved_plan(&mut s, field(&first, "next")).payload;
+    assert_eq!(field(&last, "plan"), identity(second.0));
+    assert_eq!(field(&last, "next"), Json::Null);
 }

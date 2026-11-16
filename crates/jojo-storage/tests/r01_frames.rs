@@ -879,6 +879,36 @@ fn record(h: &mut H) {
             ("limit", n(8)),
         ]),
     );
+
+    // ApprovedPlan (added after R-01, recorded last so that the request identities of
+    // the frames above stay as they were): exactly one field, an identity or null.
+    h.at(
+        "1.0 frame names ApprovedPlan",
+        0,
+        "ApprovedPlan",
+        object([]),
+    );
+    h.send("approved plan empty", "ApprovedPlan", object([]));
+    h.send(
+        "approved plan bad",
+        "ApprovedPlan",
+        object([("after", bad())]),
+    );
+    h.send(
+        "approved plan extra field",
+        "ApprovedPlan",
+        object([("after", Json::Null), ("plan", hex(9))]),
+    );
+    h.send(
+        "approved plan none",
+        "ApprovedPlan",
+        object([("after", Json::Null)]),
+    );
+    h.send(
+        "approved plan none after",
+        "ApprovedPlan",
+        object([("after", hex(9))]),
+    );
 }
 
 #[test]
@@ -895,11 +925,11 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.2 => 1.1 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport","slice":true}
+hello 1.2 => 1.1 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
-hello 1.1 => 1.1 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport","slice":true}
+hello 1.1 => 1.1 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan","slice":true}
 hello from another session => 1.1 Error {"code":"SessionMismatch"}
 wrong epoch => 1.1 Error {"code":"EpochMismatch"}
 unknown type => 1.1 Error {"code":"UnknownType"}
@@ -1061,4 +1091,10 @@ receipt of the reviewed start => 1.1 Response {"acknowledged":true,"command":"00
 start with nothing imported => 1.1 Error {"code":"StartRefused: missing or stale approval: PRD"}
 events page => 1.1 Response [{"aggregate_id":null,"aggregate_kind":null,"detail_complete":true,"epoch":1,"payload":"previous_epoch=0;previous_shutdown=NONE;quarantined_claims=0","revision":null,"seq":1,"type":"EngineStarted"},{"aggregate_id":null,"aggregate_kind":null,"detail_complete":true,"epoch":1,"payload":"95eb9cc2f28783674ee4858759130e25fc6ee54822d07726fb3868924bdb21ba","revision":null,"seq":2,"type":"RecoveryStarted"}]
 snapshot page => 1.1 Response {"admission":"Open","as_of_event_seq":2,"epoch":1,"next":null,"rows":[],"section":"aggregates","shutdown":"Running"}
+1.0 frame names ApprovedPlan => 1.0 Error {"code":"UnknownType"}
+approved plan empty => 1.1 Error {"code":"InvalidPayload: unexpected or missing fields"}
+approved plan bad => 1.1 Error {"code":"expected 32 lowercase hex identity"}
+approved plan extra field => 1.1 Error {"code":"InvalidPayload: unexpected or missing fields"}
+approved plan none => 1.1 Response null
+approved plan none after => 1.1 Response null
 "#;

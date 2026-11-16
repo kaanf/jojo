@@ -381,6 +381,9 @@ fn p2_02_protocol_only_slice_registers_imports_approves_starts_and_settles() {
         format!("stage=PLAN awaiting={},{}", hex(VALIDATION), hex(PLAN))
     );
     assert!(!h.approved(PLAN) && !h.approved(VALIDATION));
+    // The plan is stored but not approved: the query has nothing to return.
+    let ask = object([("after", Json::Null)]);
+    assert_eq!(h.send("ApprovedPlan", ask.clone()).payload, Json::Null);
     assert_eq!(
         code(&h.start(900)),
         "StartRefused: missing or stale approval: plan"
@@ -399,6 +402,28 @@ fn p2_02_protocol_only_slice_registers_imports_approves_starts_and_settles() {
         h.ok("ImportBundle", bundle.clone()),
         "stage=COMPLETE awaiting="
     );
+    // The approved plan as the core stores it: one step, no edge, and every identity a
+    // Start needs. The validation plan is found by the digest the plan binds.
+    let plan = h.send("ApprovedPlan", ask).payload;
+    let field = |v: &Json, k: &str| get(v, k).unwrap().clone();
+    assert_eq!(field(&plan, "plan"), text(hex(PLAN)));
+    assert_eq!(field(&plan, "revision"), number(1));
+    assert_eq!(field(&plan, "prd"), text(hex(PRD)));
+    assert_eq!(field(&plan, "adr"), text(hex(ADR)));
+    assert_eq!(field(&plan, "validation"), text(hex(VALIDATION)));
+    assert_eq!(field(&plan, "edges"), Json::List(vec![]));
+    assert_eq!(field(&plan, "next"), Json::Null);
+    let Json::List(steps) = field(&plan, "steps") else {
+        panic!("steps is a list")
+    };
+    assert_eq!(steps.len(), 1);
+    assert_eq!(field(&steps[0], "step"), text(hex(STEP)));
+    assert_eq!(field(&steps[0], "provider"), text("Codex"));
+    assert_eq!(field(&steps[0], "repository"), text(repository.clone()));
+    let Json::List(sources) = field(&steps[0], "sources") else {
+        panic!("sources is a list")
+    };
+    assert_eq!(field(&sources[0], "commit"), text(h.commit.clone()));
     // A bundle that differs from the imported drafts is refused, never merged.
     let other = h.bundle(&repository, "Codex", "a different decision");
     assert_eq!(

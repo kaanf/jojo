@@ -45,6 +45,7 @@ pub enum RequestKind {
     CandidateChanges,
     CandidateDiff,
     ValidationReport,
+    ApprovedPlan,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,7 +108,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 27] = [
+pub const SPECS: [Spec; 28] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -135,6 +136,7 @@ pub const SPECS: [Spec; 27] = [
     spec(K::CandidateChanges, "CandidateChanges", Query, 1, false, Exact, &["attempt", "candidate", "offset", "limit"]),
     spec(K::CandidateDiff, "CandidateDiff", Query, 1, false, Exact, &["attempt", "candidate", "offset"]),
     spec(K::ValidationReport, "ValidationReport", Query, 1, false, Exact, &["attempt", "receipt", "offset"]),
+    spec(K::ApprovedPlan, "ApprovedPlan", Query, 1, false, Exact, &["after"]),
 ];
 
 impl RequestKind {
@@ -334,6 +336,23 @@ impl ReviewBundleQuery {
     pub fn parse(p: &Json) -> Result<Self, String> {
         Ok(Self {
             subject: ArtifactId(id(get(p, "subject")?)?),
+        })
+    }
+}
+
+/// The approved plans are answered one at a time, in identity order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApprovedPlanQuery {
+    /// The plan the previous answer held; `None` asks for the first.
+    pub after: Option<ArtifactId>,
+}
+impl ApprovedPlanQuery {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            after: match get(p, "after")? {
+                Json::Null => None,
+                v => Some(ArtifactId(id(v)?)),
+            },
         })
     }
 }
@@ -693,7 +712,7 @@ mod tests {
                 names(Query, minor),
                 "Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle \
                  ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges \
-                 CandidateDiff ValidationReport"
+                 CandidateDiff ValidationReport ApprovedPlan"
             );
         }
         assert_eq!(names(Handshake, 0), "Hello");
@@ -756,6 +775,17 @@ mod tests {
         );
         let p = object([("offset", number(0)), ("limit", number(8))]);
         assert_eq!(RecoveryQuery::parse(&p).unwrap().limit, 8);
+        assert_eq!(
+            ApprovedPlanQuery::parse(&object([("after", Json::Null)])).unwrap(),
+            ApprovedPlanQuery { after: None }
+        );
+        assert_eq!(
+            ApprovedPlanQuery::parse(&object([("after", hex(4))])).unwrap(),
+            ApprovedPlanQuery {
+                after: Some(ArtifactId(OpaqueId(4)))
+            }
+        );
+        assert!(ApprovedPlanQuery::parse(&object([("after", number(4))])).is_err());
         assert_eq!(
             CloseCommand::parse(K::PrepareClose, &object([])).unwrap(),
             CloseCommand::Prepare
