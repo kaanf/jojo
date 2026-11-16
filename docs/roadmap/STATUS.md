@@ -74,7 +74,7 @@ When a step adds tests, raise the minimums and add the new test names to `requir
 
 ## Open decisions
 
-1. Standing authorization for runs in registered repositories, instead of a GO per step and per live attempt. The human authorized the M1 probes and one M1 live run on 2026-11-16; both are used up. **No further live provider run is authorized.**
+1. Standing authorization for runs in registered repositories, instead of a GO per step and per live attempt. **Decided for M2 only (the human, 2026-11-16):** while M2 is being built, live provider runs (Claude Code or Codex) need no GO per run in repositories registered with the core under the disposable root. It ends when M2 is done; after that no live run is authorized until the human decides again. Not covered: a repository that is not registered, push and pull request, and the four document approvals, which stay with the human. Whether the authorization becomes permanent is still open.
 2. Whether a write the provider's own sandbox allows (`/tmp`) stays a stop condition.
 3. Parallel capacity for the demo (2 proposed; the design shows 3 overall, 2 per repository).
 4. A written record of the weft owner's permission.
