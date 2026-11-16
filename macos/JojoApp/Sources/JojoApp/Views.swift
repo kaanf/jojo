@@ -22,6 +22,7 @@ struct MainView: View {
                         shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
                         shown(.agentRuns) { AgentRunsScreen(model: model, open: { screen = $0 }) }
                         shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
+                        shown(.featureChat) { FeatureChatScreen(model: model, visible: screen == .featureChat, open: { screen = $0 }) }
                         shown(.executionPlan) { ExecutionPlanScreen(model: model, visible: screen == .executionPlan, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                         shown(.settings) { SettingsScreen(model: model) }
@@ -44,7 +45,7 @@ struct MainView: View {
 
     /// Destinations that have a screen today; the others show `NotBuiltYet`.
     static let built: Set<Screen> = [.activity, .agentRuns, .approvalInbox, .recoveryCenter, .executionPlan,
-                                     .settings, .sourceControl, .specifications, .verification]
+                                     .featureChat, .settings, .sourceControl, .specifications, .verification]
 
     private func shown(_ target: Screen, @ViewBuilder _ content: () -> some View) -> some View {
         content()

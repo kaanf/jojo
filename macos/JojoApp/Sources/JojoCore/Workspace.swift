@@ -295,9 +295,9 @@ public final class WorkspaceModel {
     public private(set) var recoveryDigest = ""
     public private(set) var review: ReviewBundle?
     public private(set) var reviewStale = false
-    public private(set) var status = ""
+    public internal(set) var status = ""
     /// A Start or recovery command is unanswered; the same control cannot send again.
-    public private(set) var commandPending = false
+    public internal(set) var commandPending = false
     /// The last Start of this session; nil until one was sent.
     public private(set) var startOutcome: StartOutcome?
     /// P2-03 candidate review. Every field is the helper's answer; nothing is inferred here.
@@ -322,9 +322,22 @@ public final class WorkspaceModel {
     public private(set) var plansLoad = PlanLoad.idle
     /// More approved plans exist than `maxPlans`; the rest was not read.
     public private(set) var plansTruncated = false
+    /// M2: Feature Chat. Read only when that screen asks; `refresh` does not fill them.
+    public internal(set) var chatIndex: ChatIndex?
+    public internal(set) var chatIndexLoad = PlanLoad.idle
+    /// The feature whose chat is held, and its turns, oldest first.
+    public internal(set) var chatFeature: String?
+    public internal(set) var chat: FeatureChatPage?
+    public internal(set) var chatLoad = PlanLoad.idle
+    /// The rendered text of the held requirements document, and which revision it is.
+    public internal(set) var prdText = ""
+    public internal(set) var prdTextRevision: Int64?
+    /// The last turn command of this session; nil until one was sent.
+    public internal(set) var turnOutcome: StartOutcome?
+    var chatRead = 0
     public var onChange: (() -> Void)?
 
-    private let client: HelperClient
+    let client: HelperClient
     private var loading = false
     static let maxPages = 32
     /// The helper's largest page, and how far one read of the journal reaches back.
@@ -580,7 +593,7 @@ public final class WorkspaceModel {
         }
     }
 
-    private func slice(_ type: Request, _ payload: [String: JSON], sent: String,
+    func slice(_ type: Request, _ payload: [String: JSON], sent: String,
                        accepted: @escaping ([String: JSON]) -> String, refused: @escaping (String) -> String) {
         guard !commandPending else {
             status = "A command is still unanswered; it will be reconciled by receipt, not sent again"

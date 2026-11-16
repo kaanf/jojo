@@ -11,7 +11,7 @@ public enum Request: String, CaseIterable, Sendable {
     case Snapshot, Events, Log, Receipt, CloseStatus, ReviewBundle, Recovery
     case RecoveryInspect, Candidate, CandidateChanges, CandidateDiff, ValidationReport
     case ApprovedPlan
-    case ChatTurn, AnswerQuestion, CancelTurn, FeatureChat, ChatText
+    case ChatTurn, AnswerQuestion, CancelTurn, FeatureChat, ChatText, ChatIndex
 
     public var fields: [String] {
         switch self {
@@ -44,7 +44,16 @@ public enum Request: String, CaseIterable, Sendable {
         case .CancelTurn: return ["turn"]
         case .FeatureChat: return ["feature", "after"]
         case .ChatText: return ["subject", "part", "offset"]
+        case .ChatIndex: return []
         }
+    }
+
+    /// The protocol minor a frame of this request carries. M2's Feature Chat requests exist
+    /// only from 1.2; every other request keeps the 1.1 frames it always had, so a helper
+    /// that does not know 1.2 answers those as before and the chat ones as unknown.
+    public var minor: Int64 {
+        let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText, .ChatIndex]
+        return chat.contains(self) ? 2 : Envelope.minor
     }
 
     /// A payload carries exactly this request's fields: nothing missing, nothing else.

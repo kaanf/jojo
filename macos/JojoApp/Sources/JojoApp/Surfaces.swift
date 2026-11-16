@@ -1476,3 +1476,65 @@ struct LaneBand: View {
             }
     }
 }
+
+// MARK: Chat surfaces (COMPONENTS.md, section 23)
+
+/// A multi-line text field: what the human types into Feature Chat and New Feature. It grows
+/// from `lines` up to eight lines. In the off-screen snapshot, where a system field does not
+/// draw, its text or prompt is drawn in place.
+struct TextArea: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.offscreen) private var offscreen
+    let prompt: String
+    @Binding var text: String
+    var lines = 3
+
+    var body: some View {
+        Group {
+            if offscreen {
+                Text(text.isEmpty ? prompt : text).foregroundStyle(text.isEmpty ? theme.text3 : theme.text)
+                    .lineLimit(lines...8)
+                    .frame(maxWidth: .infinity, minHeight: CGFloat(lines) * 17, alignment: .topLeading)
+            } else {
+                TextField("", text: $text, prompt: Text(prompt).foregroundColor(theme.text3), axis: .vertical)
+                    .textFieldStyle(.plain).foregroundStyle(theme.text).lineLimit(lines...8)
+            }
+        }
+        .font(.system(size: 13))
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(theme.fill, in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityLabel(prompt)
+    }
+}
+
+/// One message of a chat transcript: who speaks, a line of facts beside it, then the text.
+/// The human's messages stand on `fill2`; the lead's on the card.
+struct ChatMessage<Content: View>: View {
+    @Environment(\.theme) private var theme
+    let author: String
+    var meta: String?
+    var human = false
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(String(author.prefix(1))).font(.system(size: 11, weight: .bold))
+                .foregroundStyle(human ? theme.text2 : theme.onAccent)
+                .frame(width: 22, height: 22)
+                .background(human ? theme.fill : theme.accent, in: Circle())
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(author).textStyle(.bodyStrong).foregroundStyle(theme.textStrong)
+                    if let meta { Text(meta).textStyle(.meta).foregroundStyle(theme.text3).lineLimit(1) }
+                }
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(human ? theme.fill2 : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+    }
+}

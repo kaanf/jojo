@@ -2072,6 +2072,19 @@ private struct Gallery: View {
                 }
                 .frame(width: 520, height: 120, alignment: .topLeading)
             }
+            titled("Chat surfaces") {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextArea(prompt: "Players should be able to…", text: .constant(""), lines: 3)
+                    ChatMessage(author: "You", meta: "Discovery · turn 1", human: true) {
+                        Text("Players share a link that drops a friend into the lobby.").textStyle(.body)
+                    }
+                    ChatMessage(author: "Jojo · Discovery", meta: "Claude Code · base 451471") {
+                        OperationalPill(.completed, label: "Replied")
+                        Text("I read the lobby controller and the navigation graph.").textStyle(.body)
+                    }
+                }
+                .frame(width: 520)
+            }
         }
     }
 
@@ -2103,6 +2116,73 @@ private struct Gallery: View {
                 .padding(.horizontal, 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .cardElevation()
+        }
+    }
+}
+
+// MARK: Feature Chat (design wave 2, M2)
+
+extension DesignShellTests {
+    func test_m2_feature_chat_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        let wide = CGSize(width: 1320, height: 1500), narrow = CGSize(width: 900, height: 2200)
+        func state(_ turns: [JSON] = [], running: String? = nil, prd: JSON = .null, feature: String? = ChatRows.feature,
+                   connection: HelperConnection = .ready(epoch: 7), admission: String = "Open",
+                   outcome: StartOutcome? = nil, prdText: String = "") -> FeatureChatState {
+            FeatureChatState(connection: connection, admission: admission, queries: ["FeatureChat"],
+                             index: ChatIndex(ChatRows.index), indexLoad: .loaded, feature: feature,
+                             chat: FeatureChatPage(ChatRows.page(turns, running: running, prd: prd)), chatLoad: .loaded,
+                             prdText: prdText, outcome: outcome)
+        }
+        let objective = "slugify should be usable from the shell."
+        let asked = [ChatRows.question(1, prompt: "Should the tool read arguments, standard input, or both?", blocking: true),
+                     ChatRows.question(2, prompt: "Is packaging in scope?", blocking: false)]
+        let answered = [ChatRows.question(1, prompt: "Should the tool read arguments, standard input, or both?", blocking: true,
+                                          answer: "Arguments only."),
+                        ChatRows.question(2, prompt: "Is packaging in scope?", blocking: false, answer: "No.")]
+        let first = ChatRows.turn(1, message: objective, summary: "The repository has a slugify stub and its tests.",
+                                  questions: asked)
+        let firstAnswered = ChatRows.turn(1, message: objective, summary: "The repository has a slugify stub and its tests.",
+                                          questions: answered)
+        let second = ChatRows.turn(2, provider: "Codex", summary: "Drafted the requirements from the answers.", prd: 1)
+        let ready = ChatRows.document(revision: 1, ready: true, approved: false)
+        let text = "# Slugify from the shell\n\n## Goal\nA title can be turned into a slug without writing code.\n\n## Acceptance criteria\n- **AC1** — A title given as arguments prints its slug and exits with status 0.\n"
+        let step = ChatRows.question(3, prompt: "Which shells must the usage text cover?", blocking: true, step: "docs")
+        let planTurn = ChatRows.turn(3, kind: "Plan", provider: "Codex",
+                                     summary: "Three steps: the entry point and the usage text in parallel, then a check of both.",
+                                     plan: ChatRows.plan(drafted: false), questions: [step])
+        var fresh = state(feature: nil)
+        fresh.objective = "Players should be able to share a link that drops a friend into my lobby."
+        fresh.repository = ChatRows.repository
+        let cases: [(String, FeatureChatState, CGSize)] = [
+            ("feature-chat-new-feature", state(feature: nil), wide),
+            ("feature-chat-new-feature-filled", fresh, wide),
+            ("feature-chat-investigating", state([ChatRows.turn(1, state: "Running", message: objective)], running: ChatRows.turnID(1)), wide),
+            ("feature-chat-blocked", state([first]), wide),
+            ("feature-chat-complete", state([firstAnswered, second], prd: ready, prdText: text), wide),
+            ("feature-chat-complete-narrow", state([firstAnswered, second], prd: ready, prdText: text), narrow),
+            ("feature-chat-plan-draft", state([firstAnswered, second, planTurn],
+                                              prd: ChatRows.document(revision: 1, ready: true, approved: true), prdText: text), wide),
+            ("feature-chat-failed", state([ChatRows.turn(1, state: "Failed", message: objective)],
+                                          outcome: .refused("CapacityOne: a run is active")), wide),
+            ("feature-chat-admission-closed", state([first], admission: "Closed"), wide),
+            ("feature-chat-disconnected", state([first], connection: .channelLost("pipe closed")), wide),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, size) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.featureChat), showInspector: {}) {
+                        FeatureChatView(state: state)
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
         }
     }
 }

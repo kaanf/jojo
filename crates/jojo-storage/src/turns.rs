@@ -72,6 +72,9 @@ const MAX_DETAIL_BYTES: usize = 1024;
 pub const CHAT_PAGE_BYTES: usize = 40 * 1024;
 /// Characters of a message or answer a chat page carries before it cuts them.
 pub const CHAT_EXCERPT_CHARS: usize = 1024;
+/// Rows of each list the chat index carries, and characters of each text in it.
+pub const INDEX_ROWS: usize = 32;
+pub const INDEX_TEXT_CHARS: usize = 160;
 /// Characters one chat text chunk carries: at most 32 KiB of UTF-8.
 pub const CHAT_TEXT_CHARS: usize = 8192;
 
@@ -1296,6 +1299,66 @@ impl ReadView<'_> {
             ("total", number(total)),
             ("complete", Json::Bool(next >= total)),
             ("text", text(chunk)),
+        ]))
+    }
+
+    /// M2 (protocol 1.2): what a client needs to find its way to a chat. The registered
+    /// repositories, in identity order, and the features that have turns, newest first,
+    /// each list bounded and saying whether it is complete. Read-only.
+    pub fn ipc_chat_index(&self) -> Result<Json, StorageError> {
+        let repositories = self.conn.query(
+            "SELECT id,path FROM local_repositories ORDER BY id LIMIT ?1",
+            &[Value::Int(to_db(INDEX_ROWS as u64 + 1)?)],
+            |r| Ok((r.text(0)?, r.text(1)?)),
+        )?;
+        let features = self.conn.query(
+            "SELECT t.feature, max(t.event) AS latest FROM lead_turns t
+             GROUP BY t.feature ORDER BY latest DESC LIMIT ?1",
+            &[Value::Int(to_db(INDEX_ROWS as u64 + 1)?)],
+            |r| r.text(0),
+        )?;
+        let repository_rows = repositories
+            .iter()
+            .take(INDEX_ROWS)
+            .map(|(id, path)| {
+                let cut: String = path.chars().take(INDEX_TEXT_CHARS).collect();
+                Ok(object([
+                    ("repository", identity(id_from_text(id)?)),
+                    ("path_complete", Json::Bool(cut.len() == path.len())),
+                    ("path", text(cut)),
+                ]))
+            })
+            .collect::<Result<Vec<_>, StorageError>>()?;
+        let mut feature_rows = Vec::new();
+        for feature in features.iter().take(INDEX_ROWS) {
+            let turns = feature_turns(self.conn, FeatureId(id_from_text(feature)?))?;
+            let (Some(first), Some(last)) = (turns.first(), turns.last()) else {
+                continue;
+            };
+            let cut: String = first.message.chars().take(INDEX_TEXT_CHARS).collect();
+            feature_rows.push(object([
+                ("feature", identity(first.feature.0)),
+                ("repository", identity(first.repository.0)),
+                (
+                    "objective_complete",
+                    Json::Bool(cut.len() == first.message.len()),
+                ),
+                ("objective", text(cut)),
+                ("turns", number(turns.len() as u64)),
+                ("running", Json::Bool(last.result.is_none())),
+            ]));
+        }
+        Ok(object([
+            ("repositories", Json::List(repository_rows)),
+            (
+                "repositories_complete",
+                Json::Bool(repositories.len() <= INDEX_ROWS),
+            ),
+            ("features", Json::List(feature_rows)),
+            (
+                "features_complete",
+                Json::Bool(features.len() <= INDEX_ROWS),
+            ),
         ]))
     }
 

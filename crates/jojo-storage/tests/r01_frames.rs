@@ -1040,6 +1040,13 @@ fn record(h: &mut H) {
         "CancelTurn",
         object([("turn", hex(7))]),
     );
+    at2(h, "chat index empty", "ChatIndex", object([]));
+    at2(
+        h,
+        "chat index extra field",
+        "ChatIndex",
+        object([("limit", n(8))]),
+    );
 }
 
 #[test]
@@ -1056,7 +1063,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.3 => 1.2 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText","slice":true}
+hello 1.3 => 1.2 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1245,4 +1252,6 @@ answer defer with text => 1.2 Error {"code":"InvalidAnswer: an answer is text ex
 answer without text => 1.2 Error {"code":"InvalidAnswer: an answer is text exactly when the action is Answer"}
 answer unknown action => 1.2 Error {"code":"UnknownAction"}
 cancel unknown turn => 1.2 Error {"code":"UnknownTurn"}
+chat index empty => 1.2 Response {"features":[],"features_complete":true,"repositories":[],"repositories_complete":true}
+chat index extra field => 1.2 Error {"code":"InvalidPayload: unexpected or missing fields"}
 "#;

@@ -429,6 +429,22 @@ fn m2_feature_chat_over_the_protocol_asks_answers_drafts_and_leaves_approval_to_
     assert_eq!(field(&chat, &["prd", "revision"]), &number(2));
     assert_eq!(field(&chat, &["prd", "approved"]), &Json::Bool(false));
     assert_eq!(h.read(|v| v.current_artifact_approval(subject)), None);
+    // The index finds the way back to this chat: the repository and the feature.
+    let index = h.ok("ChatIndex", object([]));
+    let repositories = items(field(&index, &["repositories"])).to_vec();
+    assert_eq!(repositories.len(), 1);
+    assert_eq!(str_of(&repositories[0], &["repository"]), repository);
+    assert!(str_of(&repositories[0], &["path"]).ends_with("disposable/sample"));
+    let features = items(field(&index, &["features"])).to_vec();
+    assert_eq!(features.len(), 1);
+    assert_eq!(
+        field(&features[0], &["feature"]),
+        &identity(OpaqueId(FEATURE))
+    );
+    assert_eq!(str_of(&features[0], &["objective"]), objective);
+    assert_eq!(field(&features[0], &["turns"]), &number(3));
+    assert_eq!(field(&features[0], &["running"]), &Json::Bool(false));
+    assert_eq!(field(&index, &["features_complete"]), &Json::Bool(true));
     // Pages: the turns after an ordinal.
     let rest = items(field(&h.chat(2), &["turns"])).to_vec();
     assert_eq!(rest.len(), 1);

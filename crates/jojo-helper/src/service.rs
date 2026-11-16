@@ -738,6 +738,14 @@ impl Service {
                     .read(|v| v.ipc_chat_text(q.subject, q.part, q.offset))
                     .map_err(|e| e.to_string())
             }
+            RequestKind::ChatIndex => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                reader
+                    .read(|v| v.ipc_chat_index())
+                    .map_err(|e| e.to_string())
+            }
             RequestKind::ChatTurn | RequestKind::AnswerQuestion | RequestKind::CancelTurn => {
                 drop(reader);
                 self.slice_command(kind, e)

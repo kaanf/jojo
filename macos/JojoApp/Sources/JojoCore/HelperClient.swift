@@ -114,19 +114,20 @@ public final class HelperClient {
         write(Envelope(session: session, epoch: 0, id: id, type: Request.Hello.rawValue))
     }
 
-    public func query(_ type: String, _ payload: [String: JSON] = [:], _ completion: @escaping (Reply) -> Void) {
+    public func query(_ type: String, _ payload: [String: JSON] = [:], minor: Int64 = Envelope.minor,
+                      _ completion: @escaping (Reply) -> Void) {
         guard case .ready = connection else {
-            if case .incompatible = connection { return send(type, payload, nil, completion) }
+            if case .incompatible = connection { return send(type, payload, nil, minor: minor, completion) }
             return completion(.unanswered("helper unavailable"))
         }
-        send(type, payload, nil, completion)
+        send(type, payload, nil, minor: minor, completion)
     }
 
     /// A typed query. A payload that is not exactly the request's fields is a client
     /// defect: it is answered here as an error and no frame is sent.
     public func query(_ request: Request, _ payload: [String: JSON] = [:], _ completion: @escaping (Reply) -> Void) {
         guard request.accepts(payload) else { return completion(.error("InvalidClientPayload: \(request.rawValue)")) }
-        query(request.rawValue, payload, completion)
+        query(request.rawValue, payload, minor: request.minor, completion)
     }
 
     /// A typed command; see `query(_:_:_:)`. Nothing is sent or left outstanding on a mismatch.
@@ -137,13 +138,13 @@ public final class HelperClient {
             completion(.error("InvalidClientPayload: \(request.rawValue)"))
             return nil
         }
-        return command(request.rawValue, payload, revision: revision, completion)
+        return command(request.rawValue, payload, revision: revision, minor: request.minor, completion)
     }
 
     /// Returns the command identity, or nil when no mutation may be sent.
     @discardableResult
     public func command(_ type: String, _ payload: [String: JSON], revision: Int64? = nil,
-                        _ completion: @escaping (Reply) -> Void) -> String? {
+                        minor: Int64 = Envelope.minor, _ completion: @escaping (Reply) -> Void) -> String? {
         guard case .ready = connection else {
             completion(.unanswered("mutations unavailable: \(connection)"))
             return nil
@@ -151,7 +152,7 @@ public final class HelperClient {
         let id = newID()
         outstandingCommands[id] = type
         onOutstandingChange?()
-        send(type, payload, revision, id: id) { [weak self] reply in
+        send(type, payload, revision, id: id, minor: minor) { [weak self] reply in
             if case .unanswered = reply {} else {
                 self?.outstandingCommands[id] = nil
                 self?.onOutstandingChange?()
@@ -176,10 +177,10 @@ public final class HelperClient {
     }
 
     private func send(_ type: String, _ payload: [String: JSON], _ revision: Int64?, id: String? = nil,
-                      _ completion: @escaping (Reply) -> Void) {
+                      minor: Int64 = Envelope.minor, _ completion: @escaping (Reply) -> Void) {
         let id = id ?? newID()
         pending[id] = completion
-        write(Envelope(session: session, epoch: epoch, id: id, revision: revision, type: type, payload: payload))
+        write(Envelope(session: session, epoch: epoch, id: id, revision: revision, type: type, payload: payload, minor: minor))
     }
 
     private func write(_ e: Envelope) {
