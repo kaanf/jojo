@@ -180,7 +180,7 @@
       "child_fixture",
       "t16_helper_role"
     ],
-    "swift_executed": 68,
+    "swift_executed": 72,
     "gui_scenarios": {
       "scripts/gui_p1_14.py": 9,
       "scripts/gui_p2_02.py": 3,
@@ -320,7 +320,7 @@
           "Recovery",
           "PrepareClose"
         ],
-        "state": "state phase=idle connection=ready(epoch: 5) duplicates=0 primary-visible=true aux=false review-status=Start accepted for attempt 34b3adc9a4374752a54de0511cc24573 (launched); follow the run in Runs recovery=1 admission=Open pending=false"
+        "state": "state phase=idle connection=ready(epoch: 5) duplicates=0 primary-visible=true aux=false review-status=Start accepted for attempt 5da28b00f810462db88fe6056d420779 (launched); follow the run in Runs recovery=1 admission=Open pending=false"
       },
       "fake_lost_start_response_is_reconciled_not_resent": {
         "passed": true,
@@ -512,16 +512,17 @@
     "macos/JojoApp/Package.swift": "a4acfcb96076845d7f42888cbaf27ec5f6c3a4cb74609e2c5c3ae222036224d8",
     "macos/JojoApp/Sources/JojoApp/AgentRuns.swift": "b08fc6bc5bf2d6af131ca05cba4353a9a4ff8ab034975aa73968a7b11859911a",
     "macos/JojoApp/Sources/JojoApp/AppDelegate.swift": "ede8961992c0c64e430461bcf75ce1299a3d01312c41e4bde123b9143fd6c6ed",
+    "macos/JojoApp/Sources/JojoApp/ApprovalInbox.swift": "ef60d050c56922cbdd841575aadbd0c0383a59af47779d9f1fbd8e917389f226",
     "macos/JojoApp/Sources/JojoApp/JojoApp.swift": "8fd7cd4fa3661f51ef4b8c736d7034931cec411b9cf1f0642cd2be38c6ab8015",
     "macos/JojoApp/Sources/JojoApp/RecoveryCenter.swift": "93fe7bff9905aedfa7fbf8d60963b41b7a0f6613a5c804516859ac376c3946f6",
     "macos/JojoApp/Sources/JojoApp/Shell.swift": "e615415746a64e61eee45a1bf516f9f7e6e15d6a69b05a14b01f717cdf28df52",
     "macos/JojoApp/Sources/JojoApp/SourceControl.swift": "0ad0d54a1004e24a359189fc2ce57571de1619079f92b12533d750dd0cfe2715",
     "macos/JojoApp/Sources/JojoApp/StatusComponents.swift": "1cd5545fedbebf378e31ffb7293b1c5db21ea6632468664c2aa3b0f5db4d8d3f",
-    "macos/JojoApp/Sources/JojoApp/Surfaces.swift": "648370be3e314761dac4e2b3cc07a2250664ea00d6579b69284dea6867730638",
+    "macos/JojoApp/Sources/JojoApp/Surfaces.swift": "4b05862fb20e5581c75d136dde98347bf3edcbcf3f8819a7d1eff96844c94105",
     "macos/JojoApp/Sources/JojoApp/Theme.swift": "5d31cd071025b7a98b6beddb519681fbf2e068b534c5508bbdaafdab9385be49",
     "macos/JojoApp/Sources/JojoApp/UITestDriver.swift": "36f31e296954011e146ca7aa2ff8d9cbe98bf7489fe707760edbbef1cc6d4ab8",
     "macos/JojoApp/Sources/JojoApp/Verification.swift": "c02b36fe28013278fc8aed4a48f8f3d30f7b56f67c87e314c80972c26c5a0d77",
-    "macos/JojoApp/Sources/JojoApp/Views.swift": "9919dc2f1f3955facc82e416416d5bf064366156190853026a4229e428d9a85b",
+    "macos/JojoApp/Sources/JojoApp/Views.swift": "b6a363966d01163367329dc6fd66c624c6ecd475db09c8906d7505541b917ae9",
     "macos/JojoApp/Sources/JojoAppBoundary/JojoSceneBoundary.swift": "3cb39d8acd4459b3aed69b676f2c1ef7a594206d11ae93150256678bb6cb57c3",
     "macos/JojoApp/Sources/JojoCore/Envelope.swift": "1a36fe64de7b48d58e0d28ddb09073ff84c0b43a34d45ebf032759b3e305b62b",
     "macos/JojoApp/Sources/JojoCore/HelperClient.swift": "19f07328ae6a34d2565ae718ba35f579b32847c58f566530db955f52eb657b26",
@@ -531,7 +532,7 @@
     "macos/JojoApp/Sources/JojoCore/QuitCoordinator.swift": "34fe38345935df2d226f4d68f15ceeef205a05742afb900ee7d8d157f10cd99c",
     "macos/JojoApp/Sources/JojoCore/TimerScheduler.swift": "3dfefe3e47da3a9362d6ff1306063f74d14e0aac59f75818fe9d2d80107319c3",
     "macos/JojoApp/Sources/JojoCore/Workspace.swift": "e314a9a42d676a4313f5585260ab024c6e6b9d89b02862dc5d3b32be498628ee",
-    "macos/JojoApp/Tests/JojoCoreTests/DesignShellTests.swift": "302c7ab2ade312d0d2d142eb860b6a2898af0b1240094c753100b1378fcfef03",
+    "macos/JojoApp/Tests/JojoCoreTests/DesignShellTests.swift": "bcf97073036685be2ea6384dcf813d6af63d03e0d35bff4137b4b42970b5cecd",
     "macos/JojoApp/Tests/JojoCoreTests/FakeHelper.swift": "2b79ba9f0b6bfd6d4762f82823d8d5eb6c4d7934e4fddc7d0aaaa253029ce0eb",
     "macos/JojoApp/Tests/JojoCoreTests/P202StartRecoveryTests.swift": "33967a1fc0f015c09cbeef875dc7f18d7943d36443e042efffba8af742185ece",
     "macos/JojoApp/Tests/JojoCoreTests/P203CandidateReviewTests.swift": "cf96e64f3e22a4e9b860527884a0cbc558e9c49f1a344bf8ca517e874982ca16",
@@ -541,7 +542,7 @@
     "macos/JojoApp/Tests/JojoCoreTests/T14ReviewProtocolTests.swift": "a8fe089e4f41b7ff9c093a382668d81f877bcf504afdce32b3c434b4e8cc0070",
     "rust-toolchain.toml": "28ba63ba51f7635afd6b0663f2613a1037ab602a039a889e991b1164b84d4714",
     "scripts/check_p1_01_boundaries.py": "ee3d65a0669572ab0c02ac0cac3a4c065105f489587443486285ab2fc9a28f5a",
-    "scripts/gates/current.json": "e85fbbdb92d60a4e68fd69b614475e06f3ee6bb343ee3959e458a79514f7eb2a",
+    "scripts/gates/current.json": "685431c654b4a7de8b35cab8f69f3628a62026549c6109d678ada029559cc135",
     "scripts/gui_p1_14.py": "925bfb4362f648d69152ec59fbd5d4f7f9cae46e6ac30ab8f22e5afd0971dd50",
     "scripts/gui_p2_02.py": "2d0bf2f80f5600c208eca7439f4ebdc2b4fec9b38383e6f40399a55e45c36869",
     "scripts/gui_p2_03.py": "6dce73497aa9a434e03965bbcd90f1894b25c6608a216098b42d2c9a918c81b3",

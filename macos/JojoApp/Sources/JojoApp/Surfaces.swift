@@ -908,3 +908,128 @@ struct ChangedFileRow: View {
         .contentShape(shape)
     }
 }
+
+// MARK: Approval surfaces (COMPONENTS.md, section 18)
+
+/// The small icon tile of a request: the approval color while a decision is awaited,
+/// neutral otherwise. Solid fills stay the same in both appearances.
+struct RequestTile: View {
+    @Environment(\.theme) private var theme
+    let symbol: String
+    var awaiting = false
+    var size: CGFloat = 24
+
+    static let approval = RGBA(0xB5701F)
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(awaiting ? Self.approval.color : theme.tileNeutral)
+            .frame(width: size, height: size)
+            .overlay(Image(systemName: symbol).font(.system(size: size / 2, weight: .medium)).foregroundStyle(theme.onAccent))
+            .accessibilityHidden(true)
+    }
+}
+
+/// One request of the Approval Inbox list: tile, the kind with an optional age, the object,
+/// and a third line with an optional document tag. The row is a plain view; the screen
+/// wraps it in a button.
+struct RequestRow: View {
+    @Environment(\.theme) private var theme
+    let kind: String
+    var age: String?
+    let title: String
+    /// The object is an identity and is drawn monospaced.
+    var mono = false
+    var detail: String?
+    var status: DocumentStatus?
+    let symbol: String
+    var awaiting = false
+    var selected = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 8)
+        HStack(alignment: .top, spacing: 10) {
+            RequestTile(symbol: symbol, awaiting: awaiting)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(kind).font(.system(size: 11)).foregroundStyle(theme.text3).lineLimit(1)
+                    Spacer(minLength: 0)
+                    if let age { Text(age).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(theme.text3) }
+                }
+                Text(title).font(.system(size: 12.5, weight: .semibold, design: mono ? .monospaced : .default))
+                    .foregroundStyle(theme.text).lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 6) {
+                    if let detail { Text(detail).textStyle(.meta).foregroundStyle(theme.text3).lineLimit(1) }
+                    if let status { DocumentTag(status) }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 9)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(selected ? theme.accent.opacity(0.16) : .clear, in: shape)
+        .overlay(shape.strokeBorder(selected ? theme.info.opacity(0.4) : .clear, lineWidth: 1))
+        .contentShape(shape)
+    }
+}
+
+/// One fact of a request: a label 130 wide and a value that wraps, with a hairline below
+/// unless it is the last line of its card.
+struct FactLine<Content: View>: View {
+    @Environment(\.theme) private var theme
+    let label: String
+    var last = false
+    @ViewBuilder let content: () -> Content
+
+    init(_ label: String, last: Bool = false, @ViewBuilder content: @escaping () -> Content) {
+        self.label = label
+        self.last = last
+        self.content = content
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label).font(.system(size: 12.5)).foregroundStyle(theme.text3).frame(width: 130, alignment: .leading)
+            content().font(.system(size: 12.5)).foregroundStyle(theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 11)
+        .padding(.horizontal, 14)
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(theme.hairline).frame(height: 1) } }
+    }
+}
+
+extension FactLine where Content == Text {
+    /// A plain sentence.
+    init(_ label: String, _ value: String, last: Bool = false) {
+        self.init(label, last: last) { Text(value) }
+    }
+}
+
+/// A name and its trailing value, a line of a policy card; a hairline below unless last.
+struct ValueLine: View {
+    @Environment(\.theme) private var theme
+    let name: String
+    let value: String
+    var last = false
+
+    init(_ name: String, _ value: String, last: Bool = false) {
+        self.name = name
+        self.value = value
+        self.last = last
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(name).textStyle(.body).foregroundStyle(theme.text).frame(maxWidth: .infinity, alignment: .leading)
+            Text(value).textStyle(.body).foregroundStyle(theme.text2).multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(theme.hairline).frame(height: 1) } }
+    }
+}

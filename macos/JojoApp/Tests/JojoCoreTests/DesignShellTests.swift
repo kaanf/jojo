@@ -161,7 +161,7 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.opaqueSidebar, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 2270)
+            .frame(width: 1120, height: 2700)
             guard let directory else { continue }
             try write(shell, to: directory, "shell-\(name).png")
         }
@@ -834,6 +834,138 @@ final class DesignShellTests: XCTestCase {
             }
         }
     }
+    // MARK: Approval Inbox (docs/design/screens/APPROVAL_INBOX.md)
+
+    /// A `ReviewBundle` answer as the helper sends it; the upstream approvals show the kind.
+    private func bundle(_ subject: String, revision: Int64 = 5, upstream: [Int64] = [12], prior: Int64? = nil) -> ReviewBundle {
+        ReviewBundle(["subject": .text(subject), "revision": .int(revision), "hash": .text(String(repeating: "7c1f", count: 16)),
+                      "content_hash": .text(String(repeating: "c0de", count: 16)),
+                      "displayed_hash": .text(String(repeating: "d15b", count: 16)),
+                      "context_hash": .text(String(repeating: "c7e0", count: 16)),
+                      "upstream": .list(upstream.map(JSON.int)), "prior_decision": prior.map(JSON.int) ?? .null])!
+    }
+
+    private func inbox(upstream: [Int64] = [12], prior: Int64? = nil, stale: Bool = false, outstanding: Bool = false) -> ApprovalInboxState {
+        let ids = Self.ids
+        return ApprovalInboxState(
+            connection: .ready(epoch: 7), admission: "Open",
+            rows: [SnapshotRow(key: "artifact:\(ids[4])", value: String(repeating: "ab12", count: 16), detailComplete: true),
+                   SnapshotRow(key: "scheduler_attempt:\(ids[0])", value: "RESERVED", detailComplete: true),
+                   SnapshotRow(key: "review_document:\(ids[1])", value: String(repeating: "cd34", count: 16), detailComplete: true),
+                   SnapshotRow(key: "review_document:\(ids[2])", value: String(repeating: "ef56", count: 16), detailComplete: true)],
+            review: bundle(ids[1], upstream: upstream, prior: prior), reviewStale: stale, decisionOutstanding: outstanding,
+            candidate: result(ids[0]))
+    }
+
+    func test_dw1_approval_inbox_lists_the_snapshot_documents_and_never_calls_them_pending() {
+        let ids = Self.ids
+        let documents = inbox().documents
+        XCTAssertEqual(documents.map(\.id), [ids[4], ids[1], ids[2]], "attempt rows are not documents")
+        XCTAssertEqual(documents.map(\.kind), ["Specification", "Decision or plan", "Decision or plan"])
+        XCTAssertEqual(documents[0].record, String(repeating: "ab12", count: 16))
+        let twice = [SnapshotRow(key: "artifact:\(ids[4])", value: "a", detailComplete: true),
+                     SnapshotRow(key: "artifact:\(ids[4])", value: "b", detailComplete: true)]
+        XCTAssertEqual(ApprovalInboxState.documents(in: twice).count, 1)
+        XCTAssertTrue(ApprovalInboxState.documents(in: []).isEmpty)
+    }
+
+    func test_dw1_approval_inbox_reads_the_kind_and_the_decision_from_the_bundle() {
+        let ids = Self.ids
+        let kinds = [([Int64](), "Specification", "Spec approval", "Approve Revision"),
+                     ([12], "Architecture decision", "Spec approval", "Approve Revision"),
+                     ([12, 14], "Execution plan", "Plan approval", "Approve Plan")]
+        for (upstream, name, approval, approve) in kinds {
+            let kind = ApprovalInboxState.kind(bundle(ids[1], upstream: upstream))
+            XCTAssertEqual(kind.name, name)
+            XCTAssertEqual(kind.approval, approval)
+            XCTAssertEqual(kind.approve, approve)
+        }
+        XCTAssertEqual(ApprovalInboxState.title(bundle(ids[1])), "5e6f7a8b5e6f rev 5")
+        XCTAssertEqual(ApprovalInboxState.upstream(bundle(ids[1], upstream: [])), "None")
+        XCTAssertEqual(ApprovalInboxState.upstream(bundle(ids[1])), "event 12")
+        XCTAssertEqual(ApprovalInboxState.upstream(bundle(ids[1], upstream: [12, 14])), "events 12, 14")
+        XCTAssertEqual(ApprovalInboxState.latestDecision(bundle(ids[1])), "None recorded")
+        XCTAssertEqual(ApprovalInboxState.latestDecision(bundle(ids[1], prior: 41)), "event 41 · the action is not reported",
+                       "the bundle does not say what was decided")
+    }
+
+    func test_dw1_approval_inbox_decisions_need_a_connected_core_and_a_current_review() {
+        let current = inbox()
+        XCTAssertNil(current.decideBlocked)
+        XCTAssertFalse(current.requested)
+        XCTAssertFalse(current.stale)
+
+        let sent = inbox(stale: true, outstanding: true)
+        XCTAssertTrue(sent.requested, "a sent decision is Requested, never recorded")
+        XCTAssertFalse(sent.stale)
+        XCTAssertEqual(sent.decideBlocked, "Unavailable while a decision awaits the core.")
+
+        let answered = inbox(stale: true)
+        XCTAssertTrue(answered.stale)
+        XCTAssertFalse(answered.requested)
+        XCTAssertEqual(answered.decideBlocked, "Unavailable: this review is stale. Reload the document.")
+
+        var other = inbox(outstanding: true)
+        XCTAssertFalse(other.requested, "an outstanding decision on an earlier review does not mark this one")
+        XCTAssertNil(other.decideBlocked)
+        other.connection = .channelLost("pipe closed")
+        XCTAssertEqual(other.decideBlocked, "Unavailable: the core is not connected.")
+        other.review = nil
+        XCTAssertEqual(other.decideBlocked, "No document loaded.")
+        XCTAssertFalse(other.stale)
+
+        let subject = bundle(Self.ids[1])
+        XCTAssertNil(ApprovalInboxState.confirmation(.Approve, subject), "approve is sent at once")
+        for action in [DecisionAction.Reject, .Revoke] {
+            let dialog = ApprovalInboxState.confirmation(action, subject)
+            XCTAssertEqual(dialog?.message.contains("revision 5 of document 5e6f7a8b5e6f"), true, "the dialog names the exact object")
+            XCTAssertEqual(dialog?.keep.hasPrefix("Keep"), true, "the cancel button says what continues")
+        }
+        var closed = current
+        closed.admission = "Closed"
+        XCTAssertTrue(closed.admissionClosed)
+        XCTAssertNil(closed.decideBlocked, "a closed admission does not stop a decision on a document")
+    }
+
+    /// Review aid, as above: the Approval Inbox with test rows in two and three columns and
+    /// in one, and its plan, decided, requested, stale, disconnected and empty forms.
+    func test_dw1_approval_inbox_renders_in_both_appearances() throws {
+        let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
+        let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
+        var lost = inbox(prior: 41)
+        (lost.connection, lost.admission) = (.channelLost("pipe closed"), "Closed")
+        var closed = inbox(upstream: [])
+        (closed.admission, closed.candidate) = ("Closed", nil)
+        var empty = inbox()
+        empty.review = nil
+        var bare = empty
+        (bare.rows, bare.candidate) = ([], nil)
+        let opening = CGSize(width: 1120, height: 720), tall = CGSize(width: 1120, height: 1300), wide = CGSize(width: 1440, height: 1000)
+        let cases: [(String, ApprovalInboxState, CGSize)] = [
+            ("approval-inbox", inbox(), opening), ("approval-inbox-tall", inbox(), tall),
+            ("approval-inbox-wide", inbox(upstream: [12, 14], prior: 41), wide),
+            ("approval-inbox-narrow", inbox(), CGSize(width: 900, height: 1700)),
+            ("approval-inbox-requested", inbox(stale: true, outstanding: true), wide),
+            ("approval-inbox-stale", inbox(stale: true), wide),
+            ("approval-inbox-closed", closed, wide), ("approval-inbox-disconnected", lost, wide),
+            ("approval-inbox-unloaded", empty, opening), ("approval-inbox-empty", bare, opening),
+        ]
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            for (file, state, size) in cases {
+                let shell = Themed {
+                    AppShell(model: model, screen: .constant(.approvalInbox), showInspector: {}) {
+                        ApprovalInboxView(state: state)
+                    }
+                }
+                .environment(\.opaqueSidebar, true)
+                .environment(\.offscreen, true)
+                .environment(\.colorScheme, scheme)
+                .frame(width: size.width, height: size.height)
+                guard let directory else { continue }
+                try write(shell, to: directory, "\(file)-\(name).png")
+            }
+        }
+    }
 }
 
 /// Every status component and button kind on a card, for the snapshot.
@@ -1010,6 +1142,44 @@ private struct Gallery: View {
                         ChangeBadge("D", tone: .danger, name: "Deleted")
                         ChangeBadge("T", tone: .warn, name: "Type changed")
                         ChangeBadge("?", tone: .neutral, name: "Unknown")
+                    }
+                }
+            }
+            titled("Request rows, value lines and fact lines") {
+                HStack(alignment: .top, spacing: 16) {
+                    Card(.panelList) {
+                        VStack(spacing: 2) {
+                            RequestRow(kind: "Architecture decision", age: "18m", title: "ADR-031 rev 5", detail: "Crew · FT-142",
+                                       symbol: "building.columns", awaiting: true, selected: true)
+                            RequestRow(kind: "Execution plan", age: "18m", title: "Plan rev 3", detail: "Crew · FT-142",
+                                       symbol: "list.bullet.indent", awaiting: true)
+                            RequestRow(kind: "Specification", age: "1d", title: "PRD-007 rev 4", detail: "Jojo · FT-007",
+                                       status: .stale, symbol: "doc.text")
+                            RequestRow(kind: "Decision or plan", title: "5e6f7a8b5e6f", mono: true, detail: "record cd34cd34cd34",
+                                       symbol: "doc.on.doc")
+                        }
+                        .padding(8)
+                    }
+                    .frame(width: 270)
+                    Card(.panelList) {
+                        VStack(spacing: 0) {
+                            ValueLine("Push and PR", "Separate approvals")
+                            ValueLine("Combined push + PR", "Off · no policy")
+                            ValueLine("Approvals expire", "On content change", last: true)
+                        }
+                    }
+                    .frame(width: 272)
+                }
+                Card(.panelList) {
+                    VStack(spacing: 0) {
+                        FactLine("Requested action", "Approve this exact revision of the token storage decision.")
+                        FactLine("Why approval", "Architecture decisions bind every task that builds on them. Rev 4 approval does not carry over to changed content.")
+                        FactLine("Staleness", last: true) {
+                            HStack(spacing: 8) {
+                                EvidencePill(.passed, label: "Current")
+                                Text("checked by core 09:42").foregroundStyle(theme.text3)
+                            }
+                        }
                     }
                 }
             }

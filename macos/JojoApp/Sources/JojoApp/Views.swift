@@ -1,12 +1,11 @@
 import JojoCore
 import SwiftUI
 
-/// The primary window: the app shell around the review/lifecycle screens. The five screens
+/// The primary window: the app shell around the review/lifecycle screens. The screens
 /// that exist keep their state while another destination is shown. No terminal emulator.
 struct MainView: View {
     @ObservedObject var model: AppModel
     let delegate: AppDelegate
-    @State private var subject = ""
     @State private var screen = Screen.agentRuns
 
     var body: some View {
@@ -16,13 +15,13 @@ struct MainView: View {
                     QuitBanner(model: model).padding(EdgeInsets(top: 20, leading: 20, bottom: 0, trailing: 20))
                     ZStack(alignment: .topLeading) {
                         Group {
-                            shown(.approvalInbox) { ReviewView(model: model, subject: $subject) }
                             shown(.executionPlan) { StartView(model: model) }
                             if !MainView.built.contains(screen) { NotBuiltYet(screen: screen) }
                         }
                         .padding(.horizontal, 20)
                         // A redesigned screen fills the content area and sets its own padding.
                         shown(.agentRuns) { AgentRunsScreen(model: model, open: { screen = $0 }) }
+                        shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                         shown(.sourceControl) { SourceControlScreen(model: model, open: { screen = $0 }) }
                         shown(.verification) { VerificationScreen(model: model, open: { screen = $0 }) }
@@ -167,41 +166,6 @@ enum QuitText {
         case .channelLost(let r): return "The helper channel was lost (\(r)). State is unknown; nothing is assumed stopped."
         case .unexpectedState(let s): return "Unexpected close state: \(s). Quit again to retry."
         }
-    }
-}
-
-struct ReviewView: View {
-    @ObservedObject var model: AppModel
-    @Binding var subject: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                TextField("Artifact identity (32 hex)", text: $subject).font(.system(.body, design: .monospaced))
-                Button("Load Review") { model.workspace.loadReview(subject) }
-            }
-            if let b = model.workspace.review {
-                Grid(alignment: .leading) {
-                    GridRow { Text("Subject"); Text(b.subject) }
-                    GridRow { Text("Revision"); Text("\(b.revision)") }
-                    GridRow { Text("Hash"); Text(b.hash) }
-                    GridRow { Text("Content"); Text(b.contentHash) }
-                    GridRow { Text("Displayed"); Text(b.displayedHash) }
-                    GridRow { Text("Context"); Text(b.contextHash) }
-                    GridRow { Text("Upstream"); Text(b.upstream.map(String.init).joined(separator: ", ")) }
-                }
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-                HStack {
-                    ForEach(DecisionAction.allCases, id: \.self) { action in
-                        Button(action.rawValue) { model.workspace.decide(action) }
-                    }
-                }
-                .disabled(model.workspace.reviewStale)
-            }
-            Spacer()
-        }
-        .padding(8)
     }
 }
 

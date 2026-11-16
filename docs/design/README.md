@@ -11,6 +11,7 @@ The design of the macOS app, written down so that SwiftUI code can be built and 
 | [screens/AGENT_RUNS.md](screens/AGENT_RUNS.md) | Agent Runs: the canvas board, and what the app shows of it today |
 | [screens/VERIFICATION.md](screens/VERIFICATION.md) | Verification & Evidence: the canvas board, and what the app shows of it today |
 | [screens/SOURCE_CONTROL.md](screens/SOURCE_CONTROL.md) | Source Control: the canvas board, and what the app shows of it today |
+| [screens/APPROVAL_INBOX.md](screens/APPROVAL_INBOX.md) | Approval Inbox: the canvas board, and what the app shows of it today |
 
 ## Source
 
@@ -25,6 +26,7 @@ Claude Design canvas "Jojo macOS", https://claude.ai/artifact/UuyW4DFxPEciFKZm8Z
 | screens/AGENT_RUNS.md | "Agent Runs" (`AgentRuns.dc.html`) |
 | screens/VERIFICATION.md | "Verification & Evidence" (`Verification.dc.html`) |
 | screens/SOURCE_CONTROL.md | "Source Control" (`SourceControl.dc.html`) |
+| screens/APPROVAL_INBOX.md | "Approval Inbox" (`ApprovalInbox.dc.html`), read at version `1794818355-75fa` |
 
 Values were read from the boards' markup and stylesheet, not measured from a picture. Section 4 of STATES.md and section 10 of DESIGN_SYSTEM.md (the mapping to the helper and to SwiftUI) are not from the canvas; they were written for this project.
 
@@ -38,7 +40,7 @@ When the canvas changes, update these files in the same step and note the new ve
 
 ## Screens
 
-The canvas has 23 boards. Which milestone builds which screen, and where the design and the roadmap disagree, is in [DESIGN_ROADMAP_DIFFERENCES.md](../roadmap/DESIGN_ROADMAP_DIFFERENCES.md), section 4. Four screens are transcribed (the table above); each of the others is written down when it is built.
+The canvas has 23 boards. Which milestone builds which screen, and where the design and the roadmap disagree, is in [DESIGN_ROADMAP_DIFFERENCES.md](../roadmap/DESIGN_ROADMAP_DIFFERENCES.md), section 4. Five screens are transcribed (the table above); each of the others is written down when it is built.
 
 | Page | Boards |
 |---|---|
