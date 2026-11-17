@@ -17,8 +17,7 @@
 //! repeated by [`verify_launch`] when the request is rebuilt at the launch boundary, so a
 //! launch that names this profile cannot be issued with other arguments, another
 //! environment or a changed executable, whichever code constructs it.
-use std::fs::File;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use jojo_domain::codex::{
@@ -30,11 +29,10 @@ use jojo_domain::provider::{
     ProviderFingerprint, ProviderKind,
 };
 
-use crate::digest::sha256_reader;
 use crate::process::{LaunchRejection, ProcessLaunch};
 
-/// Upper bound on the executable that is hashed; a larger file is refused, not sampled.
-pub const MAX_CODEX_EXECUTABLE_BYTES: u64 = 1024 * 1024 * 1024;
+pub use crate::executables::MAX_CODEX_EXECUTABLE_BYTES;
+pub(crate) use crate::executables::inspect_executable;
 
 /// Everything is supplied explicitly by the human-approved configuration. No field is
 /// discovered from the ambient process, and none holds a secret.
@@ -75,45 +73,8 @@ pub struct CodexAdapter {
     capabilities: Capabilities,
 }
 
-fn resolved(path: &Path) -> bool {
+pub(crate) fn resolved(path: &Path) -> bool {
     path.is_absolute() && std::fs::canonicalize(path).is_ok_and(|real| real == path)
-}
-
-/// SHA-256 of a native executable that passes every structural check.
-pub(crate) fn inspect_executable(path: &Path) -> Result<String, String> {
-    let listed = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if listed.file_type().is_symlink() {
-        return Err("symbolic link; configure the native binary itself".into());
-    }
-    if !listed.is_file() {
-        return Err("not a regular file".into());
-    }
-    if !resolved(path) {
-        return Err("path is not absolute and fully resolved".into());
-    }
-    let mode = listed.permissions().mode();
-    if mode & 0o111 == 0 || mode & 0o6022 != 0 {
-        return Err("must be executable, not set-id and writable by its owner only".into());
-    }
-    if listed.len() > MAX_CODEX_EXECUTABLE_BYTES {
-        return Err("larger than the inspection limit".into());
-    }
-    let mut file = File::open(path).map_err(|e| format!("open: {e}"))?;
-    let opened = file.metadata().map_err(|e| format!("inspect: {e}"))?;
-    if (opened.dev(), opened.ino()) != (listed.dev(), listed.ino()) {
-        return Err("replaced during inspection".into());
-    }
-    let (digest, head) = sha256_reader(&mut file, MAX_CODEX_EXECUTABLE_BYTES)
-        .map_err(|e| format!("read: {e}"))?
-        .ok_or("empty, truncated or larger than the inspection limit")?;
-    // Mach-O 64-bit, or a universal (fat) container. A `#!` launcher is not accepted.
-    if !matches!(
-        head,
-        [0xcf, 0xfa, 0xed, 0xfe] | [0xca, 0xfe, 0xba, 0xbe] | [0xca, 0xfe, 0xba, 0xbf]
-    ) {
-        return Err("not a native executable; script launchers are refused".into());
-    }
-    Ok(digest)
 }
 
 /// The home is only located: its entries are never listed, opened or hashed.

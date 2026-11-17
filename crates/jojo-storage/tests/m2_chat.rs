@@ -1106,6 +1106,28 @@ fn m3_a_started_plan_runs_its_ready_steps_validates_them_and_waits_for_the_human
     );
 }
 
+// D3: while one provider's executable digest is computed in the background, the runner
+// leaves that step ready (it is not refused) and starts the other provider's step.
+#[test]
+fn d3_a_step_waits_for_its_executable_digest_and_the_other_provider_starts() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let (_, _, plan, _, _) = h.approved_kinds_plan(&repository);
+    // Claude Code now names a fresh copy, whose digest nothing has computed yet.
+    let copy = h.base.join("bin/claude");
+    fs::copy(h.base.join("bin/agent"), &copy).unwrap();
+    chmod(&copy, 0o755);
+    h.s().claude.as_mut().unwrap().executable = copy.clone();
+    h.s().background_checks = true;
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.s().tick().unwrap();
+    assert_eq!(h.step_states(&plan), ["Ready", "Running", "Waiting"]);
+    assert_eq!(h.step_field(&plan, 0, "provider"), text("ClaudeCode"));
+    let states = h.run_until(&plan, |s| s[0] == "Review" && s[1] == "Review");
+    assert_eq!(states[2], "Waiting");
+    assert_eq!(begin_check(&copy), ExecutableCheck::Known);
+}
+
 #[test]
 fn m3_a_rejected_step_stops_only_what_depends_on_it_and_a_restart_pauses_the_run() {
     let mut h = H::new();

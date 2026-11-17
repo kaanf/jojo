@@ -527,6 +527,7 @@ impl Service {
                     .codex
                     .clone()
                     .ok_or("NoProductionAdapter: Codex is not configured")?;
+                self.executable_known(provider, &codex.executable)?;
                 CodexAdapter::new(codex)
                     .and_then(|adapter| adapter.ready().map(|()| adapter))
                     .map(Adapter::Codex)
@@ -537,12 +538,25 @@ impl Service {
                     .claude
                     .clone()
                     .ok_or_else(|| format!("NoProductionAdapter: {provider:?}"))?;
+                self.executable_known(provider, &claude.executable)?;
                 ClaudeAdapter::new(claude)
                     .and_then(|adapter| adapter.ready().map(|()| adapter))
                     .map(Adapter::Claude)
                     .map_err(|e| format!("AdapterRejected: {e:?}"))
             }
         }
+    }
+    /// D3: with background checks on, an executable whose digest is not known yet is
+    /// hashed off the control thread and the request is answered "not now".
+    fn executable_known(&self, provider: ProviderKind, path: &Path) -> Result<(), String> {
+        if self.background_checks
+            && jojo_storage::begin_check(path) == jojo_storage::ExecutableCheck::Checking
+        {
+            return Err(format!(
+                "ExecutableChecking: the {provider:?} executable's digest is being computed; try again shortly"
+            ));
+        }
+        Ok(())
     }
     /// M2: one lead agent turn. Accepted durably with its prompt, then run read-only in
     /// the registered repository through the configured adapter. A turn that cannot be

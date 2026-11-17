@@ -483,6 +483,42 @@ fn p2_01_executable_changed_after_approval_is_refused_before_the_issue_journal()
     );
 }
 
+// D3: the digest is remembered per file identity and computed off the calling thread;
+// a rewrite of the same length is still a new identity.
+#[test]
+fn d3_executable_digest_is_remembered_per_file_identity() {
+    let c = C::new();
+    let known = |path: &Path| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            match begin_check(path) {
+                ExecutableCheck::Known => return,
+                ExecutableCheck::Checking => {}
+                other => panic!("{other:?}"),
+            }
+            assert!(Instant::now() < deadline, "digest never became known");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    // A private copy: nothing in this process has hashed it.
+    assert_eq!(begin_check(&c.fixture), ExecutableCheck::Checking);
+    known(&c.fixture);
+    assert_eq!(begin_check(&c.fixture), ExecutableCheck::Known);
+    assert!(CodexAdapter::new(c.config()).is_ok());
+    // Same length, other bytes: the identity changes and the old digest no longer holds.
+    let mut changed = fs::read(&c.fixture).unwrap();
+    let last = changed.len() - 1;
+    changed[last] ^= 0xff;
+    fs::write(&c.fixture, &changed).unwrap();
+    assert_ne!(begin_check(&c.fixture), ExecutableCheck::Known);
+    known(&c.fixture);
+    assert_eq!(c.adapter_error(), Some(CodexRejection::Digest));
+    // A file that fails a structural check is reported, never hashed.
+    let link = c.base.join("bin/link");
+    std::os::unix::fs::symlink(&c.fixture, &link).unwrap();
+    assert!(matches!(begin_check(&link), ExecutableCheck::Unusable(_)));
+}
+
 impl C {
     fn adapter_error(&self) -> Option<CodexRejection> {
         CodexAdapter::new(self.config()).err()

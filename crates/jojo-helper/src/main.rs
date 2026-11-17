@@ -63,6 +63,7 @@ fn main() -> ExitCode {
                     Ok(mut service) => {
                         service.guard = Some(guard);
                         service.claude = claude.map(|c| jojo_helper::service::claude_config(*c));
+                        service.begin_executable_checks();
                         ExitCode::from(jojo_helper::service::serve(
                             service,
                             std::io::stdin(),

@@ -1141,6 +1141,44 @@ fn m1_claude_code_runs_outside_the_envelope_or_without_sign_in_never_succeed() {
     }
 }
 
+// D3: the serving helper never hashes an executable on its control thread. A Start that
+// finds the digest unknown is answered "not now" while it is computed in the background.
+#[test]
+fn d3_a_start_never_waits_for_an_executable_digest() {
+    let mut h = H::with_claude();
+    h.s().background_checks = true;
+    let repository = h.register();
+    let adr =
+        "Keep the change inside src/.\nfixture: develop src/feature.rs\nNo other file changes.";
+    let bundle = h.bundle(&repository, "ClaudeCode", adr);
+    for subjects in [vec![PRD], vec![ADR], vec![VALIDATION, PLAN]] {
+        h.ok("ImportBundle", bundle.clone());
+        for subject in subjects {
+            h.approve(subject);
+        }
+    }
+    h.open_admission();
+    // The fixture copy is private to this test, so its digest is not known yet.
+    let first = h.start(900);
+    assert_eq!(first.kind, "Error", "{:?}", first.payload);
+    let code = string(get(&first.payload, "code").unwrap())
+        .unwrap()
+        .to_owned();
+    assert!(code.starts_with("ExecutableChecking"), "{code}");
+    assert_eq!(h.launches(), 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while begin_check(&h.fixture) != ExecutableCheck::Known {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "digest never became known"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(dispatch(&h.start(900)), "launched");
+    assert_eq!(h.settled(900).outcome, AttemptOutcome::Succeeded);
+    assert_eq!(h.launches(), 1);
+}
+
 #[test]
 fn m1_only_the_configured_claude_code_adapter_can_launch() {
     let mut h = H::with_claude();

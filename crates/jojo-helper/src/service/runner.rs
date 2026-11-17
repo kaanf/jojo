@@ -75,6 +75,8 @@ impl Service {
             for step in run.ready() {
                 match self.runner_start(run, step.step) {
                     Ok(()) => {}
+                    // D3: only this provider waits; a step of the other may still start.
+                    Err(why) if why.starts_with("ExecutableChecking") => {}
                     Err(why) if transient(&why) => return Ok(()),
                     Err(why) => {
                         let (plan, revision, id) = (run.plan, run.revision, step.step.id);

@@ -68,6 +68,8 @@ mod claude;
 pub use claude::*;
 mod codex;
 pub use codex::*;
+mod executables;
+pub use executables::{ExecutableCheck, begin_check};
 mod slice;
 pub use slice::*;
 mod projects;

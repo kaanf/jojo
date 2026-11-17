@@ -259,6 +259,10 @@ pub struct Service {
     /// M1: the one Claude Code executable a Start may launch, fixed by the helper's
     /// launcher like the Codex one in `SliceConfig`. `None`: no Claude Code step can start.
     pub claude: Option<ClaudeAdapterConfig>,
+    /// D3: the serving helper computes executable digests on a background thread, so a
+    /// Start or a turn never waits for one; it answers `ExecutableChecking` instead.
+    /// Off in in-process tests, which hash in place (once per file identity).
+    pub background_checks: bool,
     /// Stop flag of the latest validation run, set on close, emergency and drop.
     validation_stop: Arc<AtomicBool>,
     /// M2: stop flag of the latest lead agent turn, set on close, emergency and drop.
@@ -331,6 +335,16 @@ impl Adapter {
     }
 }
 impl Service {
+    /// D3: turns background checks on and starts computing the digest of every configured
+    /// executable, so that the first Start finds it known.
+    pub fn begin_executable_checks(&mut self) {
+        self.background_checks = true;
+        let codex = self.config.slice.as_ref().and_then(|s| s.codex.as_ref());
+        let paths = codex.map(|c| &c.executable).into_iter();
+        for path in paths.chain(self.claude.as_ref().map(|c| &c.executable)) {
+            let _ = jojo_storage::begin_check(path);
+        }
+    }
     pub fn new(engine: Arc<Engine>) -> Result<Self, String> {
         Self::with_config(engine, ServiceConfig::default())
     }
@@ -357,6 +371,7 @@ impl Service {
             validation_budget: ValidationBudget::DEFAULT,
             guard: None,
             claude: None,
+            background_checks: false,
             validation_stop: Arc::new(AtomicBool::new(false)),
             turn_stop: Arc::new(AtomicBool::new(false)),
         })
