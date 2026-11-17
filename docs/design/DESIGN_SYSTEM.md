@@ -1,234 +1,252 @@
 # Jojo design system: tokens
 
-Colors, type, spacing, shape and elevation for the SwiftUI app. Values are transcribed from the Claude Design canvas "Jojo macOS" (boards "Themes and tokens" and "Dashboard"); see [README.md](README.md) for the source version and how conflicts are settled.
+Materials, colors, type, spacing, shape and elevation for the SwiftUI app. Transcribed from the Claude Design canvas "Jojo macOS", page "Components & states", board "Themes and tokens" (`ThemeTokensMac.dc.html`), and from the stylesheet the product boards share (the `.mac` rules of `DashboardMac.dc.html`). Source version and conflict rules: [README.md](README.md).
+
+This replaces the first design system (dark-first, opaque surfaces, `--jj-*` tokens, accent `#2F6FEB`), which is kept on the canvas's Archive page. The app's code still uses the first system until the Liquid Glass migration moves it (section 12).
 
 The canvas is written in CSS pixels. One CSS pixel is one SwiftUI point.
 
 ## 1. Rules
 
-These five rules come from the canvas and hold for every screen.
+The six rules of the board, for every screen.
 
-1. **Tokens, not literals.** A view never writes a hex value. It reads a semantic token; the appearance (dark or light) decides the value. Nothing else changes between appearances.
-2. **Status darkens in light.** Status hues keep their meaning but use darker shades in the light appearance, so that status text on its tint keeps a 4.5:1 contrast.
-3. **Elevation flips.** Dark separates a card from its background with an inner white ring. Light uses a hairline outer ring and a soft 1–2 pt shadow. In light, cards sit on `content` (`#F5F5F7`), never on pure white.
-4. **Solid fills stay.** The accent, the icon tiles and their white glyphs are the same in both appearances.
-5. **`text4` is decoration only.** Chevrons and separators. Never readable copy.
+1. **Tokens, not hex.** A view reads a semantic token; the appearance (light or dark) decides the value. Nothing else changes between light and dark.
+2. **Glass for chrome, cards for content.** Sidebar, inspector, toolbar capsules, menus, sheets and banners are glass. Lists, documents and tables sit on cards. Never stack glass on glass.
+3. **Status darkens in light.** Status hues keep their meaning, but status text uses deep shades in light (blue `#0040dd`, orange `#9a4300`, green `#17712f`, red `#c11a20`) so text on its tint passes 4.5:1.
+4. **One filled button per area.** Only the primary action is filled with the accent. Everything else is a glass capsule, a text button or a menu item.
+5. **Shadows are a setting.** The window shadow and the glass rim stay; decorative glows go at the Reduced level, which is the default (section 3).
+6. **Shape carries the status family.** Capsule with a dot = operational, rounded square with a symbol = evidence, uppercase outline tag = document. Color alone never decides (COMPONENTS.md, section 1).
 
-## 2. Color tokens
+Light is the default appearance of the boards. The app follows the system appearance, and Settings › Appearance can force Light or Dark (SETTINGS.md).
 
-Token names drop the canvas prefix `--jj-` and use camel case in Swift (`--jj-text-strong` becomes `textStrong`).
+## 2. Materials
 
-### Surfaces
+Four surfaces (COMPONENTS.md, section 4).
 
-| Token | Use | Dark | Light |
+| Token | Use | Light | Dark |
 |---|---|---|---|
-| `canvas` | Desktop behind the window. Canvas mock-up only; the app does not draw it | `#0B0C10` | `#DCDDE2` |
-| `window` | Window body | `#1A1A1D` | `#FFFFFF` |
-| `sidebar` | Translucent sidebar | `rgba(31,31,35,0.94)` | `rgba(236,236,240,0.94)` |
-| `toolbar` | Toolbar strip | `#222226` | `#FBFBFC` |
-| `content` | Main content area | `#1A1A1D` | `#F5F5F7` |
-| `surface` | Cards, lists, inspectors | `#232327` | `#FFFFFF` |
-| `fill` | Secondary buttons, key caps, counters | `rgba(255,255,255,0.07)` | `rgba(0,0,0,0.05)` |
-| `fill2` | Group headers, quiet wells | `rgba(255,255,255,0.03)` | `rgba(0,0,0,0.025)` |
-| `hover` | Row and navigation hover | `rgba(255,255,255,0.04)` | `rgba(0,0,0,0.03)` |
-| `hairline` | Row separators, secondary button border | `rgba(255,255,255,0.06)` | `rgba(0,0,0,0.07)` |
-| `ringEmpty` | Outline of an empty slot (for example an unreached pipeline cell) | `rgba(255,255,255,0.08)` | `rgba(0,0,0,0.09)` |
-| `tileNeutral` | Neutral icon tile | `#3C3C44` | `#6A6A73` |
+| `window` | Window material | `rgba(246,246,248,.74)` | `rgba(28,28,32,.72)` |
+| `glass` | Sidebar, inspector, banners, alerts, menus | `rgba(255,255,255,.58)` | `rgba(58,58,64,.46)` |
+| `glassStrong` | Toolbar capsules, segmented controls, secondary buttons | `rgba(255,255,255,.78)` | `rgba(64,64,70,.66)` |
+| `card` | Content cards and lists | `rgba(255,255,255,.82)` | `rgba(255,255,255,.065)` |
+| `cardHover` | Hover, input fields, elevated rows, the chosen segment, task nodes | `rgba(255,255,255,.95)` | `rgba(255,255,255,.10)` |
+| `rim` | Glass top highlight | `rgba(255,255,255,.85)` | `rgba(255,255,255,.22)` |
+| `rimLow` | Glass inner edge | `rgba(255,255,255,.35)` | `rgba(255,255,255,.06)` |
+| `shadow` | Window drop shadow | `rgba(16,24,40,.14)` | `rgba(0,0,0,.5)` |
 
-### Text
+Blur and saturation, from the stylesheet:
 
-| Token | Use | Dark | Light |
+| Material | Backdrop | Edge |
+|---|---|---|
+| Window | blur 50, saturate 180% | 0.5 ring `rgba(0,0,0,.18)`, inner 0.5 ring `rimLow`, drop shadow 0 30 80 `shadow` |
+| Glass | blur 30, saturate 190% | inner top line 1 `rim`, inner bottom line 1 `rimLow`, inner 0.5 ring `rimLow` |
+| Capsule (`glassStrong`) | blur 24, saturate 190% | inner top line 1 `rim`, inner 0.5 ring `rimLow` |
+| Card | none | inner 0.5 ring `sep` |
+| Well | none, fill `grayBg` | none |
+
+## 3. Shadow levels
+
+A setting with three levels; **Reduced** is the default.
+
+| Element | Full | Reduced (default) | None |
 |---|---|---|---|
-| `textStrong` | Titles, primary text of a row | `#FFFFFF` | `#0E0E12` |
-| `text` | Body | `#ECECEF` | `#1D1D22` |
-| `text2` | Secondary copy | `#A7A7AF` | `#54545C` |
-| `text3` | Meta, labels, timestamps | `#8D8D95` | `#6A6A73` |
-| `text4` | Chevrons, separators only | `#5E5E66` | `#A3A3AB` |
-| `navText` | Unselected sidebar item | `#E2E2E7` | `#2A2A30` |
+| Window | ring + drop shadow | ring + drop shadow | ring only |
+| Glass | edges + 0 6 24 `rgba(0,0,0,.08)` | edges only | inner 0.5 ring `sep` |
+| Capsule | edges + 0 2 10 `rgba(0,0,0,.08)` | edges only | inner 0.5 ring `sep` |
+| Primary button | inner top 1 `rgba(255,255,255,.35)` + glow 0 2 10 `rgba(0,113,227,.35)` | inner top 1 `rgba(255,255,255,.3)` | none |
+| Chosen segment | 0 1 4 `rgba(0,0,0,.14)` + inner 0.5 `sep` | the same | inner 0.5 `sep` |
 
-### Accent and status
+## 4. Color tokens
 
-Each status has a text color, a tint (background of pills, cells and banners) and, except `ok`, a ring (outline).
+### Text and lines
 
-| Token | Use | Dark | Light |
+| Token | Use | Light | Dark |
 |---|---|---|---|
-| `accent` | Primary button, selection | `#2F6FEB` | `#2F6FEB` |
-| `onAccent` | Text and glyphs on `accent` | `#FFFFFF` | `#FFFFFF` |
-| `icon` | Sidebar glyphs | `#7AAFFF` | `#2F6FEB` |
-| `info` | Running, links, proposed | `#7AAFFF` | `#1F5FCC` |
-| `infoTint` | | `rgba(122,175,255,0.12)` | `rgba(47,111,235,0.10)` |
-| `infoRing` | | `rgba(122,175,255,0.5)` | `rgba(31,95,204,0.45)` |
-| `warn` | Needs you, blocked, stale | `#F4B163` | `#9A5800` |
-| `warnTint` | | `rgba(244,177,99,0.12)` | `rgba(214,138,30,0.14)` |
-| `warnRing` | | `rgba(244,177,99,0.5)` | `rgba(154,88,0,0.45)` |
-| `ok` | Completed, passed, sealed | `#5DD08E` | `#1C7A46` |
-| `okTint` | | `rgba(93,208,142,0.12)` | `rgba(36,160,90,0.12)` |
-| `danger` | Failed, held, destructive | `#FF8677` | `#B8382A` |
-| `dangerTint` | | `rgba(255,134,119,0.12)` | `rgba(220,70,50,0.10)` |
-| `dangerRing` | | `rgba(255,134,119,0.35)` | `rgba(184,56,42,0.35)` |
+| `text` | Titles and body | `#1d1d1f` | `#f5f5f7` |
+| `text2` | Secondary copy | `#5b5b61` | `#b0b0b6` |
+| `text3` | Meta, labels, timestamps, uppercase section labels | `#6e6e73` | `#98989e` |
+| `sep` | Hairlines, row separators, card rings | `rgba(0,0,0,.09)` | `rgba(255,255,255,.10)` |
+| `dotOff` | Empty lifecycle steps and dots, bars not done | `rgba(60,60,67,.22)` | `rgba(235,235,245,.20)` |
 
-The neutral status (Idle, Not run, Superseded) uses `text2` on `fill`.
+### Accent
+
+| Token | Use | Light | Dark |
+|---|---|---|---|
+| `accent` | Primary button, selection, links, sidebar glyphs, checked boxes | `#0071e3` | `#0a84ff` |
+| `accentTint` | Selected rows and sidebar items, chosen options, the running dot's halo | `rgba(0,113,227,.13)` | `rgba(10,132,255,.24)` |
+
+Text on `accent` is white in both appearances.
+
+### Status
+
+Six hues. The text color is used for status text and glyphs; the `…Bg` tint sits behind it.
+
+| Hue | Meaning | Text light | Text dark | Tint light | Tint dark |
+|---|---|---|---|---|---|
+| `blue` | Running, links, proposed | `#0040dd` | `#6cb2ff` | `rgba(0,113,227,.12)` | `rgba(10,132,255,.20)` |
+| `orange` | Needs you, blocked, stale, incomplete | `#9a4300` | `#ffb54d` | `rgba(255,149,0,.16)` | `rgba(255,159,10,.18)` |
+| `green` | Completed, passed, sealed, approved | `#17712f` | `#4cd97b` | `rgba(52,199,89,.16)` | `rgba(48,209,88,.17)` |
+| `red` | Failed, held, recovery required, destructive | `#c11a20` | `#ff7a72` | `rgba(255,59,48,.13)` | `rgba(255,69,58,.18)` |
+| `purple` | Requested, review, needs approval, eligible | `#7428b0` | `#d79bff` | `rgba(175,82,222,.14)` | `rgba(191,90,242,.20)` |
+| `gray` | Idle, waiting, paused, unknown, not run, superseded | `#55555a` | `#aeaeb4` | `rgba(120,120,128,.14)` | `rgba(142,142,147,.20)` |
+
+`grayBg` is also the hover of sidebar items and picker rows, the fill of disabled buttons, of skeleton bars and of wells.
 
 ### Fixed colors
 
-Not themed. They are the same in both appearances.
+The same in both appearances. Glyphs on them are white.
 
 | Use | Value |
 |---|---|
-| Icon tile, approval | `#B5701F` |
-| Icon tile, recovery | `#9A3B30` |
-| Icon tile, destructive dialog | `#B5402F` |
-| Icon tile, Claude Code | `#C2643A` |
-| Project avatar (example project) | `#2E7D5B` |
-| Glyph on any tile | `#FFFFFF` |
+| Tile orange (Needs you, warnings, permission, stale) | `#ff9500` |
+| Tile blue (running, plans) | `#0a84ff` |
+| Tile red (blocked, errors, recovery required) | `#ff3b30` |
+| Tile green (providers, success) | `#34c759` |
+| Tile indigo (architecture decisions) | `#5e5ce6` |
+| Tile teal (external actions) | `#30b0c7` |
+| Tile purple (requested, reviews) | `#af52de` |
+| Tile gray (disconnected, unknown, unavailable provider) | `#8e8e93` |
+| App icon tile | linear gradient top to bottom `#6e6cf0` → `#3634a3` |
+| Project badge (Crew on the boards) | linear gradient `#ff9f0a` → `#ff6b00` |
+| Provider tile Claude Code | `#c2643a` |
+| Destructive filled button (alerts only) | `#ff3b30` |
+| Diff added line | `greenBg` |
+| Diff removed line | `redBg` |
 
-Colors that exist only on the dark component board and have no light value yet are listed in [COMPONENTS.md](COMPONENTS.md), section 12.
+A project's badge color is chosen per project; the boards show one.
 
-## 3. Elevation
+## 5. Typography
 
-| Token | Use | Dark | Light |
-|---|---|---|---|
-| `cardShadow` | Cards, lists, tiles | inner ring 1 pt `rgba(255,255,255,0.06)` | outer ring 1 pt `rgba(0,0,0,0.07)` and shadow y 1, blur 2, `rgba(0,0,0,0.05)` |
-| `liftShadow` | A clickable card under the pointer | inner ring 1 pt `rgba(255,255,255,0.12)` | outer ring 1 pt `rgba(0,0,0,0.1)` and shadow y 4, blur 12, `rgba(0,0,0,0.07)` |
-| `sidebarEdge` | Right edge of the sidebar | 1 pt `rgba(255,255,255,0.06)` | 1 pt `rgba(0,0,0,0.08)` |
-| `toolbarEdge` | Bottom edge of the toolbar | 1 pt `rgba(0,0,0,0.55)` | 1 pt `rgba(0,0,0,0.09)` |
-| `kbdShadow` | Bottom edge of a key cap | 1 pt `rgba(0,0,0,0.4)` | 1 pt `rgba(0,0,0,0.12)` |
-| `windowShadow` | Canvas mock-up only. The app uses the system window shadow | — | — |
-
-Floating panels (dialog, command palette, popover, menu) are defined on the dark board only: outer ring 1 pt `rgba(0,0,0,0.5–0.6)`, inner ring 1 pt `rgba(255,255,255,0.1)`, shadow y 24, blur 60, `rgba(0,0,0,0.55)` for dialogs and y 14, blur 34, `rgba(0,0,0,0.5)` for menus and popovers. In the app these are system sheets, menus and popovers, so the system draws their elevation.
-
-## 4. Typography
-
-The canvas sets Inter for text and JetBrains Mono for identifiers, each with the system font as fallback, and turns on the Inter features `cv11` and `ss01`.
-
-**Decided 2026-11-16 (the human): the app uses the system fonts**, SF Pro for text and SF Mono for identifiers and code. Inter and JetBrains Mono are not bundled, so the app will not match the canvas glyph for glyph; sizes, weights and tracking below are kept.
-
-Base: 13 pt, line height 1.45, text color `text`.
+The system fonts: SF Pro (`-apple-system`) and SF Mono. Sizes in points.
 
 | Style | Size | Weight | Tracking | Use |
 |---|---|---|---|---|
-| `pageTitle` | 28 | bold (700) | −0.025 em | Title of a reference or document page |
-| `kpiNumber` | 28 | bold (700) | −0.03 em, line height 1.1, tabular digits | Number in a KPI tile |
-| `inspectorTitle` | 15 | semibold (600) | −0.01 em | Inspector title, section title of a page, palette input |
-| `toolbarTitle` | 14.5 | semibold (600) | −0.01 em | Screen title in the toolbar |
-| `dialogTitle` | 14 | semibold (600) | 0 | Dialog title |
-| `sectionTitle` | 13 | semibold (600) | −0.005 em | Section heading inside a screen |
-| `body` | 13 | regular (400) | 0 | Body, menu items |
-| `bodyStrong` | 13 | semibold (600) | 0 | Primary text of a row |
-| `nav` | 13 | medium (500) | 0 | Sidebar item |
-| `control` | 12.5 | medium (500) | 0 | Buttons, search field, key-value grids |
-| `controlStrong` | 12.5 | semibold (600) | 0 | Node title, feature name in the switcher |
-| `secondary` | 12 | regular (400) or medium (500) | 0 | Row secondary line, KPI caption, ghost link |
-| `meta` | 11.5 | regular (400) | 0 | Row meta, breadcrumbs, field labels |
-| `pill` | 11 to 11.5 | medium (500) | 0 | Status pills (section 2 of COMPONENTS.md) |
-| `tag` | 11 | semibold (600) | +0.02 em, uppercase | Document status tag |
-| `groupHeader` | 11 | semibold (600) | +0.04 em, uppercase | Group header inside a list |
-| `sidebarSection` | 11 | semibold (600) | 0 | Sidebar section label |
-| `counter` | 11 | semibold (600) | 0 | Counter badge |
-| `kbd` | 11 | medium (500) | 0 | Key cap |
-| `mono` | 11 to 11.5 | regular (400) or medium (500) | −0.01 em | Identifiers, refs, digests |
-| `code` | 12 | regular (400) | line height 22 | Diff and code |
+| `referenceTitle` | 32 | bold | −0.03 em | Reference boards only |
+| `kpiValue` | 30 | bold | −0.03 em | KPI number |
+| `dashboardTitle` | 22 | bold | −0.02 em | Dashboard heading |
+| `pageTitle` | 20 | bold | −0.02 em | Every other screen's heading |
+| `panelTitle` | 17 | bold | −0.01 em | Panel heading, banner title |
+| `inspectorTitle` | 16 | bold | 0 | Title of the selected object |
+| `sectionTitle` | 15 | semibold | −0.01 em | Section heading (`h2`), alert title (bold), palette input |
+| `body` | 13 | regular | 0 | Body, nav items, buttons (medium), menu items |
+| `bodyStrong` | 13 | semibold | 0 | Row titles, KPI label |
+| `secondary` | 12 | regular | 0 | `sub` lines in `text2`, key-value rows, lifecycle steps (medium; current step semibold), segmented buttons (medium), small buttons |
+| `mono` | 12 | regular | 0 | Identifiers, commands, code (line height 1.6) |
+| `label` | 11 | semibold | +0.02 em, uppercase | Section labels in `text3` |
+| `sidebarSection` | 11 | semibold | 0 | Sidebar group headers in `text3` |
+| `pill` | 11 | semibold | 0 | Operational and evidence pills, counters |
+| `kbd` | 11 | regular | 0 | Shortcut hints in `text3` |
+| `tag` | 10 | bold | +0.06 em, uppercase | Document tags |
 
-Text that can be cut is cut with a trailing ellipsis on one line. Numbers that change in place use tabular digits.
+Line heights: body copy 1.45 to 1.55; code 1.6.
 
-## 5. Spacing
+## 6. Spacing
 
-There is no fixed step scale. These are the values the canvas uses, by role.
-
-| Role | Value |
+| Place | Value |
 |---|---|
-| Glyph to label, inside a pill or button | 5 to 6 |
-| Between pills, between buttons | 6 to 8 |
-| Sidebar glyph to label | 9 |
-| Row: tile to text to trailing status | 12 |
-| Between cards in a row | 14 |
-| Section heading to its card | 10 |
-| Between sections of a screen | 22 |
-| Content padding | 20 top and sides, 28 bottom |
-| Card padding | 14 vertical, 16 horizontal |
-| Row padding | 11 vertical, 16 horizontal |
-| Group header padding | 9 top, 7 bottom, 16 horizontal |
-| Inspector section padding | 12 vertical, 16 horizontal |
-| Dialog padding | 18, with 14 between its blocks |
-| Sidebar padding | 12 vertical, 10 horizontal |
+| Window padding (around sidebar, content and inspector) | 8 |
+| Gap between sidebar, content and inspector | 8 to 14 |
+| Content column padding | top 10, trailing 6 to 18, bottom 14 to 22, leading 10 to 14 |
+| Gap between content sections | 16 to 20 |
+| Sidebar padding | 14 top, 10 sides, 12 bottom; groups 14 apart, items 1 apart |
+| Nav item | height 30, padding 0 9, gap 9 |
+| Header | min height 44, gap 10 to 12 |
+| Card padding | 14 to 16 (lists: 0, rows bring their own) |
+| List row | min height 52, padding 8 14, gap 12 |
+| Key-value row | padding 9 12, gap 12, label column 70 to 110 |
+| Inspector | padding 16, sections 14 apart, 6 inside |
+| Panel (reference boards, large groups) | padding 20 22, gap 14 |
+| Grid gaps | KPI 12, cards 10 to 18 |
 
-## 6. Shape
+## 7. Shape
 
 | Element | Corner radius |
 |---|---|
-| Operational pill, counter, "Eligible" tag | capsule |
-| Evidence pill, document tag | 4 |
-| Key cap, context-menu item, skeleton bar | 5 |
-| Button, sidebar item, small icon tile (24 and 32) | 6 |
-| Row icon tile (26), pipeline cell, search field, palette row | 7 |
-| Feature switcher, notice well | 8 |
-| Banner, sidebar status well, context menu | 9 |
-| Dependency node, inspector, inner well, popover | 10 |
-| Card, list, dialog, command palette | 12 |
+| Window | 26 |
+| Alert | 22 |
+| Panel | 20 |
+| Sidebar, inspector, palette, notification, banner, empty-state card | 18 to 20 |
+| KPI card | 16 |
+| Card, list card, lifecycle card | 14 |
+| Node, menu, key-value card | 12 |
+| Picker row | 10 |
+| Nav item, field | 9 |
+| Tile: 44 / 36 / 28 / 24 / 22 | 12–13 / 9–10 / 8 / 7 / 6 |
+| Menu item | 7 |
+| Evidence pill | 6 |
+| Checkbox | 5 |
+| Document tag | 4 |
+| Pill, button, capsule, segmented control | full (999) |
 
-## 7. Sizes
+## 8. Sizes
 
 | Element | Size |
 |---|---|
-| Button, sidebar item, search field, toolbar icon button | height 28 |
-| Compact button (inspector, empty state), ghost link | height 26 |
-| Toolbar | minimum height 52, padding 8 vertical and 20 horizontal |
-| Sidebar | 236 wide |
-| Pipeline cell | height 32 |
-| Operational pill | height 18 in rows and nodes, 20 where it stands alone |
-| Evidence pill, document tag | height 18 (tag: 17 plus a 1 pt border) |
-| Row icon tile | 26 × 26 |
-| Dialog and popover icon tile | 32 × 32 and 24 × 24 |
-| Task node | 196 × 84 |
-| Gate node | 196 × 76 |
-| Inspector | 320 wide |
-| Dialog | 420 to 460 wide |
-| Command palette | 560 wide |
+| Sidebar | 240 to 256 wide |
+| Inspector | 280 to 320 wide |
+| List column (Agent Runs, Recovery, Approval Inbox) | 220 to 250 wide |
+| Button | height 32 (toolbar actions 34, inspector and empty-state actions 28), padding 0 14, gap 6 |
+| Icon button | 32 × 32 |
+| Segmented control | padding 2, segments 28 high, padding 0 13 |
+| Search field (sidebar) | height 30, capsule |
+| Field | min height 34, padding 0 12 |
+| Operational pill | height 22, padding 0 10, dot 6, gap 6 |
+| Evidence pill | height 22, padding 0 8, gap 5 |
+| Status pill in a row | height 20, padding 0 8 |
+| Counter pill in the sidebar | height 18, padding 0 6 |
+| Document tag | height 18, padding 0 6, 1 pt ring in the text color |
+| Dot | 8 (running: 3 pt `accentTint` halo) |
+| Lifecycle bar | 2 high, at least 12 wide |
+| Checkbox | 18 × 18, 1.5 ring `text3`; on: `accent` with a white check |
+| Row tile | 28 × 28 |
+| KPI tile | 24 × 24 |
+| Empty-state tile, alert icon | 44 × 44 |
+| Banner tile, notification icon | 36 × 36 |
+| Menu | at least 240 wide, padding 5 |
+| Palette | at most 460 wide |
+| Alert | at most 320 to 380 wide |
+| Content measure (centered reviews) | at most 860 |
 
-## 8. Icons
+## 9. Icons
 
-The canvas draws line icons with a 1.5 pt stroke on a 16-unit grid, round caps. The app uses SF Symbols at regular weight; the symbol for each glyph is chosen when its screen is built and recorded in that screen's notes.
+The boards draw line icons with a 1.5 to 1.8 stroke on a 16-unit grid. The app uses SF Symbols; a symbol is chosen per glyph when its screen is built and recorded in that screen's notes. Sidebar glyphs are `accent`. Evidence pills use the text symbols ✓ ✕ ? ○ ↷ ◐ ◆ ⊘ ! (COMPONENTS.md, section 2.3). No emoji.
 
-| Place | Size |
-|---|---|
-| Glyph inside an operational pill | 9 (stroke 1.4) |
-| Glyph inside an evidence pill | 10 (stroke 1.4) |
-| Trailing chevron of a row | 12 |
-| Button glyph, palette row glyph, tile glyph | 14 |
-| Sidebar glyph, banner glyph | 15 |
-| Toolbar glyph | 16 |
-| Empty-state glyph | 24 |
-
-No emoji anywhere.
-
-## 9. Motion and interaction states
-
-The canvas defines hover only.
+## 10. Interaction states
 
 | State | Treatment |
 |---|---|
-| Row and sidebar item under the pointer | background `hover` |
-| Ghost button under the pointer | background `fill` |
-| Clickable card under the pointer | `liftShadow` instead of `cardShadow` |
-| Disabled control | opacity 0.42, and the reason is always shown (COMPONENTS.md, section 3) |
-| Unavailable popover item | opacity 0.55 |
+| Nav item and picker row under the pointer | `grayBg` |
+| Chosen nav item and picker row | `accentTint`, nav text semibold |
+| List row under the pointer | `cardHover` |
+| Highlighted menu item | `accent` fill, white text, shortcuts at 80% white |
+| Disabled button | `grayBg` fill, `text3` text, and the reason beside it (COMPONENTS.md, section 3) |
+| Unavailable menu item | `text3`, the reason as trailing text |
+| Loading | skeleton bars; a spinner only in an empty-state tile, never over content |
 
-Pressed and keyboard-focus states are not drawn on the canvas. The app uses the system focus ring and the system pressed state until the design defines them.
+Pressed and keyboard-focus states are not drawn; the system ones are used.
 
-## 10. SwiftUI mapping
+## 11. SwiftUI mapping
 
-| Design concept | SwiftUI |
+| Design concept | SwiftUI (macOS 26) |
 |---|---|
-| Appearance | The system color scheme. One theme value holds every token for dark and one for light; views read it from the environment |
-| `rgba(255,255,255,a)` and `rgba(0,0,0,a)` overlays | `Color.white.opacity(a)`, `Color.black.opacity(a)` |
-| Inner ring (dark cards) | `.overlay` with a rounded rectangle and `strokeBorder` of 1 pt |
-| Outer ring and soft shadow (light cards) | the same 1 pt `strokeBorder` overlay plus `.shadow` |
-| Translucent sidebar | the system sidebar material (`NavigationSplitView`); the `sidebar` color is the fallback when transparency is reduced |
-| Traffic lights, window shadow, window corner | the system window. Never drawn by the app |
-| Capsule pill | `Capsule()` |
-| Dashed outline (gates, Unknown) | `StrokeStyle(lineWidth: 1, dash: [3, 3])` |
+| Appearance | The system color scheme, or the one Settings › Appearance forces. One token table per appearance, read from the environment |
+| Window material | The system window with a transparent title bar and full-size content; content is laid out to the window edge |
+| Glass panel (sidebar, inspector, banner) | `.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18))`, panels that sit side by side in one `GlassEffectContainer` |
+| Capsule, secondary button, segmented control | `.buttonStyle(.glass)`, `.glassEffect(in: Capsule())` |
+| Primary button | `.buttonStyle(.glassProminent)` tinted `accent` |
+| Card | `card` fill and an inner 0.5 `sep` ring; no blur |
+| Reduce Transparency | glass falls back to the opaque token value of the table (`glass`, `glassStrong` at alpha 1 over `window`) |
+| Traffic lights, window corner, window shadow | the system window; never drawn by the app |
+| Alert | `.alert` / `.confirmationDialog` where the layout fits; the boards' alert (key-value card, check box) as a sheet |
+| Notification | `UNUserNotificationCenter` |
+| Context menu | `.contextMenu` with `.keyboardShortcut` |
+| Command palette | a glass panel opened with ⌘K |
 | Tabular digits | `.monospacedDigit()` |
-| Uppercase tag with tracking | `.textCase(.uppercase)` and `.tracking(size × em)` |
-| Dialog, notification, context menu, command palette | system sheet or alert, `UNUserNotificationCenter`, `.contextMenu`, a panel opened with ⌘K |
+| Uppercase label or tag with tracking | `.textCase(.uppercase)` and `.tracking(size × em)` |
+| Dashed gate outline | `StrokeStyle(lineWidth: 1.5, dash: [4, 3])` |
 
-Accessibility: every status carries a glyph or a shape as well as a color, so it stays readable without color. Honor Reduce Transparency (opaque `sidebar`), Increase Contrast and Dynamic Type where the layout allows.
+Accessibility: every status has a shape or a symbol as well as a color. Honor Reduce Transparency, Increase Contrast and Reduce Motion.
+
+## 12. Moving the app (the Liquid Glass migration)
+
+The code (`macos/JojoApp/Sources/JojoApp/Theme.swift`) still holds the first system's tokens. The Liquid Glass migration moves it in this order: the token table and materials, the shell (sidebar, toolbar, inspector as glass panels), the status components, then each screen as it is rebuilt. COMPONENTS.md sections 13 to 24 describe the surfaces as built on the first system; each is rewritten when its screen moves.

@@ -1,263 +1,235 @@
 # Jojo design system: components
 
-The reusable parts of the app and the status model they draw. Token names refer to [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md). Source: canvas boards "Components and status model", "Themes and tokens" and "Dashboard"; see [README.md](README.md).
+The reusable parts of the app and the status model they draw. Token names refer to [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md). Source: the canvas page "Components & states", board "Components and status model" (`ComponentsMac.dc.html`), and the shell of the product boards (`DashboardMac.dc.html`, `AgentRunsMac.dc.html`, `RecoveryLaunchMac.dc.html`); see [README.md](README.md).
+
+Sections 1 to 12 are the design. Sections 13 to 24 are implementation notes written for the first design system; each is rewritten when its surface moves (DESIGN_SYSTEM.md, section 12).
 
 ## 1. Status model
 
-Three separate families, plus document status. They share colors and never share a shape, so they can sit side by side without being read as one progress value. A feature can be in Execution while its tasks are Running and Blocked and its evidence is Incomplete.
+Three separate families plus document status. Colors are shared, shapes are not, so they can sit side by side without being read as one progress value: a feature can be in Execution while its tasks are Running and Blocked and its evidence is Incomplete.
 
 | Family | Answers | Shape |
 |---|---|---|
-| Feature lifecycle | Where the feature is | Stepper |
-| Operational state | What is happening now | Capsule pill with a dot glyph |
-| Evidence and verification | What is proven | Square pill (radius 4) with a symbol glyph |
-| Document status | What is binding | Uppercase tag (radius 4) |
+| Feature lifecycle | Where the feature is | Stepper of dots and bars |
+| Operational state | What is happening now | Capsule with a dot |
+| Evidence and verification | What is proven | Rounded square with a symbol |
+| Document status | What is binding | Uppercase outline tag |
 
-**Unknown is never drawn as success or failure.** It has its own dashed outline and a question mark.
+**Unknown is never drawn as success or failure.** It is gray with a question mark.
 
 ## 2. Status components
 
 ### 2.1 Feature lifecycle stepper
 
-Stages, in order: Discovery, Specification, Planning, Execution, Verification, Evidence.
+Stages, in order: Discovery, Specification, Planning, Execution, Verification, Evidence. Drawn on a card (radius 14, padding 10 14) with the feature's task counts after it: pills "n running" (blue), "n blocked" (red), "n awaiting approval" (orange). The stepper scrolls sideways when narrow; the counts wrap below.
 
-| Stage state | Marker (14 × 14 circle) | Label | Connector after it (16 × 1) |
+| Stage | Dot (8) | Label (12) | Bar after it (2 high, flexible, at least 12) |
 |---|---|---|---|
-| Done | `ok` at 16% fill with a 9 pt check | 12, medium, `text2` | `ok` at 40% |
-| Current | 1.5 pt `info` ring with a 6 pt `info` dot | 12, semibold, `textStrong` | white at 12% (dark) |
-| Upcoming | 1.5 pt ring, white at 20% (dark) | 12, medium, `text3` | white at 12% (dark) |
+| Done | `green` | medium, `text2` | `green` |
+| Current | `accent` with a 3 pt `accentTint` halo | semibold, `text` | `dotOff` |
+| Upcoming | `dotOff` | medium, `text2` | `dotOff` |
+
+Dots and bars are 6 apart, stages 8 apart.
 
 ### 2.2 Operational pill
 
-Capsule, padding 7 leading and 8 trailing, gap 6, text 11 medium, height 18. Where the pill stands alone (the status legend, a state notice) it is 11.5 medium and 20 high.
+Capsule, height 22, padding 0 10, gap 6, text 11 semibold, a 6 pt dot in the text color before the label. Text in the hue, background its tint.
 
-| State | Text | Background | Glyph |
-|---|---|---|---|
-| Idle | `text2` | `fill` | 7 pt dot, filled |
-| Running | `info` | `infoTint` | 7 pt dot with a 3 pt halo of `infoTint` |
-| Waiting | `text2` | `fill` | 7 pt ring, 1.5 pt, not filled |
-| Blocked | `warn` | `warnTint` | 9 pt symbol |
-| Awaiting approval | `warn` | `warnTint` | 7 pt dot, filled |
-| Paused | `text2` | `fill` | 8 pt pause symbol |
-| Recovery required | `danger` | `dangerTint` | 9 pt ring, 1.5 pt, with a 3 pt dot inside |
-| Failed | `danger` | `dangerTint` | 7 pt dot, filled |
-| Completed | `ok` | `okTint` | 7 pt dot, filled |
-| Repairing | `info` | `infoTint` | 8 pt `arrow.triangle.2.circlepath` symbol (M4, D2: not on the canvas) |
+| State | Hue |
+|---|---|
+| Idle | gray |
+| Running | blue |
+| Waiting | gray |
+| Blocked | orange |
+| Awaiting approval | orange |
+| Paused | gray |
+| Recovery required | red |
+| Failed | red |
+| Completed | green |
+| Requested (sent to the core, not yet confirmed) | purple |
+| Repairing (M4, D2; not on the canvas) | blue |
 
-"Held" (Recovery Center rows) and "Requested" use the Recovery required and Waiting forms with their own label. "Temporarily unavailable" uses the Blocked form.
+In list rows and inside cards the same pill is drawn 20 high with padding 0 8 and without the dot (`DashboardMac`: "Proposed", "Needed", "Held", "Review"). Counters in the sidebar are pills 18 high, padding 0 6.
 
 ### 2.3 Evidence pill
 
-Radius 4, padding 6 leading and 7 trailing, gap 5, text 11.5 medium, height 18, 10 pt glyph.
+Rounded square, radius 6, height 22, padding 0 8, gap 5, text 11 semibold, a text symbol before the label.
 
-| State | Text | Background | Other |
-|---|---|---|---|
-| Passed | `ok` | `okTint` | |
-| Sealed | `ok` | `okTint` | |
-| Failed | `danger` | `dangerTint` | |
-| Incomplete | `warn` | `warnTint` | |
-| Needs approval | `warn` | `warnTint` | |
-| Not run | `text2` | `fill` | |
-| Skipped | `text2` | `fill` | |
-| Invalidated | `text2` | `fill` | Label struck through |
-| Unknown | `text2` | none | 1 pt dashed outline (white at 30% in dark); glyph is "?" at 10 pt bold |
+| State | Symbol | Hue |
+|---|---|---|
+| Passed | ✓ | green |
+| Failed | ✕ | red |
+| Unknown | ? | gray |
+| Not run | ○ | gray |
+| Skipped | ↷ | gray |
+| Incomplete | ◐ | orange |
+| Sealed | ◆ | green |
+| Invalidated | ⊘ | gray |
+| Needs approval | ! | purple |
 
 ### 2.4 Document tag
 
-Radius 4, horizontal padding 7, text 11 semibold uppercase with +0.02 em tracking, height 17 plus a 1 pt border.
+Height 18, padding 0 6, radius 4, text 10 bold uppercase, tracking +0.06 em, a 1 pt ring in the text color and no fill.
 
-| Status | Text | Background | Border |
-|---|---|---|---|
-| Proposed | `info` | none | `infoRing` |
-| Approved | `ok` | `okTint` | none |
-| Superseded | `text2` | `fill` | none |
-| Invalidated | `text2` | `fill` | none; label struck through |
-| Stale | `warn` | none | `warnRing` |
-
-A revision reference ("PRD rev 4") uses the Approved form.
-
-### 2.5 Counter
-
-Capsule, horizontal padding 6, text 11 semibold, height 17, background `fill`. The text color carries the meaning: `warn` for items that need the human, `info` for running, `danger` for failures, `text3` for a plain count.
-
-## 3. Buttons
-
-Height 28, horizontal padding 11, radius 6, text 12.5 medium, gap 6, optional 14 pt leading glyph. Compact size (inspector, empty state): height 26, horizontal padding 10.
-
-| Kind | Background | Text | Border |
-|---|---|---|---|
-| Primary | `accent` | `onAccent` | 1 pt black at 12% |
-| Secondary | `fill` | `text` | 1 pt `hairline` |
-| Ghost | none; `fill` under the pointer | `text2` | none |
-| Destructive | `dangerTint` | `danger` | 1 pt `dangerRing` |
-
-Rules:
-
-- **One primary action per area.**
-- **Destructive actions are red and always confirm.** Their label ends with an ellipsis when a dialog follows ("Cancel Attempt…").
-- A keyboard shortcut is shown inside the button at 11 pt and 70–75% opacity ("⌘↵", "⌘N", "esc").
-- **A disabled control always says why.** Opacity 0.42, a tooltip, and an inline reason where space allows: a 12 pt info glyph and 11.5 pt `text3` text ("Unavailable: 5 requirements unmet.").
-- **Unavailable and temporarily disabled are different.** A capability that does not exist yet: disabled button with the text "Not available yet" beside it. A capability that is off for now: disabled button with a "Temporarily unavailable" pill.
-- **Requested is not done.** After a command is sent and before the core confirms it, show a notice well (radius 8, padding 8 by 12, white at 5% in dark) with a "Requested" pill and the text "Sent to core · waiting for confirmation". Never show success before the core records it.
-
-## 4. App shell
-
-### 4.1 Sidebar
-
-236 wide, system sidebar material, `sidebarEdge` on the right, padding 12 by 10, 1 pt between items.
-
-| Part | Spec |
+| Status | Hue |
 |---|---|
-| Search field | Height 28, radius 7, background `fill`, 13 pt glyph, placeholder "Search or run" at 12.5 `text3`, key cap "⌘K" at the trailing edge. Opens the command palette |
-| Item | Height 28, radius 6, padding 9 leading and 8 trailing, gap 9, 15 pt glyph in `icon`, label 13 medium `navText`, optional counter at the trailing edge |
-| Selected item | Background `accent`, label and glyph `onAccent` |
-| Item under the pointer | Background `hover` |
-| Feature switcher | Radius 8, background `fill`, padding 7 by 8, 14 above and 4 below. A 24 pt avatar tile (radius 6, white 12 pt bold initial), project name at 11 `text3`, feature name at 12.5 semibold |
-| Section label | 11 semibold `text3`, padding 14 top, 9 sides, 4 bottom |
-| Status well, at the bottom | Radius 9, background `fill2`, padding 10, gap 8. First line: 7 pt status dot, "Admission open" or "Admission closed" at 12, session identifier in `mono` 11 `text3`. Second line: provider availability at 12 `text2` |
+| Proposed | blue |
+| Approved | green |
+| Superseded | gray |
+| Invalidated | red |
+| Stale | orange |
 
-Order of items in the canvas: Dashboard, Projects, Approval Inbox, Recovery Center; then the feature switcher and Feature Chat, Specifications, Execution Plan, Agent Runs, Source Control, Verification & Evidence; then the section "System" with Activity & Audit and Settings & Providers.
+Other uppercase tags use the same shape: "Eligible" (purple, on task nodes), "Not available yet" (gray), "Temporarily unavailable" (orange), "New" (blue, a changed line in a document).
 
-### 4.2 Toolbar
+## 3. Buttons and availability
 
-Minimum height 52, padding 8 by 20, background `toolbar`, `toolbarEdge` below.
+One primary action per area, filled with the accent. Secondary actions are glass capsules. Destructive actions are red text and always confirm. Disabled controls say why.
 
-- Leading: screen title in `toolbarTitle`; under it a breadcrumb at 11.5 with ancestors in `text3`, "›" separators in `text4` and the current place in `text2`.
-- Trailing: icon buttons (28 × 28, radius 6, 16 pt glyph, `text2`, `fill` under the pointer), then at most one primary button.
+| Kind | Look |
+|---|---|
+| Primary | `accent` fill, white text 13 medium, height 32, padding 0 14, capsule; a shortcut after the label at 75% opacity, 12 ("Start Discovery ⌘↵") |
+| Secondary | glass capsule (`glassStrong`), `text` |
+| Text (ghost) | no fill, `accent` text ("Reset", "View all") |
+| Destructive | no fill, `red` text, label ends with "…" when a confirmation follows ("Cancel Attempt…") |
+| Icon | 32 × 32 capsule, inside a glass capsule group with padding 2 |
+| Small | height 28, text 12 (inspector actions, empty states, row actions) |
+| Toolbar action | glass capsule, height 34, padding 0 16 |
 
-### 4.3 Content
+**Disabled always explains why.** A disabled button has a `grayBg` fill and `text3` text, and the reason stands beside it in `secondary` style ("Seal Evidence · Unavailable: 5 requirements unmet.").
 
-Background `content`, padding 20 (28 at the bottom), 22 between sections. A section is a heading row (minimum height 26: `sectionTitle`, optional counter, optional trailing ghost link of height 26 with a chevron) and, 10 below it, a card.
+**Unavailable and temporarily disabled differ.** A feature that does not exist yet carries the gray tag "Not available yet" ("Import from Figma"). One that is off for now carries the orange tag "Temporarily unavailable" ("Assign to Codex").
 
-## 5. Cards and lists
+**Requested, not yet confirmed.** No optimistic success: after a command is sent the control shows the purple operational pill "Requested" and "Sent to core · waiting for confirmation" until the core records the outcome.
+
+## 4. Materials and the app shell
+
+Four surfaces. Glass is for chrome that floats (sidebar, inspector, toolbar capsules, sheets). Content sits on cards. Never put glass on glass.
+
+| Surface | Use |
+|---|---|
+| Glass panel | Sidebar, inspector, banners, alerts, menus, palette, notifications. Blur 30, rim highlight |
+| Capsule | Toolbar groups, secondary buttons, segmented controls, the search field |
+| Card | Content: lists, documents, tables, KPI tiles. Hairline ring, no blur |
+| Well | Quiet grouping: the gates column, freshness strips. `grayBg`, no ring |
+
+### 4.1 Window
+
+The window material (radius 26) with padding 8. Inside it, side by side: the sidebar, the content column and, on screens that have one, the inspector. Sidebar and inspector are glass panels inset from the window edge (radius 18); the content column has no surface of its own.
+
+### 4.2 Sidebar
+
+Glass panel, 240 to 256 wide, padding 14 10 12, groups 14 apart.
+
+1. The traffic lights (system), then the search capsule: height 30, a magnifier, the placeholder "Search or run" in `text3`, "⌘K" at 11.
+2. Workspace: Dashboard, Projects, Approval Inbox (counter: the pending approvals), Recovery Center (counter: "n held").
+3. The current feature, headed by the project badge (16 × 16, radius 5, the project's initial, 10 bold white) and "Project · Feature-ID Feature name" in `sidebarSection` style: Feature Chat, Specifications, Execution Plan, Agent Runs, Source Control, Verification & Evidence.
+4. System: Activity & Audit, Settings & Providers.
+5. At the bottom, a card (radius 12, padding 10): the admission dot and "Admission open" (12 semibold) with the session identifier ("S-0412", `text2`), then one pill per provider: green with its name when available, orange "Codex limited" when the CLI reports a limit.
+
+A nav item is 30 high, radius 9, padding 0 9, gap 9: an `accent` glyph, the label (13), and a trailing counter. Plain counts are `text2` at 12 ("2", "5 held"); counts that need the human are pills 18 high: blue for open questions and proposed documents, orange for violations. The chosen item has `accentTint` and a semibold label; hover is `grayBg`.
+
+### 4.3 Header
+
+No separate toolbar strip: each screen starts with a header row (min height 44, gap 10 to 12, wraps).
+
+- **Title block:** the screen title (`pageTitle` 20, Dashboard 22) and under it a `sub` line: the place ("Workspace · Monday, 16 November", "Workspace · Recovery Center · Launch review") or the path "Crew › FT-142 Lobby invite links › attempts".
+- **Actions**, trailing: a glass capsule group of text buttons for related views (12, transparent), then toolbar actions (capsules, 34 high), then a capsule group of icon buttons (filter, inspector), and at most one primary button.
+- **Feature screens** add the lifecycle card (section 2.1) under the header.
+
+### 4.4 Inspector
+
+A glass panel on the trailing side, 280 to 320 wide, radius 18, padding 16. Task, Agent and Recovery inspectors share one header and section rhythm:
+
+- **Header:** a kicker in `sub` style ("Agent attempt · T4"), the title (`inspectorTitle` 16 bold), then the object's pills (operational and evidence side by side).
+- **Sections**, 14 apart: an uppercase `label` heading, then a key-value card (radius 12): rows padding 9 12, gap 12, label column 70 to 110 in `text2`, values in `text` or `mono`, rows separated by a 0.5 `sep` line.
+- **Actions:** the last section, small buttons (28), primary first.
+
+### 4.5 Content
+
+Sections 16 to 20 apart. A section heading is a row: the title (`sectionTitle` 15 semibold), a count in `sub` style, and a trailing text link (13 medium `accent`, "Approval Inbox") that opens the related screen. Group labels inside a section are 11 semibold `text3` in capitals ("APPROVALS · 4").
+
+## 5. Cards, lists and rows
 
 ### 5.1 Card
 
-Background `surface`, radius 12, `cardShadow`, padding 14 by 16, content clipped to the radius.
+`card` fill, inner 0.5 `sep` ring, radius 14. Lists inside a card clip to it.
 
 ### 5.2 KPI tile
 
-A clickable card (`liftShadow` under the pointer), minimum width 200, gap 6:
+A clickable card, radius 16, padding 14 16, gap 6: a 24 × 24 tile (radius 7, fixed color, white glyph) and a label (13 semibold); the value (30 bold, −0.03 em) with its unit in `sub` style on the same baseline; a `sub` line that names the items ("T4 on Claude Code · T5 on Codex"). Laid out in a grid of columns at least 190 wide, gap 12.
 
-1. Label row: 8 pt status dot (Running adds the halo), label at 12 medium `text2`, trailing 12 pt chevron.
-2. Value row, baseline aligned, gap 6: number in `kpiNumber` `textStrong`, unit at 13 medium `text3`.
-3. Caption at 12 `text3`, one line.
+### 5.3 List row
 
-### 5.3 List and row
+A button, min height 52, padding 8 14, gap 12: a 28 × 28 tile (radius 8, fixed color by kind), a column with the title (13 semibold) and a `sub` line, a status pill (20 high), and a trailing chevron. Rows after the first have a 0.5 `sep` top line; hover is `cardHover`.
 
-A list is a card with no padding. Rows are separated by a 1 pt `hairline`; the last row has none.
+Tile colors by kind (DashboardMac): architecture decision indigo, plan blue, scope expansion orange, external action teal, recovery hold red, recovery review purple.
 
-| Part | Spec |
-|---|---|
-| Group header | Padding 9 top, 7 bottom, 16 sides; background `fill2`; `hairline` below; label in `groupHeader` `text3`; optional counter |
-| Row | Padding 11 by 16, gap 12, vertically centered, `hover` under the pointer |
-| Leading tile | 26 × 26, radius 7, fixed color by kind, white 14 pt glyph |
-| Text column | Gap 1. Line one, baseline aligned with gap 8: title at 13 semibold `textStrong`, meta at 11.5 `text3`. Line two at 12 `text2`. Each line is cut with an ellipsis |
-| Trailing | One status component (pill or tag), then a 12 pt chevron in `text4` |
+### 5.4 Picker row
 
-### 5.4 Pipeline cells
+For lists in a column (attempts, held items, sections): padding 9 10, radius 10, gap 10, no card; a title (13 semibold) with a status pill (18 high) and a `sub` line. Hover `grayBg`, chosen `accentTint`. Group headings in the column are `label` style.
 
-A grid of equal columns with a gap of 6. Each cell: height 32, radius 7, centered, text 11.5 semibold, gap 5.
+### 5.5 Pipeline cells
 
-| Cell state | Treatment |
-|---|---|
-| Done | `okTint` background, `ok` 13 pt check, no visible label (the label "Done" is for assistive technology) |
-| Sealed | `okTint` background, `ok` text with a 12 pt glyph |
-| Needs the human | `warnTint` background, `warn` text, 1 pt `warnRing` |
-| Running | `infoTint` background, `info` text with a 6 pt dot, 1 pt `infoRing` |
-| Not reached | no background, 1 pt `ringEmpty` |
+The Dashboard's project table: one row per feature, one column per lifecycle stage (grid: the feature column at least 200 and 2 parts, six stage columns at least 86 and 1 part; gap 8, padding 12 16, rows separated by a 0.5 `sep` line). The feature column holds its name (13 semibold) and "Project · Feature-ID" in `sub`. A stage cell holds an 8 pt dot and a word (12 `text2`, gap 6): green "Done", orange for what waits on the human ("ADR rev 3", "Q open", "Stale"), the running dot with "n running", green "Sealed". Stages not reached are a `dotOff` dot alone.
+
+### 5.6 Field, check box, segmented control
+
+- **Field:** min height 34, padding 0 12, radius 9, `cardHover` fill, inner 0.5 `sep` ring and a faint inner top shadow; text 13.
+- **Check box:** 18 × 18, radius 5, 1.5 ring `text3`; on, `accent` with a white check. Used as a row's leading slot in review lists.
+- **Segmented control:** a capsule group with padding 2; segments 28 high, padding 0 13, text 12 medium; the chosen one is a `cardHover` capsule with a soft shadow.
 
 ## 6. Dependency nodes
 
-Task nodes are solid; gates are dashed.
+Task nodes are solid cards; gates are dashed.
 
-**Task node.** 196 × 84, radius 10, background `surface`, padding 9 by 11, gap 4. Line one: task identifier in `mono` 11.5 medium on the left, operational or evidence pill on the right. Line two: title at 12.5 semibold `textStrong`. Line three: provider or blocker count at 11.5 `text3`.
-
-| Node state | Outline (1 pt, inside) |
+| Node | Look |
 |---|---|
-| Default | white at 7% (dark) |
-| Running | `info` at 60% |
-| Blocked | `warn` at 45% |
+| Task | `cardHover`, inner 0.5 `sep` ring, radius 12, padding 10 12, gap 4, at least 170 wide. First line: the task key (`mono` bold) and its pill; then the name (13 semibold); then the provider in `sub` style, with the purple tag "Eligible" when it can start, or the blocker count |
+| Running task | a 2 pt `accent` ring |
+| Blocked task | a 2 pt `orange` ring |
+| Passed task | the evidence pill "✓ Passed" in place of the operational pill |
+| Gate | no fill, a 1.5 dashed `text3` outline, radius 12: the gate kind as a `label` ("Approval gate", "Deployment gate"), its subject (13 semibold), its progress in `sub` style ("0 of 2 approved", "0 of 4 checks") |
 
-A task that may start carries the tag "Eligible": capsule, `accent` background, white 10.5 semibold text, height 16, horizontal padding 6, placed over the top right corner (9 above the top edge).
+## 7. Alerts and confirmations
 
-**Gate node.** 196 × 76, radius 10, 1 pt dashed outline (white at 32% in dark), background slightly darker than `surface` (`#1E1E22` in dark), padding 9 by 11, gap 4. Line one: 12 pt glyph and the gate kind at 11 semibold ("Approval gate" in `warn`; "Deployment gate" and "Verification gate" in `text2`). Line two: what the gate waits for. Line three: its progress ("0 of 2 approved", "Not run").
+macOS alert layout, only for consequential actions: a glass panel, radius 22, padding 22, gap 12, 320 to 380 wide.
 
-## 7. Dialogs
+1. The app icon tile (44 × 44, radius 12, the app gradient, "J").
+2. The question as the title (15 bold): "Authorize push to origin?", "Cancel T4 · Attempt 2?".
+3. What it does, in 12 `text2`: "This leaves your Mac. Jojo can't undo it."
+4. The exact object as a key-value card (labels 86 wide): Repository, Remote ref, Commit, Verification (with its evidence pill), and **Does not** ("Create a pull request").
+5. For external actions, a check box the human ticks: "I reviewed the changes in this exact commit".
+6. Buttons of equal width, the default on the right: a capsule "Cancel" / "Keep Running", and the action, primary ("Authorize Push") or destructive filled `#ff3b30` ("Cancel Attempt").
 
-Only for consequential actions. **Each dialog names the exact object and says what the action does not do. There is no generic approve.**
+## 8. Command palette, notification, context menu, provider selector
 
-Layout: 420 to 460 wide, radius 12, padding 18, 14 between blocks.
+Native patterns on Liquid Glass.
 
-1. Header: 32 × 32 icon tile (radius 6; approval color for an authorization, destructive color for a destructive action), title in `dialogTitle`, one consequence sentence in `text2` ("This leaves your Mac. Jojo can't undo it.").
-2. Facts: a well (background `surface`, radius 10) holding a two-column grid, label column 96 wide in `text3`, values at 12.5; identifiers in `mono`. Row and column gaps 7 and 10. For a push: Repository, Remote ref, Commit, Verification, and a row "Does not" naming what is excluded ("Create a pull request").
-3. Acknowledgement, where the action is irreversible: a checkbox whose label states exactly what was reviewed ("I reviewed the changes in this exact commit"). The primary button stays disabled until it is checked.
-4. Buttons, trailing: the cancel button first with its key ("esc"), then the action button with its key ("⌘↵"). The cancel button of a destructive dialog says what continues ("Keep Running"), not "Cancel".
+- **Command palette (⌘K):** a glass panel, radius 18, padding 8, at most 460 wide. The query (15) with a magnifier and "esc"; a separator; menu items with a trailing shortcut or kind ("Inspect T4 · Invite endpoint ⌘I", "Open ADR-031 · Invite token storage · Spec", "Go to FT-142 · Lobby invite links · Feature", "Search history for “inv” · Audit").
+- **Notification:** a system notification: the app icon (36), "Jojo", the time, a title ("Approval needed: ADR-031 rev 5") and a line ("Unblocks T6 in FT-142").
+- **Context menu:** a glass menu, radius 12, padding 5, at least 240 wide. Items 13, padding 5 10, radius 7, shortcuts in `kbd`; separators 1 high with 4 8 margins. An unavailable item is `text3` with its reason trailing ("Start Task · 4 blockers"); a destructive one is red ("Cancel Attempt…").
+- **Provider selector:** a glass menu. Each provider: a 22 × 22 tile (radius 6, "CC" on `#c2643a`; "CX"), the name (semibold) and its capabilities in `sub` style ("Resume · events · tokens"), a check mark on the chosen one. An unavailable provider is drawn as an unavailable item with the reason ("Limit reached · reported 09:12") and a gray tile.
 
-In the app these are sheets on the window they concern.
+## 9. Inspector, verification result, diff
 
-## 8. Command palette, menus, popovers, notifications
+- **Inspector:** section 4.4.
+- **Verification result row:** a list row without a tile: the suite name (13 semibold) and its detail as the `sub` line (red when failed: "expected 410, got 200"), the count in `mono` ("37 / 38"), the evidence pill, and a small primary action on the failing row ("Inspect Failure"). A manifest row shows its digest in `mono` `text2` ("sha256 9f2c…41ab").
+- **Diff:** `code` text (`mono` 12, line height 1.6) on the card, padding 8 0, a 0.5 `sep` top line. Each line is a grid of three columns (30, 16, flexible; gap 6; padding 1 12): the line number in `text3`, the sign, the code. Added lines on `greenBg`, removed lines on `redBg`.
 
-Native patterns.
+## 10. Banners
 
-| Component | Spec |
-|---|---|
-| Command palette (⌘K) | 560 wide, radius 12. Input row: padding 12 by 14, 16 pt glyph, 15 pt text, "esc" key cap, separator below. Results: padding 6, a group label, rows with padding 7 by 10, radius 7, a 14 pt glyph, the title, and a trailing kind or shortcut at 11.5. Selected row: `accent` background, white text |
-| Context menu | The system menu. Items carry their shortcut; an item that cannot run is disabled and shows the reason in place of the shortcut ("Start Task · 4 blockers"); destructive items are last, after a separator, in `danger`, ending with an ellipsis |
-| Provider selector | A popover. Each provider is a row with a 24 pt tile, its name at 13 semibold and one status line at 11.5 `text2`. The selected row has an `accent` tint (16%). A provider that cannot be chosen is shown at 55% opacity with the reason and the time it was reported ("Limit reached · reported 09:12") |
-| Notification | A system notification: title naming what is needed and for which object ("Approval needed: ADR-031 rev 5"), body naming the effect ("Unblocks T6 in FT-142") |
-| Key cap | Text 11 medium `text2`, minimum width 16, horizontal padding 5, height 17, radius 5, background `fill`, `kbdShadow` |
+Two sizes.
 
-## 9. Inspector
+- **Page banner:** a rounded panel (radius 18, padding 18 20, gap 14) on the hue's tint (`redBg` for closed admission), with a 36 × 36 tile (radius 10, fixed color, white glyph), a title (17 bold) and a sentence (13, line height 1.55). It stands above the content it blocks.
+- **Inline banner:** a glass strip inside a content card (inset 12, radius 16, padding 10 12, gap 12, wraps) with a 26 × 26 tile, a title (13 semibold), a `sub` sentence and an action at its trailing edge ("Feature continues · T7 is blocked by Q4" · "Answer Q4").
 
-One header and one section rhythm for the Task, Agent and Recovery inspectors. 320 wide, radius 10 when it floats; a `hairline` separates its parts.
+## 11. Fact strip
 
-| Part | Spec |
-|---|---|
-| Header | Padding 14 top, 16 sides, 12 bottom, gap 6. Kicker at 11 medium `text3` (kind and scope), title in `inspectorTitle` `textStrong`, then a wrapping row of status components with a gap of 6 |
-| Section | Padding 12 by 16, gap 8. Title at 11.5 semibold `text3`. Content is usually a two-column grid: label column 104 wide in `text3`, values at 12.5, identifiers in `mono` |
-| Actions | The last section: compact buttons, one primary at most |
+A grid of small cards (radius 14, padding 12 14, gap 4, columns at least 180 wide, gap 10): a `label` and the value (13 semibold, `mono` 15 bold for identifiers, or a pill with a `sub` note). Used for the inspection on the launch review, the candidate on Verification, a branch on Source Control.
 
-## 10. Verification result and diff
+## 12. Not drawn on the canvas
 
-**Result row.** Padding 10 by 14, gap 10, `hairline` between rows: name at 13 semibold, evidence pill, count in `mono` ("37 / 38"), the first failure in `text3` ("expected 410, got 200"), a compact secondary button ("Inspect Failure").
-
-**Evidence row.** Name, digest in `mono` 11 `text3` shortened in the middle ("sha256 9f2c…41ab"), evidence pill.
-
-**Diff.** Radius 10, monospaced 12 pt with a line height of 22, vertical padding 6. Columns: line number (34 wide, right aligned, muted), sign (16 wide), code (whitespace kept).
-
-| Line | Background | Sign |
-|---|---|---|
-| Removed | `danger` at 10% | "-" in `danger` |
-| Added | `ok` at 9% | "+" in `ok` |
-| Context | none | none |
-
-## 11. Banners
-
-Full-width notice at the top of a surface whose data cannot be acted on as usual (see [STATES.md](STATES.md)). Padding 10 by 14, radius 9, gap 12: a 15 pt glyph, a title at 13 semibold `text`, one sentence in `text2`, and one compact button at the trailing edge.
-
-| Kind | Background | Outline (1 pt) |
-|---|---|---|
-| Warning (stale) | `warn` at 8% | `warn` at 28% |
-| Danger (disconnected, recovery required) | `danger` at 8% | `danger` at 28% |
-
-## 12. Gaps in the canvas
-
-The component board is drawn in dark only, with literal colors. Where it and the token table disagree, the token table wins (it is read from the Dashboard stylesheet). These points need a decision or a light value when their screen is built:
-
-| Point | Component board (dark) | Token table |
-|---|---|---|
-| Secondary button and neutral pill background | white at 8% and 6% | `fill`, white at 7% |
-| Primary button border | black at 20% | black at 12% |
-| Halo of the Running dot | `info` at 22% | `infoTint`, 12% |
-| Card outline | white at 7% | `cardShadow`, white at 6% |
-| Dialog and palette background | `#26262B` | no token; no light value |
-| Popover and menu background | `rgba(40,40,45,0.97)` | no token; no light value. System material in the app |
-| Gate node background | `#1E1E22` | no token; no light value |
-| Diff background, line-number and code colors | `#17171A`, `#6E6E76`, `#E6E6EA` | no token; no light value |
-| Dashed outlines, stepper rings and connectors | white at 12% to 32% | no token; no light value |
-| Banner tint and outline | status color at 8% and 28% | differ from the `*Tint` and `*Ring` tokens |
-| Pressed and focused states | not drawn | not defined |
+These have no value on the boards; the app uses the system's until they are drawn: pressed and keyboard-focus states, a narrow-window layout of the inspector (the boards wrap it under the content), drag and drop targets, tooltips.
 
 ## 13. Implementation notes: app shell and status components (design wave 1)
 

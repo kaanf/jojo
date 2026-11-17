@@ -1,6 +1,6 @@
 # Jojo design system: states
 
-What every data surface shows when it has nothing, is waiting, failed, or cannot be trusted. Components and tokens refer to [COMPONENTS.md](COMPONENTS.md) and [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md). Source: canvas board "States"; see [README.md](README.md).
+What every data surface shows when it has nothing, is waiting, failed, or cannot be trusted. Components and tokens refer to [COMPONENTS.md](COMPONENTS.md) and [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md). Source: the canvas page "Components & states", board "States" (`StatesMac.dc.html`); see [README.md](README.md).
 
 ## 1. Rules
 
@@ -9,33 +9,43 @@ What every data surface shows when it has nothing, is waiting, failed, or cannot
 3. **No optimistic success.** A command that was sent is "Requested" until the core records it.
 4. **A message says what happened, in the system's own terms, and what did not change.** "git status exited 128: not a git repository." "Nothing was changed."
 5. **A state that removes actions says so and offers the one action that restores them.**
+6. **Skeleton rows keep the layout; no spinner over content.** A spinner appears only inside the tile of a placeholder.
 
-## 2. Application states
+## 2. The placeholder
 
-| State | When | Form | Content | Actions |
+The states are drawn the way macOS apps present them inside a window: a centered placeholder on a card.
+
+- Card: radius 18, padding 20, at least 220 high, content centered, gap 10.
+- From top to bottom: the state's name as a `label` (shown on the reference board only), a 44 × 44 tile (radius 13) with a white glyph, the title (15 bold), one sentence in `sub` style (at most 280 wide, line height 1.45), then the actions (buttons 28 high, text 12, gap 6) or a pill.
+
+Where a surface already shows content (the last known state, facts that went stale), the state is the page banner of COMPONENTS.md, section 10, above that content instead, with the same title, sentence and action. The board draws the placeholders only; this rule is ours.
+
+## 3. Application states
+
+| State | When | Tile | Title · sentence | Actions |
 |---|---|---|---|---|
-| Empty | The surface has no data yet | Centered block: 24 pt glyph, title at 13 semibold `textStrong`, one sentence in `text2` (at most 320 wide), buttons | "No projects yet" · "Create a project or import a folder that already has Git repositories." | One primary ("Create Project"), one secondary ("Import…") |
-| Loading | Data was requested and has not arrived | A line of text in `text2` naming what loads, then three skeleton bars (height 10, radius 5, widths 70%, 90%, 55%, white at 8% in dark) | "Loading attempts…" | None |
-| Error | A read failed | Centered block as Empty | "Couldn't read crew-app" · the exact cause | Primary "Retry", ghost "Show Details" |
-| Permission denied | macOS refused access | Centered block as Empty | "Jojo can't access ~/Code/crew" · "macOS hasn't granted folder access. Nothing was changed." | Primary "Grant Access…" |
-| Stale | The facts shown are older than the action needs | Warning banner above the data, which stays visible | "These facts are 38 minutes old" · "Inspected 09:04. Recovery actions stay unavailable until you reinspect." | "Reinspect" |
-| Disconnected | The helper does not answer | Danger banner; the last known state stays visible, read-only | "Jojo core isn't responding" · "Showing the last known state, read-only. No actions can be requested." | "Reconnect" |
-| Recovery required | Admission is closed until a reviewed start | Danger banner | "Execution admission is closed" · "Review inspection RI-12 to start a new session." | "Open Review" |
-| Requested, awaiting core | A command was sent and is not yet confirmed | Notice well with a "Requested" pill | "Push authorization sent. Shown as authorized only after the core records it." | None. The control that sent it cannot send again |
-| Unknown outcome | An external action's result cannot be determined | The object's name, an Unknown evidence pill ("?" with "Outcome unknown"), and one line in `text3` | "Never shown as done or failed. Never retried automatically." | Ghost "Inspect in Recovery" |
+| Empty | The surface has no data yet | `accent` | "No projects yet" · "Create a project or import a folder that already has Git repositories." | Primary "Create Project", secondary "Import…" |
+| Loading | Data was requested and has not arrived | `grayBg` with a spinner (22, 2.5 ring `accentTint`, top `accent`, 0.9 s a turn) | "Loading attempts…" · "Skeleton rows keep the layout; no spinner over content." Two skeleton bars (10 high, radius 5, `grayBg`, full and 70%, at most 260 wide) | None |
+| Error | A read failed | red `#ff3b30` | "Couldn't read crew-app" · the exact cause ("`git status` exited 128: not a git repository.") | Primary "Retry", secondary "Show Details" |
+| Permission denied | macOS refused access | orange `#ff9500` | "Jojo can't access ~/Code/crew" · "macOS hasn't granted folder access. Nothing was changed." | Primary "Grant Access…" |
+| Stale | The facts shown are older than the action needs | orange `#ff9500` | "These facts are 38 minutes old" · "Inspected 09:04. Recovery actions stay unavailable until you reinspect." | Primary "Reinspect" |
+| Disconnected | The core does not answer | gray `#8e8e93` | "Jojo core isn't responding" · "Showing the last known state, read-only. No actions can be requested." | Primary "Reconnect" |
+| Recovery required | Admission is closed until a reviewed start | red `#ff3b30` | "Execution admission is closed" · "Review inspection RI-12 to start a new session." | Primary "Open Review" |
+| Requested, awaiting core | A command was sent and is not yet confirmed | purple `#af52de` | "Push authorization sent" · "Shown as authorized only after the core records it." | None: the purple pill "Requested". The control that sent it cannot send again |
+| Unknown outcome | An external action's result cannot be determined | gray `#8e8e93` | "Push op-7f3a" · "Never shown as done or failed. Never retried automatically." The evidence pill "? Outcome unknown" | Secondary "Inspect in Recovery" |
 
-## 3. Discovery states
+## 4. Discovery states
 
-Feature Chat across the first lifecycle stage.
+Feature Chat across its lifecycle, in the same placeholder.
 
-| State | Form | Content | Action |
+| State | Tile | Title · sentence | Action |
 |---|---|---|---|
-| Empty | Centered block | "Describe what users should be able to do" · "Jojo reads the code and asks before planning." | Primary "Start Discovery" |
-| Investigating | "Investigating" pill (Running form), progress in `text2`, two skeleton bars, a note in `text3` | "Reading crew-api · 3 of 5 areas" · "Read-only. No files are changed during discovery." | None |
-| Blocked | Warning banner | "Whole feature blocked by Q2" · "FT-145 can't move to Specification until “Rank by season or all-time?” is answered." | "Answer Q2" |
-| Complete | "Discovery complete" evidence pill (Passed form), a revision tag ("PRD rev 4"), a summary in `text2` | "5 questions resolved · 3 assumptions tracked. History stays with the feature across revisions." | Secondary "Open PRD" |
+| Empty | `accent` | "Describe what users should be able to do" · "Jojo reads the code and asks before planning." | Primary "Start Discovery" |
+| Investigating | `grayBg` with the spinner | "Investigating" · "Reading crew-api · 3 of 5 areas. Read-only: no files are changed during discovery." | None: the blue pill "Running" |
+| Blocked | orange `#ff9500` | "Whole feature blocked by Q2" · "FT-145 can't move to Specification until “Rank by season or all-time?” is answered." | Primary "Answer Q2" |
+| Complete | green `#34c759` | "Discovery complete" · "PRD rev 4 · 5 questions resolved · 3 assumptions tracked. History stays with the feature across revisions." | Primary "Open PRD" |
 
-## 4. How the states map to what the helper reports today
+## 5. How the states map to what the helper reports today
 
 The right column names what exists in the app and protocol now. Rows without a source cannot be built yet.
 
