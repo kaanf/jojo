@@ -451,3 +451,26 @@ Built in `macos/JojoApp/Sources/JojoApp/FeatureChat.swift` for `docs/design/scre
 | `LineField` | A frameless one-line text field; off screen its text or prompt as plain text, because a text field does not draw there |
 | `ChatHeaderActions`, `CapsuleTextButtonStyle` | The header's capsule group of 12 text buttons ("Create Spike", "Export Transcript") |
 
+
+## 28. Implementation notes: feature screen surfaces (Liquid Glass, step 4, the six screens after Feature Chat)
+
+Built in `macos/JojoApp/Sources/JojoApp/FeatureScreens.swift` for Specifications, the Approval Inbox, Execution Plan, Agent Runs, Source Control and Verification & Evidence (`docs/design/screens/`). These screens use only Liquid Glass surfaces (sections 25 to 28).
+
+| Component | Notes |
+|---|---|
+| `FeatureScope` | The feature Feature Chat holds and its `Features` row: the header's place ("Sample › FT-3 Slugify from the shell › Specifications") and which rows a screen lists; everything when none is held. The sidebar's feature heading names it |
+| `LifecycleCard` | Section 2.1 on a card (radius 14, padding 10 14) with the count pills; also Feature Chat's |
+| `HeaderButtons`, `HeaderButton` | A header capsule group of 12 text buttons (`CapsuleTextButtonStyle`, section 27); a disabled one says why in its help text |
+| `GlassInspector`, `LabeledSection` | The trailing glass panel (radius 18, padding 16, sections 18 apart); a `label` heading with an optional trailing link |
+| `Definition`, `DefinitionCard` | The boards' `dl.card`: rows padding 9 12, a fixed-width `text2` key, the value (plain or `mono`) and an optional pill, a 0.5 `sep` between rows, radius 12 |
+| `FactStrip`, `FlowRow` | Label over a 13 semibold value, wrapping cells at least 110 wide, on a card (radius 14, padding 12 14); a layout that wraps its children |
+| `LetterTile` | A 26 × 26 tile (radius 7) with "PRD", "ADR", "PLAN" on the kind's color; gray for a superseded revision |
+| `SelectableRow` | A leading-column row (radius 10, padding 8 10): chosen `accentTint`, under the pointer `cardHover` |
+| `TintedNotice` | A tinted banner (radius 14, padding 12 14) with a title, a sentence and trailing buttons: revision, scope and stale notices |
+| `CoreBanners`, `NotReported` | A lost or incompatible core and a 1.9 query the core does not list; the sentence where the board has a value without a source |
+| `FeatureColumns`, `InspectorColumns` | Three columns (leading, main, inspector) from a wide width, two below, one at the narrowest; main and inspector beside each other or stacked |
+| `approvalPill`, `documentTile`, `documentCode`, `boardTime`, `elapsedText` | Proposed blue, Approved green, Superseded gray, Rejected and Revoked red, Stale and Has findings orange; "09:21" today, "Nov 13 10:02" before; "12m 08s" |
+
+Screen-own pieces: the grid nodes and gate nodes of Execution Plan (dashed outline for a gate, 2 `accent` ring when chosen), the dark console of Agent Runs (`#15161B`, text `#D6D9E4`), the unified and side-by-side diff of Source Control (two number columns, `redBg` and `greenBg` lines), the verdict tiles of Verification & Evidence.
+
+Removed with the first-system screens (2026-11-17): `LeadingTile`, `LabeledField`, `Timeline`, `TimelineEntry`, `Console`, `ResultRow`, `EvidenceRow`, `DiffLine`, `DiffView`, `ChangeBadge`, `ChangedFileRow`, `RequestTile`, `RequestRow`, `ValueLine`, `DocumentRow`, `DocumentSection`, `TraceLine`, `TaskNode`, `GraphEdge`, `LaneBand`, `GroupHeader` (sections 14 to 19 and 22 describe them as they were). `ConsoleLine`, `FactLine`, `InputField`, `RequestedNotice` and the other surfaces still used by Recovery Center, Activity & Audit, Settings and Projects stay.

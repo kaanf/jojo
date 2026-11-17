@@ -222,8 +222,8 @@ M0 is the close-out of Phase 2; M1–M6 are Phase 3.
 8. The Liquid Glass migration: tokens, materials, the glass shell and the status components (`docs/design/DESIGN_SYSTEM.md`, `COMPONENTS.md`). Done 2026-11-17.
 9. User-facing data in the core: names of features, tasks and documents; the live state of an attempt; pending approvals; time and actor of events. Done 2026-11-17: protocol 1.6, no schema change (DESIGN_ROADMAP_DIFFERENCES.md, E11).
 10. Dashboard. Done 2026-11-17: protocol 1.7 (`Features`; more fields of `Attempts` and `Events`), no schema change; the app opens on it (DESIGN_ROADMAP_DIFFERENCES.md, E12).
-11. The screens in flow order, each from its `…Mac.dc.html` board: New Feature (done 2026-11-17, E13), Feature Chat (done 2026-11-17, protocol 1.8, E14), Specifications, Approval Inbox, Execution Plan, Agent Runs, Source Control, Verification & Evidence.
-12. M5 with design wave 4 (push and draft PR on the rebuilt Source Control and Approval Inbox). The demo is complete here.
+11. The screens in flow order, each from its `…Mac.dc.html` board: New Feature (done 2026-11-17, E13), Feature Chat (done 2026-11-17, protocol 1.8, E14), Specifications, Approval Inbox, Execution Plan, Agent Runs, Source Control, Verification & Evidence (done 2026-11-17: protocol 1.9 with `Document`, `Decisions`, `PlanDetail`, `AttemptDetail`, no schema change; the app is light; E15). Done.
+12. M5 with design wave 4 (push and draft PR on the rebuilt Source Control and Approval Inbox, whose push and pull request places are ready and disabled). Next. The demo is complete here.
 13. Projects, Recovery Center, Activity & Audit, Settings & Providers; then Onboarding and New Project (deferred by the human).
 
 Refactor R-02 (splitting `supervise` and `spawn_guarded`) follows the demo; the helper part of it happens while M3 touches `service.rs`.

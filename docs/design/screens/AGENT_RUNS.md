@@ -1,197 +1,59 @@
-# Jojo screens: Agent Runs
+# Agent Runs
 
-Transcribed on 2026-11-16 from the canvas board "Agent Runs" (drawn in dark only; six attempts, one selected at a time). Tokens, components and states refer to [DESIGN_SYSTEM.md](../DESIGN_SYSTEM.md), [COMPONENTS.md](../COMPONENTS.md) and [STATES.md](../STATES.md). Sections 1 to 3 are the canvas. Section 4 is what the app builds today and why it differs.
+Source: the canvas "Jojo macOS", page "Product", board "Agent Runs" (`AgentRunsMac.dc.html`, 1440 × 1400, light by default). Read on 2026-11-17 from version `1794942048-8ee3`; the board file is byte-identical to the copy read at version `1794922102-b518` (sha256 `fe7dfe82…875f`). Tokens, components and states are named as in [DESIGN_SYSTEM.md](../DESIGN_SYSTEM.md), [COMPONENTS.md](../COMPONENTS.md) and [STATES.md](../STATES.md). The design wave 1 document is in the git history (this file at commit `921322a`).
 
-## 1. Frame
+Built as the sixth screen of step 4 of the Liquid Glass order (STATUS.md), with protocol 1.9 (DESIGN_ROADMAP_DIFFERENCES.md, E15).
 
-| Part | Spec |
-|---|---|
-| Toolbar | Title "Agent Runs". Breadcrumb "Workspace › Crew › FT-142 Lobby invite links › T4 › Attempt 2". Secondary buttons at the trailing edge: "View Logs" (⌘L, tooltip "Open full log for the selected attempt"), "Inspect Attempt" (⌘I, tooltip "Show identity, supervision and evidence") and "Inspect Recovery" |
-| Sidebar counter | "2" on the Agent Runs item |
-| Lifecycle strip | Under the toolbar, full width: background `#1D1D20`, a 1 pt edge below (white at 6%), padding 9 by 18, the two groups pushed apart and wrapping. Leading: "Lifecycle" at 11.5 `text3` and a compact stepper (below). Trailing: "Tasks" at 11.5 `text3` and standalone pills "2 running" (Running form), "3 blocked" (Blocked form), "2 awaiting approval" (Awaiting approval form), gap 6 |
-| Compact stepper | Steps Discovery, Specification, Planning, Execution, Verification, Evidence, gap 7. A step is a 14 pt circle and a label at 12, gap 6. Done: circle `ok` at 16% with a check, label medium `text2`, connector 16 × 1 in `ok` at 40%. Current: 1.5 pt `info` ring with a 6 pt dot, label semibold `textStrong`. Not reached: 1.5 pt ring (white at 20%), label medium `text3`, connector white at 12% |
-| Columns | Three columns that fill the rest and wrap when narrow: attempt list (flexible from 232), detail (from 460), inspector (from 320) |
+## 1. The board
 
-## 2. Attempt list and detail
-
-### 2.1 Attempt list (leading panel)
-
-Background `#1E1E22`, a 1 pt edge (white at 6%) on its trailing side.
-
-1. Section heading "Attempts · FT-142" (padding 14 top, 16 leading, 14 trailing, 4 bottom) with a trailing compact ghost button "Filter".
-2. One group per task. Group header: padding 12 top, 16 sides, 4 bottom, baseline aligned with gap 6; the task identifier at 11.5 medium `text` ("T4") and its name at 12 `text2` ("Invite endpoint").
-3. One item per attempt, newest first: margin 0 by 8, padding 8 by 10, radius 8, gap 3. Line one: title at 12.5 semibold ("Attempt 2") and a trailing operational pill. Line two at 11.5 `text3`.
-4. The selected item has a background of `accent` at 16% and a 1 pt inner ring of `info` at 40%.
-
-| Pill | Form | Second line |
+| Element | Board | Design system |
 |---|---|---|
-| Running | Running (info, dot with halo) | "Claude Code · 12m 08s" |
-| Completed | Completed (ok, plain dot) | "Exited 0 · validated" |
-| Interrupted · settled | Recovery required (danger, ring with a dot) | "Confirmed dead · continued fresh" |
-| Unknown | Recovery required | "Process identity not confirmed" |
+| Header | "Agent Runs", "Crew › FT-142 Lobby invite links › attempts"; capsule "View Logs", "Inspect Attempt"; "Inspect Recovery" | header row (4.3) |
+| Lifecycle card | Execution current, the three count pills | lifecycle stepper (2.1) |
+| Attempts (220 to 250) | "Attempts · FT-142" with "Filter"; groups by task ("T4 · Invite endpoint"), rows "Attempt n" with a pill (Running, Interrupted · settled, Completed, Unknown) and a line ("Claude Code · 12m 08s", "Exited 0 · validated", "Confirmed dead · continued fresh") | list rows |
+| Detail (card, radius 18, padding 22 24) | "T4 · Attempt 2", 22 bold title, pill; a segmented "Timeline / Logs / Evidence / Claims"; a facts card (Attempt, Process, Started, Duration, Base commit); "Event timeline" (dot, sentence, time); "Terminal output" with "Search output" and a dark console | segmented control, card |
+| Inspector (glass, 280 to 320) | Provider session (Provider, Session, Resumable), Process supervision (State, PID, Process group, Liveness), Workspace (Worktree, Branch), Continuation (Provenance), Resource claims, Checkpoints, Actions ("Request Safe Stop", "Cancel Attempt…", two footnotes) | inspector (4.4) |
 
-### 2.2 Detail (center)
+## 2. Where each value comes from
 
-Padding 14 top, 18 sides, 18 bottom; gap 16.
-
-**Header.** Leading, baseline aligned with gap 10: title at 17 semibold `textStrong`, tracking -0.01 ("T4 · Attempt 2"), and the task name in `text2` ("Invite endpoint + token service"). Trailing: a segmented control "Timeline · Logs · Evidence · Claims". Only Timeline is drawn.
-
-**Segmented control.** Track: white at 7%, radius 7, padding 2, gap 2. Segment: height 22, padding 0 by 10, radius 5, 12 medium. Selected: background `#55555C`, white text, shadow 0 1 2 black at 35%. Others: no background, `text2`.
-
-**Summary strip.** Background `surface`, radius 10, inner ring, padding 12 by 14; fields in a wrapping row (gap 14 by 28), each a label at 11.5 `text3` over a value (gap 3): Attempt (identifier, "att_142_t4_02") · Process (pill: "Running · supervised", "Exited · confirmed by OS", "Exited 0 · confirmed by OS", "Unknown · not stopped") · Started ("09:21:04", "Yesterday 16:02") · Duration ("12m 08s", "Unknown") · Base commit (identifier).
-
-**Event timeline.** Section heading, then a panel card with padding 8 by 14. One entry per event, oldest first: padding 5 vertical, gap 12, top aligned; a 9 pt dot (4 below the top), the sentence in `text` at 13, and the time as an identifier at 11 `text3`. A 1 pt connector (white at 10%) runs from under each dot to the next; the last entry has none.
-
-| Dot | Meaning | Examples |
+| Element | Source | Since |
 |---|---|---|
-| `ok` | Recorded | "Attempt admitted by core · claims granted", "Edited LobbyController.kt +48 −6", "Process exited 0", "Validated in V-2" |
-| `info` | In progress or waiting on the human | "Running unit tests", "Requested scope expansion: iosApp/Info.plist" |
-| `danger` | Supervision or identity lost | "Jojo quit unexpectedly · supervision lost", "RI-12: PID reused, original process unconfirmed" |
+| Attempts, grouped by task | `Attempts` (state, key, title, provider, times, ordinal, validation), the held feature's | 1.6, 1.7 |
+| Pills | a recovery hold (`Recovery`), the step's M4 state (`Repairs`), else the lifecycle state | 1.1, 1.5, 1.6 |
+| Sidebar counter | the live attempts (`Attempts`), else the snapshot's attempts | 1.6 |
+| Facts: process, started, duration | `Attempts` | 1.6 |
+| Base commit, worktree, PID, process group, liveness, session, claims, executable | `AttemptDetail` | **1.9** |
+| Event timeline | `AttemptDetail.events`: the events about the attempt with the 1.7 sentence and their times | **1.9** |
+| Terminal output, Logs | the first 64 records of `Log` (through `loadCandidate`), searched in the app | 1.1 |
+| Evidence | `AttemptDetail.validations` ("V-n") and the number of evidence records; "View Evidence" opens Verification & Evidence | **1.9** |
+| Continuation | `AttemptDetail.continues` / `continued_by`, or the M4 repair (`Repairs`) | **1.9**, 1.5 |
+| Repair and review | `Repairs`: counter, verdict, hold | 1.5 |
+| Cancel Attempt… | `CancelAttempt`, confirmed in a system dialog | 1.1 |
 
-**Terminal output.** The section takes the remaining height, at least 220. Heading with a trailing search field (height 26, radius 6, white at 7%, placeholder "Search output", 150 wide) and two 28 pt icon buttons: "Copy output" (⇧⌘C) and "Save log". Console: background `#111113`, radius 10, inner ring (white at 5%), padding 12 by 14, monospaced 12 with a line height of 1.75, selectable, wrapping, horizontal scroll.
+### Not built, and why
 
-| Line | Color |
+| Board element | Why |
 |---|---|
-| Command ("$ ./gradlew test …") | `#E6E6EA` |
-| Plain output | `text3` |
-| Passed | `ok` |
-| Running | `info` |
-| Notice from Jojo ("[supervision lost at 08:57:31]", "[output truncated at 15:40:02]") | `warn` |
+| Resumable, CLI session resume | Each attempt is a fresh run; the field says so |
+| Branch | An attempt works in a detached worktree; the plan branch is on Execution Plan |
+| Checkpoints | The core records stream offsets, not checkpoints of the work; said in the section |
+| Request Safe Stop | The core has no safe stop; the button is disabled with "Not available yet" |
+| Filter | The list is the held feature's attempts |
 
-## 3. Inspector (trailing panel)
+## 3. Decisions
 
-Same background as the list, with the edge on its leading side.
+Decided by the human on 2026-11-17: checkpoints are not reported, liveness is the newest heartbeat, Request Safe Stop is "not available yet". The board's "Inspect Recovery" opens the Recovery Center.
 
-**Header.** Padding 14 top, 16 sides, 12 bottom, gap 6, a 1 pt `hairline` below: "Agent attempt · T4" at 11 medium `text3`, the attempt identifier at 15 semibold `textStrong`, then the attempt's pill at standalone size.
+## 4. Implementation notes
 
-**Section.** Padding 12 by 16, gap 8, `hairline` below (none after the last); title at 11.5 semibold `text3`. Facts are a two-column grid: labels 104 wide in `text3`, values flexible and allowed to break anywhere; row gap 7, column gap 10, 12.5 pt, baseline aligned.
+- `macos/JojoApp/Sources/JojoApp/AgentRuns.swift`: `AgentRunsState`, `AttemptTab`, `AgentRunsView`, `AgentRunsScreen` (reads `Features`, `Repairs`, `Attempts`, `AttemptDetail` of the chosen attempt and its result and log while `visible` and with each new snapshot). "Inspect Attempt" on Execution Plan and "Inspect Failure" on Verification choose an attempt here (`WorkspaceModel.focusAttempt`). The header's View Logs sets the Logs tab.
+- The `--ui-script` step `repairs-state` reads the same state (`AgentRunsState.listed`, `pill`, `line`), so `gui_m4.py` checks what the screen shows.
+- The boundary guard rejects the bare word for an OS process in the Swift sources; the labels are written "process" and "process supervision" (shown upper case by the `label` style).
+- Review aid: `JOJO_SNAPSHOT_DIR=<directory> swift test --filter S9AgentRunsTests` writes `s9-agent-runs-…`, `-claims-…`, `-evidence-…`, `-narrow-…`, `-disconnected-…`.
 
-| Section | Content |
-|---|---|
-| Provider session | Provider ("Claude Code") · Session (identifier "ses_8f21…c4e0", or "Not resumable (CLI limitation)") · Resumable ("Yes, CLI session resume", "Yes, but not used", "No") |
-| Process supervision | State (pill, as in the summary strip) · PID and Process group (identifiers: "61204", "48121 (absent)", "50233 (reused by another program)", "Unknown") · Liveness ("Heartbeat 2s ago", "Last heartbeat 08:57:31", "n/a") · Started · Stopped ("Not stopped", "08:57:31 (crash) · exit confirmed 09:04:12", "Unknown") |
-| Workspace | Worktree (identifier path, with "(preserved)" or "(preserved, changed after snapshot)") · Branch · Base commit |
-| Continuation provenance | One paragraph in `text2`: "Fresh continuation of attempt 1 (confirmed dead). History not replayed; validated output imported: none.", "First attempt." |
-| Resource claims | One line per claim, baseline aligned with gap 8: the path as an identifier and its mode at 11.5 `text3` ("write", "released 09:05", "quarantined") |
-| Checkpoints | One line per checkpoint, gap 8: its name as an identifier in `info` ("CP1"), the sentence, and the time as an identifier at 11 `text3` |
-| Execution evidence | One line per record, gap 8: the name and a trailing tag (radius 4, 18 high, 11.5 medium, with a glyph). Event log and Terminal output: "Recording" (`warn` tint), "Recorded", "Truncated". Exit status: "Not exited" (neutral), "Exit 0", or the Unknown form (dashed outline, "?") with "No exit code (crash)" or "Unknown". Verification: "V-2". Then a compact secondary "View Evidence" |
-| Recovery status | `text2`: "None required", "Inspected in RI-12 · settled as Continue Fresh at 09:06", "Held in Recovery Center · process identity unknown"; with a compact secondary "Inspect Recovery" when there is something to inspect |
-| Actions | Gap 10. "Request Safe Stop" (secondary, tooltip "Asks the agent to finish its current step and exit") over a footnote "Asks the agent to finish its step and exit. The attempt stays open until its output is validated." · "Cancel Attempt…" (destructive: `danger` at 10%, `danger` text, 1 pt `danger` at 35%; tooltip "Terminates the process group and closes the attempt. Asks for confirmation.") over "Terminates the whole process group and closes the attempt as cancelled. The worktree is kept." · a notice well (padding 8 by 10, radius 8, white at 4%, 11.5 `text2`): "A stopped process is not a successful attempt. Exit is recorded only when the OS confirms it." |
+## 5. What the app shows today / Known gaps
 
-Unavailable actions: both buttons are disabled (opacity 0.42), keep their titles, and one footnote replaces the sentences and the well: "Process has already exited." or "Process state is unknown. Resolve it in Recovery Center first."
+Agent Runs shows the held feature's attempts grouped by task with their state, provider, duration and validation; one attempt's facts, the events about it with their times and sentences, its terminal output (searchable), its validation runs and its claims; its session, supervision, worktree, provenance, repair and review. An attempt is cancelled here. Known gaps:
 
-## 4. What the app shows today
-
-Built in `macos/JojoApp/Sources/JojoApp/AgentRuns.swift` on the shared surfaces of COMPONENTS.md, sections 14 and 15. The screen takes a plain value (`AgentRunsState`) and shows only what the helper reports:
-
-- the snapshot's attempt rows: the identity and the scheduler's record text (`scheduler_attempt`; an `attempt` row is read the same way), and the worktree record of the same identity (`worktree_admin`);
-- the recovery rows, to say that an attempt is on hold and whether its processes are proven gone;
-- the result of one attempt (`Candidate` query: sealed, outcome, reason, the provider's own closing words, candidate digest, number of log records, validation state, decision) and its first 64 log records. The workspace holds one loaded result at a time, shared with Verification & Evidence, so it is read when the human asks for it ("Load Result"), never on selection;
-- the helper connection, the admission value and whether a command is pending.
-
-A part of the canvas without a source says so on screen; nothing is filled with an example.
-
-### 4.1 Mapping
-
-| Canvas | App today |
-|---|---|
-| Toolbar buttons, breadcrumb to task and attempt | Not built. The shell breadcrumb stays "Jojo › Agent Runs" |
-| Sidebar counter | The number of attempt rows in the snapshot |
-| Lifecycle strip and task pills | Not built: features, lifecycle stages and tasks are not reported. A footnote under the list says so |
-| List heading and groups | "Attempts · n", one flat list in the snapshot's order. No task groups, no "Filter" |
-| Item title | The first eight characters of the identity ("1a2b3c4d"); the heading already says "Attempts". The detail and the inspector say "Attempt 1a2b3c4d" |
-| Item pill and second line | See 4.2 |
-| Detail header | "Attempt 1a2b3c4d"; no task name. The segmented control is not built: Logs, Evidence and Claims have no data of their own, and the one view shows everything reported |
-| Summary strip | A wrapping row (gap 14 by 28): Attempt (full identity) · State (the pill of 4.2) · Scheduler record (the core's text, "(partial)" when cut) · Worktree record (the core's text, or "None reported"). A footnote names what is missing: start time, duration, base commit |
-| Event timeline | "Recorded facts": the records the core reports for the attempt, in lifecycle order and without times (4.3). A footnote says that events and their times are not reported per attempt |
-| Terminal output | The loaded log records, one line each as "kind: text", all in the plain color. The workspace reads the first 64; beyond that a last line in `warn` says how many later records are not loaded. Before the result is loaded: "Not loaded."; a result without records: "No log records."; records not yet read: "Reading the log records…". No search, copy or save. The heading's trailing text is the count ("3 of 3 records") |
-| Inspector header | "Agent attempt", "Attempt 1a2b3c4d", the pill at standalone size |
-| Provider session, PID, process group, liveness, start and stop times, worktree path, branch, base commit, continuation, claims, checkpoints | One closing section "Not reported yet" that names them |
-| Process supervision | "Supervision": State (pill) · Scheduler record · Worktree record |
-| Execution evidence | From the loaded result, as facts in the section's grid instead of lines with trailing tags: Result (evidence pill: Passed form "Succeeded", Failed form "Failed", Incomplete form "Interrupted", Not run form "Not sealed" or the core's text for "Cancelled" and anything else) · Provider said (its closing words, "Nothing") · Log ("n records") · Candidate (first twelve characters of the digest, "None") · Validation (evidence pill: Passed, Failed, Not run, Unknown) · Decision (the core's text). "View Evidence" opens Verification & Evidence, which shows the same loaded attempt; a compact ghost "Reload" reads the result again. Without a loaded result: one sentence ("The result of this attempt is not loaded. One result is loaded at a time; Verification & Evidence shows the same one.") and a compact secondary "Load Result" |
-| Recovery status | "None reported by the last inspection." or "Held in Recovery Center · every process proven gone" / "… · process state unknown", with "Inspect Recovery", which opens the Recovery Center |
-| Request Safe Stop | Drawn disabled with "The core has no safe-stop command yet." |
-| Cancel Attempt… | Sends `CancelAttempt` after a system confirmation dialog (the dialog of COMPONENTS.md, section 7, is not built). Sentence: "Asks the core to stop the attempt and record it as cancelled. It counts as cancelled only after the core seals a result." |
-| Unavailable cancel | Sealed result: "The result is already sealed." · On hold: "On hold: resolve it in Recovery Center first." · Not connected: "Unavailable: the core is not connected." · Command pending: "Unavailable while a command awaits the core." |
-| Notice well | The canvas sentence, shown while cancel is available |
-
-### 4.2 Attempt state
-
-A helper older than 1.6 reports no lifecycle state per attempt, so the pill is derived, in this order (since 1.6 the core reports it; section 6):
-
-| Known about the attempt | Pill | Second line in the list |
-|---|---|---|
-| A recovery row, every process proven gone | "Confirmed dead", Recovery required form | "Held in Recovery Center" |
-| A recovery row otherwise | "Unknown", Recovery required form | "Held in Recovery Center" |
-| Loaded result, sealed, outcome `Succeeded` | "Succeeded", Completed form | The result's reason |
-| … `Failed` | "Failed", Failed form | The result's reason |
-| … `Interrupted` | "Interrupted", Recovery required form | The result's reason |
-| … `Cancelled` or any other text | The core's text, Idle form | The result's reason |
-| Loaded result, not sealed | "Not sealed", Idle form | "No sealed result yet" |
-| Nothing loaded | "Not loaded", Idle form | "Scheduler record: RESERVED" (the core's text) |
-
-From a helper older than 1.6 "Running" is never shown: an attempt without a sealed result may be running, starting or stopped, and that core does not say which.
-
-### 4.3 Recorded facts
-
-One entry per record the app holds, in this order; an entry without a record is left out.
-
-| Entry | Dot |
-|---|---|
-| "Scheduler record: RESERVED" | `ok` |
-| "Worktree record: CREATING" | `ok` |
-| "Held for recovery: every process proven gone" / "… process state unknown" | `danger` |
-| "Result sealed: Succeeded · reason" | `ok`; `danger` for Failed and Interrupted; neutral otherwise |
-| "No sealed result yet" (result loaded, not sealed) | neutral |
-| "Validation: PASS" (not shown for NOT_RUN) | `ok`; `danger` for FAIL; neutral for UNKNOWN |
-| "Decision: …" (not shown for NONE) | neutral |
-
-### 4.4 Navigation and states
-
-- Disconnected (`channelLost`, `ended`, `launchFailed`): danger banner "Jojo core isn't responding" · "Showing the last known state, read-only. No actions can be requested." Cancel and Load Result are disabled. There is no "Reconnect" yet.
-- Incompatible protocol: danger banner "Jojo core speaks another protocol version" · "Read-only. No actions can be requested."
-- Recovery required (admission reported and not `Open`): danger banner "Execution admission is closed" · "No new attempt starts until you review the inspection." with "Open Recovery Center".
-- Loading (connected or starting, no snapshot yet): "Loading attempts…" and three skeleton bars.
-- Empty (a snapshot without attempt rows): the Empty form with "No attempts yet" · "An attempt appears here when an approved plan step is started." and a secondary "Open Execution Plan".
-- Lost before the first snapshot: the centered block "No snapshot was loaded" · "The core stopped answering before it reported its attempts."
-- Requested: the toolbar's "Requested" pill; cancel is disabled while a command is pending.
-- Unknown outcome: an attempt on hold whose processes are not proven gone has the "Unknown" pill and no cancel; it is resolved in the Recovery Center.
-- Error: a failed snapshot or result read is reported in the status line under the screen ("Snapshot unavailable: …", "Candidate unavailable: …"); the last rows stay visible.
-- Stale and Permission denied have no source on this screen.
-- Content under 960 wide (the window at its opening size): the inspector's sections move below the detail as one panel card. Three columns appear in a wider window.
-
-### 4.5 Values that are not on the canvas
-
-| Point | Value in the app |
-|---|---|
-| Side panel background | `sidebar` token; edge `sidebarEdge` (as in the Recovery Center) |
-| Panel widths | List 240, inspector 280, detail takes the rest |
-| Selected item, light | Same formula as dark: `accent` at 16%, ring `info` at 40% |
-| Timeline connector | `hairline` (canvas: white at 10%) |
-| Neutral timeline dot | A 1.5 pt `text4` ring, no fill |
-| Console background | `#111113` in dark, `#F1F1F4` in light; ring `cardRing` |
-| Console text | Command `text`, plain `text2` (canvas `text3`; raised for contrast on the light console), notices in the status colors |
-| Notice well background | `fill2` (canvas white at 4%) |
-| Identifiers | The `mono` text style (11 pt) |
-| Glyphs (SF Symbols) | Load Result `arrow.down.circle`; Request Safe Stop `stop.circle`; Cancel Attempt `xmark.circle`; empty state `play.circle` |
-
-## 5. Repairs and reviews (M4)
-
-Not on the canvas; D2 asked for them (`docs/roadmap/DESIGN_ROADMAP_DIFFERENCES.md`, D2 and E10). The screen reads the `Repairs` query while it is shown, and again with each new snapshot. An attempt the answer lists is a plan step's:
-
-- List row: the pill shows the step's state for the step's newest attempt: "Repairing" (the Repairing form of COMPONENTS.md, section 2.2), "Reviewing" (the Running form) or "Needs human" (the Blocked form); a recovery hold still outranks it. The second line is "<step key> · repair 1 of 2" or "<step key> · first attempt".
-- Detail: a "Plan step" card after the summary: step, repair ("First attempt", "Repair 1 of 2"), review ("Approved by Claude Code", "Rejected by Codex", "No verdict from …", "… is reviewing", toned ok, danger, warn or info), why it was repaired, the reviewer's notes, the strongest objection, and the hold reason in a notice well. A footnote says that a failed step is repaired at most twice, then waits, and that a review approves nothing.
-- Inspector, Supervision: "Repair" and "Review" facts.
-
-There is no command here: accept and reject stay on Verification & Evidence, and nothing restarts a held step. Snapshots: `agent-runs-repairing`, `agent-runs-rejected`, `agent-runs-needs-human`.
-
-## 6. User-facing data (protocol 1.6)
-
-The screen reads the `Attempts` query with the repairs: while it is shown, and again with each new snapshot (`WorkspaceModel.loadAttempts`). The answer is the core's, derived from its records (`docs/architecture/STDIO_PROTOCOL.md`, "Protocol 1.6"); an older helper answers `UnknownType` and the screen stays as sections 4 and 5 describe.
-
-- **List.** Attempts newest first. The title is the step's title from its lead plan, else "Step <key>", else "Attempt <8 characters>". The second line is "<feature> · <provider>", or "<feature> · <step key> · repair 1 of 2" for a plan step the repairs answer lists. The footnote says that the attempts are named by their plan step and that an imported plan's steps have no names.
-- **Pill.** A recovery hold and the step states of section 5 still come first. Then the core's state: "Running", "Launching", "Preparing" and "Settling" in the Running form; "Reserved" in the Waiting form; "Stopping" in the Paused form; "Held", "Unsupervised" and "Interrupted" in the Recovery required form; "Succeeded" Completed; "Failed" Failed; "Cancelled" Idle. **"Running" is shown** for an attempt whose process root the core identified and whose result is not sealed.
-- **Detail.** The summary card adds Feature, Provider, Started (the time the first process was issued; with the date when not today) and Duration (to the sealed result, or to now while it runs). The footnote says only that the base commit is not reported.
-- **Inspector, Supervision.** Adds Provider, Started and Ended. "Not reported yet" keeps: session, PID and process group, worktree path, branch, base commit, continuation, resource claims and checkpoints.
-
-Still not reported: events per attempt with their times (the "Recorded facts" stay the core's records without times), the lifecycle strip, task groups and filters, the safe-stop command. The sidebar counter still counts the snapshot's attempt rows. Snapshot: `s2-agent-runs` (`S2UserFacingDataTests`).
+- No safe stop, no checkpoints of the work, no session resume, no branch per attempt.
+- The app reads the newest 16 attempts, the first 64 log records and 64 events per attempt.
