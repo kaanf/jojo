@@ -41,7 +41,7 @@ impl Service {
             RequestKind::Events => {
                 let q = protocol::EventsQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_events(q.after, q.limit, e.minor >= 6))
+                    .read(|v| v.ipc_events(q.after, q.limit, e.minor >= 6, e.minor >= 7))
                     .map_err(|e| e.to_string())
             }
             RequestKind::EventDetail => {
@@ -145,15 +145,16 @@ impl Service {
                 }
                 reader.read(|v| v.ipc_repairs()).map_err(|e| e.to_string())
             }
-            // Protocol 1.6: user-facing data.
-            RequestKind::Attempts | RequestKind::Documents => {
+            // Protocol 1.6: user-facing data; 1.7: the Dashboard's.
+            RequestKind::Attempts | RequestKind::Documents | RequestKind::Features => {
                 if !kind.shaped(p) {
                     return Err("InvalidPayload: unexpected or missing fields".into());
                 }
                 let q = protocol::OverviewQuery::parse(p)?;
                 reader
                     .read(|v| match kind {
-                        RequestKind::Attempts => v.ipc_attempts(q.before),
+                        RequestKind::Attempts => v.ipc_attempts(q.before, e.minor >= 7),
+                        RequestKind::Features => v.ipc_features(q.before),
                         _ => v.ipc_documents(q.before),
                     })
                     .map_err(|e| e.to_string())

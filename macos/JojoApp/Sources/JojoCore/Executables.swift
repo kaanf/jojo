@@ -113,7 +113,7 @@ extension WorkspaceModel {
     /// D3: reads what the core knows about each provider's executable. Asked only while
     /// Settings & Providers is shown; asking may start a check in the core, never a run.
     public func loadExecutables() {
-        guard executablesLoad != .loading, snapshotSeq != nil, executablesShown else { return }
+        guard executablesLoad != .loading, snapshotSeq != nil, executablesShown || dashboardShown else { return }
         executablesLoad = .loading
         onChange?()
         client.query(.Executables, [:]) { [weak self] reply in

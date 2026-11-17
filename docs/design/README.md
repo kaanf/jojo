@@ -24,7 +24,7 @@ Claude Design canvas "Jojo macOS", https://claude.ai/artifact/UuyW4DFxPEciFKZm8Z
 
 **The design system** (DESIGN_SYSTEM.md, COMPONENTS.md sections 1 to 12, STATES.md sections 1 to 4) was rewritten on 2026-11-17 from version `1794922102-b518`, page "Components & states": "Components and status model" (`ComponentsMac.dc.html`), "States" (`StatesMac.dc.html`), "Themes and tokens" (`ThemeTokensMac.dc.html`), and the shell of the product boards (`DashboardMac.dc.html`, `AgentRunsMac.dc.html`, `RecoveryLaunchMac.dc.html`). These are the macOS 26 Liquid Glass boards; light is their default appearance.
 
-**The screen documents** under `screens/` were transcribed earlier from the first boards, which the canvas now keeps on its "Archive" page (version `1794801829-c71e` to `1794837270-18f1`; the version of each is in its document). Each screen document is rewritten from its `…Mac.dc.html` board on the "Product" page when that screen is rebuilt.
+**The screen documents** under `screens/` were transcribed earlier from the first boards, which the canvas now keeps on its "Archive" page (version `1794801829-c71e` to `1794837270-18f1`; the version of each is in its document). Each screen document is rewritten from its `…Mac.dc.html` board on the "Product" page when that screen is rebuilt. `screens/DASHBOARD.md` is the first written from its `…Mac.dc.html` board (2026-11-17).
 
 ## Which source wins
 

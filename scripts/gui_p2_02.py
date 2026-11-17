@@ -15,6 +15,10 @@ from pathlib import Path
 
 import gui_p1_14 as g
 
+# The frames the app sends above minor 1 on every launch: the sidebar counter's documents (1.6)
+# and what the Dashboard reads while it is shown (1.7).
+OVERVIEW_MINOR = {'Documents': 6, 'Features': 7, 'Attempts': 7, 'Events': 7, 'Executables': 4}
+
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = ROOT / 'scripts/tests/fake_helper_p2_02.py'
 ATTEMPT = '000000000000000000000000000000a2'
@@ -80,7 +84,9 @@ def fake_start_and_recovery_controls(app, helper):
     g.check([r['payload'] for r in starts] == [START_PAYLOAD, START_PAYLOAD], f'Start carries identities only: {starts}', ev)
     g.check(len({r['id'] for r in starts}) == 2, 'each explicit Start is its own command', ev)
     # 1.6: the documents query behind the sidebar counter is read at 1.6 with every snapshot.
-    g.check(all(r['minor'] == 1 for r in rec if 'minor' in r and r['type'] != 'Documents'), 'protocol 1.1 frames', ev)
+    # 1.7: the Dashboard, the screen the app opens on, reads its queries at their own minor.
+    g.check(all(r['minor'] in (1, OVERVIEW_MINOR.get(r['type'], 1)) for r in rec if 'minor' in r),
+            'protocol 1.1 frames', ev)
     g.check(not set(got) & {'CancelAttempt', 'HumanDecision', 'ConfirmClose', 'RegisterRepository', 'ImportBundle'},
             f'only the clicked controls sent commands: {got}', ev)
     g.check('admission=Open' in state and 'pending=false' in state and 'Start accepted for attempt' in state,

@@ -164,8 +164,8 @@ fn record(h: &mut H) {
     h.send("snapshot before hello", "Snapshot", object([]));
     h.at("hello 1.0", 0, "Hello", object([]));
     // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2, 1.5
-    // since D3, 1.7 since 1.6).
-    h.at("hello 1.7", 7, "Hello", object([("junk", n(1))]));
+    // since D3, 1.7 since 1.6, 1.8 since 1.7).
+    h.at("hello 1.8", 8, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1169,6 +1169,38 @@ fn record(h: &mut H) {
         object([("after", n(1_000_000)), ("limit", n(8))]),
     );
     h.at("chat index at 1.6", 6, "ChatIndex", object([]));
+    // 1.7: the features query, unknown before 1.7, with exactly the field `before`; an
+    // event carries a sentence and an attempt its details only at 1.7.
+    h.at(
+        "features at 1.6",
+        6,
+        "Features",
+        object([("before", Json::Null)]),
+    );
+    h.at(
+        "features newest",
+        7,
+        "Features",
+        object([("before", Json::Null)]),
+    );
+    h.at(
+        "features with a field",
+        7,
+        "Features",
+        object([("before", Json::Null), ("done", Json::Bool(true))]),
+    );
+    h.at(
+        "attempts at 1.7",
+        7,
+        "Attempts",
+        object([("before", Json::Null)]),
+    );
+    h.at(
+        "events at 1.7",
+        7,
+        "Events",
+        object([("after", n(0)), ("limit", n(8))]),
+    );
 }
 
 #[test]
@@ -1185,7 +1217,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.7 => 1.6 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents","slice":true}
+hello 1.8 => 1.7 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1400,4 +1432,9 @@ documents none => 1.6 Response {"candidates":[],"documents":[],"next":null,"pend
 documents with a field => 1.6 Error {"code":"InvalidPayload: unexpected or missing fields"}
 events far ahead at 1.6 => 1.6 Response []
 chat index at 1.6 => 1.6 Response {"features":[],"features_complete":true,"repositories":[],"repositories_complete":true}
+features at 1.6 => 1.6 Error {"code":"UnknownType"}
+features newest => 1.7 Response {"features":[],"next":null}
+features with a field => 1.7 Error {"code":"InvalidPayload: unexpected or missing fields"}
+attempts at 1.7 => 1.7 Response {"attempts":[],"next":null}
+events at 1.7 => 1.7 Response [{"actor":"Core","aggregate_id":null,"aggregate_kind":null,"at_unix_ms":1700000000000,"detail_complete":true,"epoch":1,"payload":"previous_epoch=0;previous_shutdown=NONE;quarantined_claims=0","revision":null,"seq":1,"summary":"Session 1 started","type":"EngineStarted"},{"actor":"Human","aggregate_id":null,"aggregate_kind":null,"at_unix_ms":1700000000000,"detail_complete":true,"epoch":1,"payload":"95eb9cc2f28783674ee4858759130e25fc6ee54822d07726fb3868924bdb21ba","revision":null,"seq":2,"summary":"Admission reopened after the recovery review","type":"RecoveryStarted"}]
 "#;

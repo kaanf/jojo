@@ -6,11 +6,14 @@ import SwiftUI
 struct MainView: View {
     @ObservedObject var model: AppModel
     let delegate: AppDelegate
-    @State private var screen = Screen.agentRuns
+    @State private var screen = Screen.dashboard
+    @State private var range = DashboardRange.today
 
     var body: some View {
         Themed {
-            AppShell(model: model, screen: $screen, showInspector: { delegate.showAuxiliary() }) {
+            AppShell(model: model, screen: $screen, showInspector: { delegate.showAuxiliary() },
+                     controls: screen == .dashboard ? AnyView(SegmentedCapsule(selection: $range, label: "Time range")) : nil,
+                     primary: screen == .dashboard ? AnyView(NewFeatureButton(newFeature: newFeature)) : nil) {
                 VStack(alignment: .leading, spacing: 8) {
                     QuitBanner(model: model).padding(EdgeInsets(top: 20, leading: 20, bottom: 0, trailing: 20))
                     ZStack(alignment: .topLeading) {
@@ -19,6 +22,7 @@ struct MainView: View {
                         }
                         .padding(.horizontal, 20)
                         // A redesigned screen fills the content area and sets its own padding.
+                        shown(.dashboard) { DashboardScreen(model: model, visible: screen == .dashboard, range: range, open: { screen = $0 }) }
                         shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
                         shown(.agentRuns) { AgentRunsScreen(model: model, visible: screen == .agentRuns, open: { screen = $0 }) }
                         shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
@@ -45,8 +49,14 @@ struct MainView: View {
     }
 
     /// Destinations that have a screen today; the others show `NotBuiltYet`.
-    static let built: Set<Screen> = [.activity, .agentRuns, .approvalInbox, .recoveryCenter, .executionPlan,
+    static let built: Set<Screen> = [.activity, .agentRuns, .approvalInbox, .dashboard, .recoveryCenter, .executionPlan,
                                      .featureChat, .projects, .settings, .sourceControl, .specifications, .verification]
+
+    /// New Feature is Feature Chat holding no feature.
+    private func newFeature() {
+        model.workspace.openChat(nil)
+        screen = .featureChat
+    }
 
     private func shown(_ target: Screen, @ViewBuilder _ content: () -> some View) -> some View {
         content()

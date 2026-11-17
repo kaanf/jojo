@@ -67,6 +67,9 @@ struct OperationalPill: View {
     let state: OperationalState
     var label: String?
     var standalone = false
+    /// A row pill in a hue of its own, for a word that is not an operational state
+    /// ("Proposed", "Available"); nil draws the state's hue.
+    var hue: Tone?
 
     init(_ state: OperationalState, label: String? = nil, standalone: Bool = false) {
         self.state = state
@@ -74,8 +77,15 @@ struct OperationalPill: View {
         self.standalone = standalone
     }
 
+    /// The row form (20 high, no glyph) with a word and a hue of its own.
+    init(_ label: String, tone: Tone) {
+        self.init(.idle, label: label)
+        hue = tone
+    }
+
     var body: some View {
-        let color = theme.foreground(state.tone)
+        let tone = hue ?? state.tone
+        let color = theme.foreground(tone)
         HStack(spacing: 6) {
             if standalone { glyph(color) }
             Text(label ?? state.label).textStyle(.pill).lineLimit(1)
@@ -83,7 +93,7 @@ struct OperationalPill: View {
         .foregroundStyle(color)
         .padding(.horizontal, standalone ? 10 : 8)
         .frame(height: standalone ? 22 : 20)
-        .background(theme.tint(state.tone), in: Capsule())
+        .background(theme.tint(tone), in: Capsule())
         .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label ?? state.label)

@@ -126,7 +126,7 @@ final class DesignShellTests: XCTestCase {
         XCTAssertEqual(Screen.recoveryCenter.place, "Workspace")
         XCTAssertEqual(Screen.agentRuns.place, "No feature selected")
         XCTAssertTrue(MainView.built.contains(.recoveryCenter))
-        XCTAssertFalse(MainView.built.contains(.dashboard))
+        XCTAssertEqual(Set(Screen.allCases).subtracting(MainView.built), [], "every destination has a screen since the Dashboard (step 3)")
     }
 
     func test_dw1_admission_is_stated_only_while_the_core_is_connected() {
@@ -168,7 +168,7 @@ final class DesignShellTests: XCTestCase {
             }
             .environment(\.offscreen, true)
             .environment(\.colorScheme, scheme)
-            .frame(width: 1120, height: 3810)
+            .frame(width: 1120, height: 3930)
             guard let directory else { continue }
             try write(shell, to: directory, "shell-\(name).png")
         }
@@ -2023,6 +2023,19 @@ private struct Gallery: View {
                 Button("Reinspect") {}.buttonStyle(.jojo(.secondary, compact: true))
                 Button("Push") {}.buttonStyle(.jojo(.primary)).disabled(true)
                 DisabledReason("Unavailable: 5 requirements unmet.")
+            }
+            section("Dashboard (COMPONENTS.md, section 25)") {
+                KPITile(symbol: "play.fill", tile: Palette.blue, label: "Running now", value: "2", unit: "tasks",
+                        detail: "T4 on Claude Code · T5 on Codex").frame(width: 230)
+                SegmentedCapsule(selection: .constant(DashboardRange.today), label: "Time range")
+                StageCell(stage: FeatureStage("Done", "Done"))
+                StageCell(stage: FeatureStage("NeedsYou", "ADR rev 3"))
+                StageCell(stage: FeatureStage("Running", "2 running"))
+                StageCell(stage: .off)
+                OperationalPill("Proposed", tone: .info)
+                ItemRow(tile: Palette.indigo, symbol: "building.columns", title: "ADR rev 5", detail: "Architecture decision · FT-142",
+                        first: true, action: {}) { OperationalPill("Proposed", tone: .info) }
+                    .frame(width: 380).cardElevation(radius: 14)
             }
             section("Banners") {
                 VStack(spacing: 8) {

@@ -79,8 +79,10 @@ pub use slice::*;
 mod projects;
 mod runner;
 pub use runner::*;
+mod features;
 mod overview;
 mod repairs;
+pub use features::FEATURE_ROWS;
 pub use overview::OVERVIEW_ROWS;
 pub use repairs::*;
 

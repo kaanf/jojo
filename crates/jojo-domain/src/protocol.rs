@@ -62,6 +62,7 @@ pub enum RequestKind {
     Repairs,
     Attempts,
     Documents,
+    Features,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,7 +125,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 43] = [
+pub const SPECS: [Spec; 44] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -168,6 +169,7 @@ pub const SPECS: [Spec; 43] = [
     spec(K::Repairs, "Repairs", Query, 5, false, Exact, &[]),
     spec(K::Attempts, "Attempts", Query, 6, false, Exact, &["before"]),
     spec(K::Documents, "Documents", Query, 6, false, Exact, &["before"]),
+    spec(K::Features, "Features", Query, 7, false, Exact, &["before"]),
 ];
 
 impl RequestKind {
@@ -388,7 +390,7 @@ impl ApprovedPlanQuery {
     }
 }
 
-/// Protocol 1.6: one page of `Attempts` or `Documents`, newest first.
+/// Protocol 1.6: one page of `Attempts` or `Documents`, newest first; 1.7: of `Features`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OverviewQuery {
     /// The `next` of the previous answer; `None` asks for the newest rows.
@@ -960,7 +962,8 @@ mod tests {
         // D3 (1.4): the executables query, after everything 1.3 knows.
         // M4 (1.5): the repairs query, after everything 1.4 knows.
         // 1.6: the attempts and documents queries, after everything 1.5 knows.
-        for minor in [3, 4, 5, 6, 9] {
+        // 1.7: the features query, after everything 1.6 knows.
+        for minor in [3, 4, 5, 6, 7, 9] {
             assert_eq!(
                 names(Mutation, minor),
                 format!("{v12_commands} SaveProject RunPlan ControlPlan")
@@ -972,15 +975,18 @@ mod tests {
             } else {
                 ""
             };
+            let v17 = if minor >= 7 { " Features" } else { "" };
             assert_eq!(
                 names(Query, minor),
-                format!("{v12_queries} Projects PlanRun{v14}{v15}{v16}")
+                format!("{v12_queries} Projects PlanRun{v14}{v15}{v16}{v17}")
             );
         }
         assert_eq!(RequestKind::of_frame("Executables", 3), None);
         assert_eq!(RequestKind::of_frame("Repairs", 4), None);
         assert_eq!(RequestKind::of_frame("Attempts", 5), None);
         assert_eq!(RequestKind::of_frame("Documents", 6), Some(K::Documents));
+        assert_eq!(RequestKind::of_frame("Features", 6), None);
+        assert_eq!(RequestKind::of_frame("Features", 7), Some(K::Features));
         assert_eq!(RequestKind::of_frame("SaveProject", 2), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 1), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 2), Some(K::ChatTurn));

@@ -15,19 +15,19 @@ use jojo_domain::prd::PrdDocument;
 /// Rows per page of `Attempts` and `Documents`, and the most pending candidates listed.
 pub const OVERVIEW_ROWS: usize = 16;
 
-fn cut(s: &str) -> String {
+pub(crate) fn cut(s: &str) -> String {
     s.trim().chars().take(INDEX_TEXT_CHARS).collect()
 }
 
-fn optional(value: Option<String>) -> Json {
+pub(crate) fn optional(value: Option<String>) -> Json {
     value.map_or(Json::Null, text)
 }
 
-fn identity_text(value: &str) -> Result<Json, StorageError> {
+pub(crate) fn identity_text(value: &str) -> Result<Json, StorageError> {
     Ok(identity(id_from_text(value)?))
 }
 
-fn time_of(c: &Connection, seq: i64) -> Result<Json, StorageError> {
+pub(crate) fn time_of(c: &Connection, seq: i64) -> Result<Json, StorageError> {
     Ok(c.query_optional(
         "SELECT recorded_at_unix_ms FROM events WHERE seq=?1",
         &[Value::Int(seq)],
@@ -37,7 +37,7 @@ fn time_of(c: &Connection, seq: i64) -> Result<Json, StorageError> {
 }
 
 /// The title of a requirements document, when its stored content reads as one.
-fn prd_title(content: &str) -> Option<String> {
+pub(crate) fn prd_title(content: &str) -> Option<String> {
     PrdDocument::import(content.as_bytes())
         .ok()
         .map(|d| cut(&d.title))
@@ -66,7 +66,10 @@ pub(crate) fn feature_name(c: &Connection, feature: &str) -> Result<Option<Strin
 
 /// The feature a document belongs to: its own for a requirements document, its
 /// requirements document's for an ADR or a plan.
-fn document_feature(c: &Connection, document: &str) -> Result<Option<String>, StorageError> {
+pub(crate) fn document_feature(
+    c: &Connection,
+    document: &str,
+) -> Result<Option<String>, StorageError> {
     Ok(c.query_optional(
         "SELECT v.feature_id FROM artifact_versions v
          WHERE v.artifact_id=coalesce(
@@ -139,7 +142,7 @@ struct AttemptFlags {
 
 /// The approval state of a document's newest revision, whether an earlier revision was
 /// decided, and the event of the decision that applies to this revision.
-fn approval_state(
+pub(crate) fn approval_state(
     c: &Connection,
     id: ArtifactId,
     prd: bool,
@@ -165,8 +168,9 @@ fn approval_state(
 
 impl ReadView<'_> {
     /// Attempts newest first, at most [`OVERVIEW_ROWS`] reserved before `before` (the
-    /// `order` of a row; `None` for the newest).
-    pub fn ipc_attempts(&self, before: Option<u64>) -> Result<Json, StorageError> {
+    /// `order` of a row; `None` for the newest). `detailed` (protocol 1.7) adds each
+    /// attempt's ordinal, repository and project, host validation and newest activity.
+    pub fn ipc_attempts(&self, before: Option<u64>, detailed: bool) -> Result<Json, StorageError> {
         let c = self.conn;
         let current = to_db(self.session()?.epoch.0)?;
         let before = before.map_or(Ok(i64::MAX), to_db)?;
@@ -216,8 +220,13 @@ impl ReadView<'_> {
                 Some(plan) => document_feature(c, plan)?,
                 None => None,
             };
+            let details = if detailed {
+                crate::features::attempt_details(c, &attempt, plan.as_deref(), feature.as_deref())?
+            } else {
+                Vec::new()
+            };
             let (feature, feature_name) = feature_fields(c, feature)?;
-            out.push(object([
+            let Json::Object(mut row) = object([
                 ("order", Json::Int(order)),
                 ("attempt", identity_text(&attempt)?),
                 ("step", identity_text(&step)?),
@@ -239,7 +248,11 @@ impl ReadView<'_> {
                     "ended_at_unix_ms",
                     ended.map_or(Ok(Json::Null), |s| time_of(c, s))?,
                 ),
-            ]));
+            ]) else {
+                unreachable!("an attempt row is an object")
+            };
+            row.extend(details.into_iter().map(|(k, v)| (k.into(), v)));
+            out.push(Json::Object(row));
         }
         let next = if more {
             out.last()

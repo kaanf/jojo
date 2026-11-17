@@ -32,6 +32,15 @@ public struct AttemptSummary: Equatable, Sendable, Identifiable {
     public let state: String
     public let started: Date?
     public let ended: Date?
+    /// Protocol 1.7; nil from an older helper. The attempt's place among its step's
+    /// attempts, from 1.
+    public let ordinal: Int64?
+    public let repositoryName: String?
+    public let projectName: String?
+    /// Its candidate's newest host validation; nil without a candidate.
+    public let validation: AttemptValidation?
+    /// What its newest provider record says the agent did, and when.
+    public let activity: AttemptActivity?
 
     public init?(_ p: JSON) {
         guard let id = p["attempt"]?.string, let order = p["order"]?.integer, let step = p["step"]?.string,
@@ -39,20 +48,60 @@ public struct AttemptSummary: Equatable, Sendable, Identifiable {
         self.init(id: id, order: order, step: step, key: p["key"]?.string, title: p["title"]?.string,
                   plan: p["plan"]?.string, feature: p["feature"]?.string, featureName: p["feature_name"]?.string,
                   provider: p["provider"]?.string, state: state, started: helperDate(p["started_at_unix_ms"]?.integer),
-                  ended: helperDate(p["ended_at_unix_ms"]?.integer))
+                  ended: helperDate(p["ended_at_unix_ms"]?.integer), ordinal: p["ordinal"]?.integer,
+                  repositoryName: p["repository_name"]?.string, projectName: p["project_name"]?.string,
+                  validation: p["validation"].flatMap(AttemptValidation.init),
+                  activity: p["activity"].flatMap(AttemptActivity.init))
     }
 
     public init(id: String, order: Int64 = 0, step: String = "", key: String? = nil, title: String? = nil,
                 plan: String? = nil, feature: String? = nil, featureName: String? = nil, provider: String? = nil,
-                state: String, started: Date? = nil, ended: Date? = nil) {
+                state: String, started: Date? = nil, ended: Date? = nil, ordinal: Int64? = nil,
+                repositoryName: String? = nil, projectName: String? = nil, validation: AttemptValidation? = nil,
+                activity: AttemptActivity? = nil) {
         (self.id, self.order, self.step, self.key, self.title, self.plan) = (id, order, step, key, title, plan)
         (self.feature, self.featureName, self.provider, self.state) = (feature, featureName, provider, state)
-        (self.started, self.ended) = (started, ended)
+        (self.started, self.ended, self.ordinal) = (started, ended, ordinal)
+        (self.repositoryName, self.projectName, self.validation, self.activity) =
+            (repositoryName, projectName, validation, activity)
     }
 
     /// Unsealed and supervised by this helper.
     public var live: Bool {
         ["Reserved", "Preparing", "Launching", "Running", "Stopping", "Settling"].contains(state)
+    }
+}
+
+/// Protocol 1.7: an attempt's candidate's newest host validation and the human's decision.
+public struct AttemptValidation: Equatable, Sendable {
+    /// NotRun, Unknown, Passed or Failed.
+    public let state: String
+    public let at: Date?
+    /// Accepted or Rejected; nil while undecided.
+    public let decision: String?
+
+    public init?(_ p: JSON) {
+        guard let state = p["state"]?.string else { return nil }
+        self.init(state: state, at: helperDate(p["at_unix_ms"]?.integer), decision: p["decision"]?.string)
+    }
+
+    public init(state: String, at: Date? = nil, decision: String? = nil) {
+        (self.state, self.at, self.decision) = (state, at, decision)
+    }
+}
+
+/// Protocol 1.7: what an attempt's newest provider record says, in a few words.
+public struct AttemptActivity: Equatable, Sendable {
+    public let text: String
+    public let at: Date?
+
+    public init?(_ p: JSON) {
+        guard let text = p["text"]?.string else { return nil }
+        self.init(text: text, at: helperDate(p["at_unix_ms"]?.integer))
+    }
+
+    public init(text: String, at: Date? = nil) {
+        (self.text, self.at) = (text, at)
     }
 }
 
@@ -182,10 +231,11 @@ public struct DocumentList: Equatable, Sendable {
 }
 
 extension WorkspaceModel {
-    /// Protocol 1.6: the newest attempts with their names and live state. Read with the
-    /// repairs, only while Agent Runs is shown, and again with each new snapshot.
+    /// Protocol 1.6: the newest attempts with their names and live state (1.7: and their
+    /// details). Read with the repairs, only while Agent Runs or the Dashboard is shown,
+    /// and again with each new snapshot.
     public func loadAttempts() {
-        guard attemptsLoad != .loading, snapshotSeq != nil, repairsShown else { return }
+        guard attemptsLoad != .loading, snapshotSeq != nil, repairsShown || dashboardShown else { return }
         attemptsLoad = .loading
         onChange?()
         client.query(.Attempts, ["before": .null]) { [weak self] reply in

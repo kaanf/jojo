@@ -15,6 +15,10 @@ from pathlib import Path
 import gui_p1_14 as g
 import gui_p2_02 as p202
 
+# The frames the app sends above minor 1 on every launch: the sidebar counter's documents (1.6)
+# and what the Dashboard reads while it is shown (1.7).
+OVERVIEW_MINOR = {'Documents': 6, 'Features': 7, 'Attempts': 7, 'Events': 7, 'Executables': 4}
+
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = str(ROOT / 'scripts/tests/fake_helper_p2_03.py')
 ATTEMPT = '000000000000000000000000000000a2'
@@ -63,7 +67,9 @@ def fake_review_shows_not_run_unknown_and_pass_distinctly_and_accepts_only_a_pas
             f'one Accept, bound to digest and receipt, only after PASS: {decisions}', ev)
     g.check(got.index('CandidateDecision') > got.index('Validate'), 'no decision before validation', ev)
     # 1.6: the documents query behind the sidebar counter is read at 1.6 with every snapshot.
-    g.check(all(r['minor'] == 1 for r in rec if 'minor' in r and r['type'] != 'Documents'), 'protocol 1.1 frames', ev)
+    # 1.7: the Dashboard, the screen the app opens on, reads its queries at their own minor.
+    g.check(all(r['minor'] in (1, OVERVIEW_MINOR.get(r['type'], 1)) for r in rec if 'minor' in r),
+            'protocol 1.1 frames', ev)
     g.check(ev[-1].startswith('will-terminate outcome=clean '), 'shutdown behaviour unchanged', ev)
     return {'gui_exit': code, 'states': states, 'helper_commands': sorted(set(got))}
 

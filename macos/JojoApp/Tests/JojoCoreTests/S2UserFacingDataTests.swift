@@ -51,7 +51,8 @@ final class S2UserFacingDataTests: XCTestCase {
     }
 
     func test_s2_the_new_queries_and_the_attributed_events_are_sent_at_1_6_and_nothing_else_moves() {
-        XCTAssertEqual(Request.allCases.filter { $0.minor == 6 }, [.ChatIndex, .Attempts, .Documents])
+        // Since 1.7 attempts and attributed events are read at 7, where they carry more.
+        XCTAssertEqual(Request.allCases.filter { $0.minor == 6 }, [.ChatIndex, .Documents])
         XCTAssertEqual(Request.Attempts.fields, ["before"])
         let (h, model) = ready()
         XCTAssertEqual(h.fake.last("Snapshot")?.minor, 1)
@@ -60,11 +61,11 @@ final class S2UserFacingDataTests: XCTestCase {
         model.pollEvents()
         XCTAssertEqual(h.fake.last("Events")?.minor, 1, "polling keeps its 1.1 frame")
         model.loadEvents()
-        XCTAssertEqual(h.fake.last("Events")?.minor, 6, "Activity & Audit reads events with time and actor")
+        XCTAssertEqual(h.fake.last("Events")?.minor, 7, "Activity & Audit reads events with time, actor and sentence")
         XCTAssertEqual(h.fake.count("Attempts"), 0, "attempts are read only while Agent Runs is shown")
         model.repairsShown = true
         model.loadAttempts()
-        XCTAssertEqual(h.fake.last("Attempts")?.minor, 6)
+        XCTAssertEqual(h.fake.last("Attempts")?.minor, 7)
     }
 
     func test_s2_documents_decode_with_the_pending_count_and_an_older_core_leaves_no_counter() {

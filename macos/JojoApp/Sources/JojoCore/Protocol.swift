@@ -16,6 +16,7 @@ public enum Request: String, CaseIterable, Sendable {
     case Executables
     case Repairs
     case Attempts, Documents
+    case Features
 
     public var fields: [String] {
         switch self {
@@ -58,6 +59,7 @@ public enum Request: String, CaseIterable, Sendable {
         case .Repairs: return []
         case .Attempts: return ["before"]
         case .Documents: return ["before"]
+        case .Features: return ["before"]
         }
     }
 
@@ -68,19 +70,22 @@ public enum Request: String, CaseIterable, Sendable {
     /// only from 1.4, and M4's repairs query only from 1.5, in the same way. The attempts
     /// and documents queries exist only from 1.6; at 1.6 the chat index also names each
     /// feature (Activity & Audit reads events at `Request.attributedEvents` for the same
-    /// reason).
+    /// reason). The features query exists only from 1.7, and at 1.7 an attempt carries
+    /// its ordinal, repository, validation and newest activity, so attempts are read there.
     public var minor: Int64 {
         let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText]
         let runner: [Request] = [.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun]
-        if [.Attempts, .Documents, .ChatIndex].contains(self) { return 6 }
+        if [.Features, .Attempts].contains(self) { return 7 }
+        if [.Documents, .ChatIndex].contains(self) { return 6 }
         if self == .Repairs { return 5 }
         if self == .Executables { return 4 }
         if runner.contains(self) { return 3 }
         return chat.contains(self) ? 2 : Envelope.minor
     }
 
-    /// The minor at which an event carries its time and actor (protocol 1.6).
-    public static let attributedEvents: Int64 = 6
+    /// The minor at which an event carries its time and actor (protocol 1.6) and a sentence
+    /// that says what it recorded (1.7).
+    public static let attributedEvents: Int64 = 7
 
     /// A payload carries exactly this request's fields: nothing missing, nothing else.
     public func accepts(_ payload: [String: JSON]) -> Bool {

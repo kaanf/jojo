@@ -73,7 +73,7 @@ public struct SnapshotRow: Equatable, Sendable, Identifiable {
 /// One committed event as the `Events` answer gives it: its sequence, the engine epoch that
 /// committed it, its type, the aggregate it changed and the first 512 characters of its
 /// payload; at 1.6 also the time it was recorded and who caused it (Human, ClaudeCode,
-/// Codex or Core). The helper sends no hash.
+/// Codex or Core); at 1.7 a sentence that says what it recorded. The helper sends no hash.
 public struct JournalEvent: Equatable, Sendable, Identifiable {
     public let seq: Int64
     public let epoch: Int64
@@ -87,6 +87,8 @@ public struct JournalEvent: Equatable, Sendable, Identifiable {
     /// Nil from a helper older than 1.6.
     public let at: Date?
     public let actor: String?
+    /// Nil from a helper older than 1.7.
+    public let summary: String?
     public var id: Int64 { seq }
 
     public init?(_ row: JSON) {
@@ -98,6 +100,7 @@ public struct JournalEvent: Equatable, Sendable, Identifiable {
         revision = row["revision"]?.integer
         at = helperDate(row["at_unix_ms"]?.integer)
         actor = row["actor"]?.string
+        summary = row["summary"]?.string
     }
 }
 
@@ -344,6 +347,13 @@ public final class WorkspaceModel {
     public internal(set) var repairs: RepairList?
     public internal(set) var repairsLoad = PlanLoad.idle
     public var repairsShown = false
+    /// Protocol 1.7: whether the Dashboard is the shown destination; only then does it read
+    /// the features, attempts, executables and events it shows.
+    public var dashboardShown = false
+    /// Protocol 1.7: each feature's stages and blockers, read only while the Dashboard is
+    /// shown.
+    public internal(set) var features: FeatureList?
+    public internal(set) var featuresLoad = PlanLoad.idle
     /// Protocol 1.6: attempts with names and live state, read with the repairs.
     public internal(set) var attempts: AttemptList?
     public internal(set) var attemptsLoad = PlanLoad.idle

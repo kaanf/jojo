@@ -325,3 +325,40 @@ A waiting candidate is a sealed attempt whose newest host validation passed and 
 - `ChatIndex` gives each feature `name`: the title of its newest requirements document, else the first non-empty line of its first message, at most 160 characters.
 
 A frame of minor 1 to 5 is answered exactly as before. `crates/jojo-storage/tests/r01_frames.rs` sends its newer-than-helper Hello at minor 7 and pins nine more answers at its end (217 in all).
+
+## Protocol 1.7: the Dashboard's data
+
+Protocol minor 7 adds one read-only query and, for a frame of minor ≥ 7, more fields of two existing answers. Nothing is stored for them: the helper derives each value from what the core already records (schema 15 unchanged). The helper's `MINOR` is 7; Hello for a frame of minor ≥ 7 lists `Features` after `Documents`. A frame of minor ≤ 6 naming it is answered `UnknownType`. Its payload has exactly the field `before`; anything else is `InvalidPayload: unexpected or missing fields`, and a `before` that is neither `null` nor a non-negative integer is refused as such. The derivation is `crates/jojo-storage/src/features.rs`.
+
+The macOS client sends `Features` and `Attempts` at minor 7 and `Events` at minor 7 for Activity & Audit and the Dashboard (the poll stays at 1). The Dashboard, the screen the app opens on, reads `Features`, `Attempts`, `Executables` and `Events` while it is shown and with each new snapshot.
+
+### Features
+
+`Features {before}` returns `features`, at most 16, newest first, and `next` (`null`, or the `before` of the following page: the `number` of the last row). A feature is one that has a chat turn or a requirements document. Each entry:
+
+| Field | Meaning |
+|---|---|
+| `feature`, `number` | The feature and its place in the order features first appeared, from 1 (the app shows it as "FT-n") |
+| `name` | As in `ChatIndex` at 1.6 |
+| `repository`, `repository_name`, `project`, `project_name` | The repository it works in (its chat's, else its newest plan run's), the last component of its path, and the project that repository belongs to at its newest revision; `null` when unknown |
+| `stages` | `discovery`, `specification`, `planning`, `execution`, `verification`, each `{state, label}`: `state` is `Done`, `Current`, `Running`, `NeedsYou`, `Blocked`, `Failed`, `Stale`, `Unknown` or `Off` (not reached); `label` a few words (`"Q open"`, `"PRD rev 2"`, `"ADR rev 1"`, `"2 running"`, `"1 to accept"`) or `null` |
+| `running` | Its live attempts |
+| `blocked` | Its blockers, all of them |
+| `awaiting` | Its documents in state `Pending` and its candidates that passed host validation and wait for the human |
+| `done` | Its plan run is `DONE`; without a run, execution and verification are both `Done` |
+| `blockers` | At most 8: `kind` (`Question` or `Step`), `question`, `step`, `key`, `title`, `reason` (the question's prompt or the step's detail) |
+
+How each stage is derived:
+
+- **Discovery:** `NeedsYou` while a blocking question about the feature has no human answer; `Running` while a discovery turn runs; `Done` once a requirements document exists; `Current` ("In discussion") when turns exist without either; else `Off`.
+- **Specification:** the newest requirements document's approval: `Approved` is `Done`; `Pending` is `NeedsYou` ("PRD rev n"), or `Stale` after a decision on an earlier revision; `Rejected` and `Revoked` are `Failed`; `NotReady` is `Current` ("Drafting").
+- **Planning:** `Running` while a plan turn runs; then the ADR and plans drafted on that requirements document: the first `Pending` one is `NeedsYou` ("ADR rev n", "Plan rev n"), a stale one `Stale`, a rejected or revoked one `Failed`, all approved `Done`.
+- **Execution:** with a plan run, `DONE` is `Done`, else steps `Running`, `Repairing`, `Validating`, `Reviewing` give `Running` ("n running"), steps `Blocked`, `NeedsHuman`, `Conflict`, `Refused` give `Blocked` ("n blocked"), steps `Review` give `NeedsYou` ("n to review"), a paused run `NeedsYou`, a cancelled one `Failed`, a halted one `Blocked`. Without a run, from the newest attempt of each step of the feature's plans: live ones `Running`, a held one `Blocked`, a succeeded one `Done`, else `Failed`.
+- **Verification:** over the newest attempt of each step that has a candidate: a failed host validation `Failed` ("n failed"), one without a verdict `Unknown`, a passed one the human has not decided `NeedsYou` ("n to accept"), one never run `NeedsYou` ("n not run"), all accepted `Done`.
+
+### Changed for a frame of minor ≥ 7
+
+- `Attempts` gives each attempt `ordinal` (its place among its step's attempts, from 1), `repository`, `repository_name`, `project`, `project_name`, `validation` (`null` without a candidate; else `state` `NotRun`, `Unknown`, `Passed` or `Failed`, `at_unix_ms` of the verdict, and `decision` `Accepted`, `Rejected` or `null`) and `activity` (`null` before any provider record; else `text`, a few words for the newest record's kind such as "Using a tool" or "Writing", and `at_unix_ms`).
+- `Events` gives each event `summary`: one sentence with the names a person knows ("api · attempt 1 started on Claude Code", "Host validation of api · attempt 1 passed", "Slugify from the shell rev 1 approved" for a requirements document by its title, "Plan run of Slugify from the shell started"). An event type without a sentence of its own is named by its type ("Worktree ready"), with the attempt its payload names.
+
+A frame of minor 1 to 6 is answered exactly as before. `crates/jojo-storage/tests/r01_frames.rs` sends its newer-than-helper Hello at minor 8 and pins five more answers at its end (222 in all).

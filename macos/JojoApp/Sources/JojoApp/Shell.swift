@@ -126,6 +126,10 @@ struct AppShell<Content: View>: View {
     @ObservedObject var model: AppModel
     @Binding var screen: Screen
     let showInspector: () -> Void
+    /// The shown screen's own header controls, before the shell's icon buttons, and its one
+    /// primary action after them.
+    var controls: AnyView?
+    var primary: AnyView?
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -133,7 +137,8 @@ struct AppShell<Content: View>: View {
             Sidebar(screen: $screen, status: status, counters: counters)
             VStack(spacing: 0) {
                 Header(screen: screen, pending: model.workspace.commandPending,
-                       refresh: { model.workspace.refresh() }, showInspector: showInspector)
+                       refresh: { model.workspace.refresh() }, showInspector: showInspector,
+                       controls: controls, primary: primary)
                     .padding(EdgeInsets(top: 10, leading: 4, bottom: 6, trailing: 10))
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -329,6 +334,9 @@ struct Header: View {
     let pending: Bool
     let refresh: () -> Void
     let showInspector: () -> Void
+    var controls: AnyView?
+    var primary: AnyView?
+    var now = Date()
 
     var body: some View {
         HStack(spacing: 12) {
@@ -336,7 +344,8 @@ struct Header: View {
                 Text(screen.title)
                     .textStyle(screen == .dashboard ? .dashboardTitle : .pageTitle)
                     .lineLimit(1)
-                Text("\(screen.place) · \(screen.title)")
+                // The Dashboard names the day ("Workspace · Monday, 16 November"); the others the screen.
+                Text("\(screen.place) · \(screen == .dashboard ? now.formatted(.dateTime.weekday(.wide).day().month(.wide)) : screen.title)")
                     .textStyle(.secondary)
                     .foregroundStyle(theme.text2)
                     .lineLimit(1)
@@ -346,6 +355,7 @@ struct Header: View {
                 OperationalPill(.requested, standalone: true)
                     .help("Sent to core · waiting for confirmation")
             }
+            if let controls { controls }
             CapsuleGroup {
                 Button(action: refresh) { Label("Refresh", systemImage: "arrow.clockwise") }
                     .buttonStyle(IconButtonStyle())
@@ -354,6 +364,7 @@ struct Header: View {
                     .buttonStyle(IconButtonStyle())
                     .help("Show Inspector")
             }
+            if let primary { primary }
         }
         .frame(minHeight: 44)
     }

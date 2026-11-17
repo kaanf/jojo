@@ -12,7 +12,9 @@ pub const MAJOR: i64 = 1;
 /// 1.5 (M4) adds the repairs query; a project record carries its repair limit and reviewer.
 /// 1.6 adds the attempts and documents queries; at 1.6 an event carries its time and
 /// actor and a feature of the chat index its name.
-pub const MINOR: i64 = 6;
+/// 1.7 adds the features query; at 1.7 an event carries a sentence and an attempt its
+/// ordinal, repository, project, host validation and newest activity.
+pub const MINOR: i64 = 7;
 pub const MAX_FRAME: usize = 64 * 1024;
 pub const MAX_PAGE: u32 = 8;
 

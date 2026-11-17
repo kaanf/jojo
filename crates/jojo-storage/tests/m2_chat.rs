@@ -1792,3 +1792,222 @@ fn s2_attempts_report_live_state_names_and_times_and_events_their_actor() {
     assert_eq!(old.len(), events.len());
     assert!(get(&old[0], "actor").is_err() && get(&old[0], "at_unix_ms").is_err());
 }
+
+// ---- Protocol 1.7: the Dashboard's data ----
+
+impl H {
+    fn ok7(&mut self, kind: &str, payload: Json) -> Json {
+        let r = self.at(7, kind, payload);
+        assert_eq!(r.kind, "Response", "{kind}: {:?}", r.payload);
+        r.payload
+    }
+
+    fn features(&mut self) -> Vec<Json> {
+        let page = self.ok7("Features", object([("before", Json::Null)]));
+        assert_eq!(field(&page, &["next"]), &Json::Null);
+        items(field(&page, &["features"])).to_vec()
+    }
+
+    /// The state and the word of one stage of the only feature.
+    fn stage(&mut self, name: &str) -> (String, String) {
+        let features = self.features();
+        assert_eq!(features.len(), 1, "{features:?}");
+        let stage = field(&features[0], &["stages", name]);
+        let label = match field(stage, &["label"]) {
+            Json::Null => String::new(),
+            l => str_of(l, &[]).to_owned(),
+        };
+        (str_of(stage, &["state"]).to_owned(), label)
+    }
+}
+
+#[test]
+fn s3_a_feature_moves_through_its_stages_and_events_and_attempts_say_what_happened() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h_save_project(&mut h, &repository);
+    assert!(h.features().is_empty());
+    let r = h.at(6, "Features", object([("before", Json::Null)]));
+    assert_eq!(field(&r.payload, &["code"]), &text("UnknownType"));
+
+    h.turn(
+        4001,
+        &repository,
+        "Codex",
+        "slugify should be usable from the shell.\nfixture: lead",
+    );
+    let feature = h.features()[0].clone();
+    assert_eq!(field(&feature, &["number"]), &number(1));
+    assert_eq!(
+        str_of(&feature, &["name"]),
+        "slugify should be usable from the shell."
+    );
+    assert_eq!(str_of(&feature, &["project_name"]), "Sample");
+    assert!(!str_of(&feature, &["repository_name"]).is_empty());
+    assert_ne!(h.stage("discovery").0, "Off");
+    assert_eq!(h.stage("specification").0, "Off");
+    assert_eq!(h.stage("execution").0, "Off");
+
+    // The drafted requirements document waits for the human.
+    let prd = h.approved_requirements_draft(&repository);
+    assert_eq!(h.stage("discovery").0, "Done");
+    assert_eq!(
+        h.stage("specification"),
+        ("NeedsYou".into(), "PRD rev 1".into())
+    );
+    assert_eq!(field(&h.features()[0], &["awaiting"]), &number(1));
+    h.approve(&prd);
+    assert_eq!(h.stage("specification").0, "Done");
+
+    // The ADR waits first, then the two plans; approved, planning is done.
+    let row = h.drafted_plan(&repository, 4003, "fixture: lead-kinds");
+    let plan = field(&row, &["plan"]).clone();
+    assert_eq!(h.stage("planning"), ("NeedsYou".into(), "ADR rev 1".into()));
+    h.approve(&field(&plan, &["adr"]).clone());
+    h.approve(&field(&plan, &["validation"]).clone());
+    let plan_id = field(&plan, &["plan"]).clone();
+    h.approve(&plan_id);
+    assert_eq!(h.stage("planning").0, "Done");
+    assert_eq!(field(&h.features()[0], &["awaiting"]), &number(0));
+
+    // Two steps run at once; the third waits for them and blocks nothing.
+    h.ok3("RunPlan", object([("plan", plan_id.clone())]));
+    h.s().tick().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let (state, label) = h.stage("execution");
+        if state == "Running" && label == "2 running" {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{state} {label}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(field(&h.features()[0], &["running"]), &number(2));
+
+    h.run_until(&plan_id, |s| s[0] == "Review" && s[1] == "Review");
+    assert_eq!(
+        h.stage("execution"),
+        ("NeedsYou".into(), "2 to review".into())
+    );
+    assert_eq!(
+        h.stage("verification"),
+        ("NeedsYou".into(), "2 to accept".into())
+    );
+    let feature = h.features()[0].clone();
+    assert_eq!(field(&feature, &["awaiting"]), &number(2));
+    assert_eq!(field(&feature, &["blocked"]), &number(0));
+    assert_eq!(field(&feature, &["done"]), &Json::Bool(false));
+
+    // At 1.7 an attempt carries its place, repository, validation and newest record.
+    let attempts = items(field(
+        &h.ok7("Attempts", object([("before", Json::Null)])),
+        &["attempts"],
+    ))
+    .to_vec();
+    assert_eq!(attempts.len(), 2);
+    for a in &attempts {
+        assert_eq!(field(a, &["ordinal"]), &number(1));
+        assert_eq!(str_of(a, &["project_name"]), "Sample");
+        assert!(!str_of(a, &["repository_name"]).is_empty());
+        assert_eq!(str_of(a, &["validation", "state"]), "Passed");
+        assert!(uint(field(a, &["validation", "at_unix_ms"])).unwrap() > 0);
+        assert_eq!(field(a, &["validation", "decision"]), &Json::Null);
+        assert!(!str_of(a, &["activity", "text"]).is_empty());
+    }
+    // A 1.6 frame is answered as before.
+    assert!(get(&h.attempts()[0], "ordinal").is_err());
+
+    h.accept_step(&plan_id, 0);
+    assert_eq!(
+        h.stage("verification"),
+        ("NeedsYou".into(), "1 to accept".into())
+    );
+    let accepted = items(field(
+        &h.ok7("Attempts", object([("before", Json::Null)])),
+        &["attempts"],
+    ))
+    .iter()
+    .filter(|a| field(a, &["validation", "decision"]) == &text("Accepted"))
+    .count();
+    assert_eq!(accepted, 1);
+
+    // Every event has a sentence at 1.7, with the names a person knows.
+    let events = h.all_events(7);
+    let said = |kind: &str| -> Vec<String> {
+        events
+            .iter()
+            .filter(|e| str_of(e, &["type"]) == kind)
+            .map(|e| str_of(e, &["summary"]).to_owned())
+            .collect()
+    };
+    assert!(events.iter().all(|e| !str_of(e, &["summary"]).is_empty()));
+    assert_eq!(said("EngineStarted")[0], "Session 1 started");
+    assert!(
+        said("HumanDecision")
+            .iter()
+            .any(|s| s.ends_with("rev 1 approved")),
+        "{:?}",
+        said("HumanDecision")
+    );
+    let title = str_of(&h.features()[0], &["name"]).to_owned();
+    assert_eq!(
+        said("PlanRunStarted"),
+        [format!("Plan run of {title} started")]
+    );
+    let mut launches = said("ProcessLaunchIssued");
+    launches.sort();
+    assert_eq!(
+        launches,
+        [
+            "api · attempt 1 started on Claude Code",
+            "usage · attempt 1 started on Codex"
+        ]
+    );
+    assert!(
+        said("ValidationEnded")
+            .iter()
+            .all(|s| s.ends_with("passed"))
+    );
+    assert!(said("CandidateAccepted")[0].ends_with("attempt 1 accepted"));
+    // A 1.6 frame is answered as before: no sentence.
+    assert!(get(&h.all_events(6)[0], "summary").is_err());
+}
+
+#[test]
+fn s3_an_open_blocking_question_blocks_the_feature_and_names_it() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h_save_project(&mut h, &repository);
+    h.turn(
+        4001,
+        &repository,
+        "Codex",
+        "slugify should be usable from the shell.\nfixture: lead",
+    );
+    let chat = h.chat(0);
+    let questions = items(field(&items(field(&chat, &["turns"]))[0], &["questions"])).to_vec();
+    let question = questions[0].clone();
+    h.ok(
+        "AnswerQuestion",
+        object([
+            ("question", field(&question, &["question"]).clone()),
+            ("revision", field(&question, &["revision"]).clone()),
+            ("action", text("Block")),
+            ("answer", Json::Null),
+        ]),
+    );
+    let feature = h.features()[0].clone();
+    assert_eq!(
+        str_of(&feature, &["stages", "discovery", "state"]),
+        "NeedsYou"
+    );
+    assert!(str_of(&feature, &["stages", "discovery", "label"]).ends_with("open"));
+    let blockers = items(field(&feature, &["blockers"]));
+    assert!(!blockers.is_empty());
+    assert_eq!(
+        field(&feature, &["blocked"]),
+        &number(blockers.len() as u64)
+    );
+    assert_eq!(str_of(&blockers[0], &["kind"]), "Question");
+    assert!(!str_of(&blockers[0], &["reason"]).is_empty());
+}

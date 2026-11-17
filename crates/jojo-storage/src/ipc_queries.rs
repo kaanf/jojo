@@ -248,12 +248,14 @@ impl ReadView<'_> {
     }
     /// Events use a bounded detail projection, explicitly marked when the detail needs a
     /// separate chunk query. Sequence/aggregate identity are never omitted. `attributed`
-    /// (protocol 1.6) adds the time an event was recorded and who caused it.
+    /// (protocol 1.6) adds the time an event was recorded and who caused it; `summarized`
+    /// (1.7) adds a sentence that says what it recorded.
     pub fn ipc_events(
         &self,
         after: u64,
         limit: u32,
         attributed: bool,
+        summarized: bool,
     ) -> Result<Json, StorageError> {
         if limit == 0 || limit > 8 {
             return Err(bad("invalid event page"));
@@ -261,6 +263,18 @@ impl ReadView<'_> {
         let rows=self.conn.query("SELECT seq,epoch,kind,aggregate_kind,aggregate_id,aggregate_revision,substr(payload,1,512),length(payload)>512,recorded_at_unix_ms,command_id FROM events WHERE seq>?1 ORDER BY seq LIMIT ?2",&[Value::Int(to_db(after)?),Value::Int(i64::from(limit))],|r|Ok(((r.int(0)?,r.int(1)?,r.text(2)?,r.optional_text(3)?,r.optional_text(4)?,r.optional_int(5)?,r.text(6)?,r.int(7)?),(r.int(8)?,r.optional_text(9)?))))?;
         let mut out = Vec::new();
         for ((seq, epoch, kind, ak, ai, rev, payload, truncated), (at, command)) in rows {
+            let summary = if summarized {
+                Some(crate::features::event_summary(
+                    self.conn,
+                    seq,
+                    epoch,
+                    &kind,
+                    ai.as_deref(),
+                    &payload,
+                )?)
+            } else {
+                None
+            };
             let Json::Object(mut fields) = object([
                 ("seq", Json::Int(seq)),
                 ("epoch", Json::Int(epoch)),
@@ -277,6 +291,9 @@ impl ReadView<'_> {
                 let actor = crate::overview::event_actor(self.conn, seq, command.as_deref())?;
                 fields.push(("at_unix_ms".into(), Json::Int(at)));
                 fields.push(("actor".into(), text(actor)));
+            }
+            if let Some(summary) = summary {
+                fields.push(("summary".into(), text(summary)));
             }
             out.push(Json::Object(fields));
         }

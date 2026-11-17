@@ -2,7 +2,7 @@
 
 The reusable parts of the app and the status model they draw. Token names refer to [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md). Source: the canvas page "Components & states", board "Components and status model" (`ComponentsMac.dc.html`), and the shell of the product boards (`DashboardMac.dc.html`, `AgentRunsMac.dc.html`, `RecoveryLaunchMac.dc.html`); see [README.md](README.md).
 
-Sections 1 to 12 are the design. Sections 13 to 24 are implementation notes written for the first design system; each is rewritten when its surface moves (DESIGN_SYSTEM.md, section 12).
+Sections 1 to 12 are the design. Sections 13 to 25 are implementation notes written for the first design system; each is rewritten when its surface moves (DESIGN_SYSTEM.md, section 12).
 
 ## 1. Status model
 
@@ -405,3 +405,21 @@ Added to `Surfaces.swift` for Feature Chat and New Feature ([screens/FEATURE_CHA
 ## 24. Implementation notes: project and run surfaces (design wave 3, M3)
 
 No new component. Projects (`docs/design/screens/PROJECTS.md`) is built from the list row, fact line, input field, filter chip (as a toggle for a repository and the default provider), setting line and state block. The plan run on Execution Plan (`docs/design/screens/EXECUTION_PLAN.md`, section 8) uses the fact line, list row and kind tag; a step's state is a kind tag whose tone follows the status model (Integrated `ok`; Running, Validating, Accepted `info`; Review, Blocked `warn`; Conflict, Failed, Refused `danger`; the rest `neutral`). A task node of a running plan shows the step's key, title, provider and state instead of its identity. Off-screen renders: `execution-plan-run-…`, `execution-plan-run-narrow-…`, `projects-empty-…`, `-listed-…`, `-editing-…`, `-unreadable-…`, `-disconnected-…`.
+
+## 25. Implementation notes: Dashboard surfaces (Liquid Glass, step 3)
+
+Built in `macos/JojoApp/Sources/JojoApp/Dashboard.swift` on the Liquid Glass tokens, for `docs/design/screens/DASHBOARD.md`; the first-system surfaces of sections 14 to 24 are not used there. Each is in the `Gallery` of `DesignShellTests.swift`.
+
+| Component | Notes |
+|---|---|
+| `KPITile` | Section 5.2: a button, radius 16, padding 14 16, gap 6; 24 × 24 tile (radius 7, fixed color, white glyph) and label (`bodyStrong`); value (`kpiValue`) with its unit (`secondary`, `text2`) on one baseline; one `secondary` line. Under the pointer `cardHover` |
+| `ItemRow` | Section 5.3: min height 52, padding 8 14, gap 12; 28 × 28 tile (radius 8) with a glyph or two letters ("CC"); title and `sub` line cut to one line; one trailing pill; a chevron only when the row opens something; rows after the first have a 0.5 `sep` top line |
+| `OperationalPill(_:tone:)` | The row form of section 2.2 (20 high, no glyph) with a word and hue of its own: "Proposed" blue, "Needed" and "Held" orange, "Review" purple, "Available" green. Added to `StatusComponents.swift` |
+| `SectionHead`, `TextLink`, `GroupLabel` | Section 4.5: `sectionTitle`, count in `secondary` `text2`, a trailing 13 medium `accent` link; group labels in `label` `text3` |
+| `SegmentedCapsule` | Section 5.6, drawn (a system picker does not render off screen): glass capsule with padding 2, segments 28 high, padding 0 13, 12 medium; the chosen one a `cardHover` capsule with a soft shadow. Used for the time range in the header and the project filter |
+| `PipelineTable`, `StageCell` | Section 5.5: the feature column at least 200 and the rest, six stage columns at least 86, gap 8, padding 12 16; below its minimum width (796) the table scrolls sideways. A cell is an 8 pt dot and a word: Done `green`, Current `accent`, Running the running dot with its `accentTint` halo, NeedsYou `orange`, Blocked and Failed `red`, Stale and Unknown `gray`, Off a `dotOff` dot alone |
+| `RunCard` | A card of "Running now" (radius 14, padding 14, gap 10): key (12 bold `text2`), title, elapsed; place line and the activity pill (green while running, orange otherwise). No progress bar: the core reports none |
+| `BlockedRow`, `HistoryLine` | A row with a dot (red for a step, orange for a question) and "Why" (small secondary) or "Answer" (small primary); a history line (12, padding 7 0) with a dot in the event's hue, the core's sentence and the time |
+| `QuietCard`, `SkeletonCard`, `Placeholder`, `NoteLine` | A section with nothing to list; Loading (two skeleton bars on a card); the placeholder of STATES.md, section 2 (44 × 44 tile, 15 bold title, a sentence at most 280 wide, small buttons) for the empty Dashboard; a one-line `secondary` `text3` note under a section |
+
+The shell's header (`Header`) takes a screen's own controls (before the icon group) and its one primary action (after it), and the Dashboard's sub line names the day. Other screens pass neither and keep their header.
