@@ -20,6 +20,9 @@ struct ProjectDraft: Equatable {
     var kinds = ""
     var defaultProvider = "ClaudeCode"
     var capacity = "2"
+    /// M4 (D2): automatic repairs of a failed plan step (0 to 2) and the reviewer.
+    var repairLimit: Int64 = 2
+    var review = true
 
     static let providers = ["ClaudeCode", "Codex"]
 
@@ -31,6 +34,7 @@ struct ProjectDraft: Equatable {
         testCommand = record.testCommand.joined(separator: " ")
         ciCommand = record.ciCommand.joined(separator: " ")
         kinds = record.kinds.map { "\($0.kind)=\($0.provider)" }.joined(separator: ", ")
+        (repairLimit, review) = (record.repairLimit, record.review)
     }
 
     var isNew: Bool { revision == 0 }
@@ -60,7 +64,7 @@ struct ProjectDraft: Equatable {
         let words = { (s: String) in s.split(separator: " ").map(String.init) }
         return ProjectRecord(id: id, revision: revision, name: name, repositories: repositories, instructions: instructions,
                              testCommand: words(testCommand), ciCommand: words(ciCommand), kinds: rules,
-                             defaultProvider: defaultProvider, capacity: n)
+                             defaultProvider: defaultProvider, capacity: n, repairLimit: repairLimit, review: review)
     }
 }
 
@@ -82,6 +86,14 @@ struct ProjectsState: Equatable {
     }
 
     static func provider(_ word: String) -> String { word == "ClaudeCode" ? "Claude Code" : word }
+    /// M4 (D2): the repair limit in words.
+    static func repairs(_ limit: Int64) -> String {
+        switch limit {
+        case 0: return "Off"
+        case 1: return "Once"
+        default: return "Up to \(limit) times"
+        }
+    }
 
     static func loadFailure(_ reason: String) -> String {
         if reason.hasPrefix("UnknownType") { return "This core has no project records." }
@@ -225,7 +237,9 @@ struct ProjectsView: View {
                     FactLine("Task kinds", project.kinds.isEmpty ? "None; the lead names the provider" :
                         project.kinds.map { "\($0.kind) → \(ProjectsState.provider($0.provider))" }.joined(separator: ", "))
                     FactLine("Default provider", ProjectsState.provider(project.defaultProvider))
-                    FactLine("Parallel capacity", "\(project.capacity) in all", last: true)
+                    FactLine("Parallel capacity", "\(project.capacity) in all")
+                    FactLine("Automatic repair", ProjectsState.repairs(project.repairLimit))
+                    FactLine("Cross-provider review", project.review ? "On: the other provider reviews each step" : "Off", last: true)
                 }
             }
             SectionHeading("Project instructions")
@@ -273,6 +287,25 @@ struct ProjectsView: View {
                         }
                     }
                     FactLine("Parallel capacity") { InputField(prompt: "2", text: field(\.capacity), mono: true) }
+                    FactLine("Automatic repair") {
+                        HStack(spacing: 6) {
+                            ForEach([Int64(0), 1, 2], id: \.self) { limit in
+                                Button { set(\.repairLimit, limit) } label: {
+                                    FilterChip(title: ProjectsState.repairs(limit), isOn: draft.repairLimit == limit)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    FactLine("Cross-provider review") {
+                        Button { set(\.review, !draft.review) } label: {
+                            HStack(spacing: 6) {
+                                CheckBox(isOn: draft.review)
+                                Text("The other provider reviews each step that passed its check").foregroundStyle(theme.text)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
                     FactLine("Instructions", last: true) { InputField(prompt: "given to every agent session", text: field(\.instructions)) }
                 }
             }
@@ -317,7 +350,7 @@ struct ProjectsView: View {
         Binding(get: { state.draft?[keyPath: path] ?? "" }, set: { set(path, $0) })
     }
 
-    private func set(_ path: WritableKeyPath<ProjectDraft, String>, _ value: String) {
+    private func set<Value>(_ path: WritableKeyPath<ProjectDraft, Value>, _ value: Value) {
         guard var draft = state.draft else { return }
         draft[keyPath: path] = value
         actions.edit(draft)

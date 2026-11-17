@@ -334,6 +334,10 @@ public final class WorkspaceModel {
     public internal(set) var executablesLoad = PlanLoad.idle
     /// Whether Settings & Providers is the shown destination; only then is it read.
     public var executablesShown = false
+    /// M4: repairs, holds and reviews of plan steps, read only while Agent Runs is shown.
+    public internal(set) var repairs: RepairList?
+    public internal(set) var repairsLoad = PlanLoad.idle
+    public var repairsShown = false
     /// M2: Feature Chat. Read only when that screen asks; `refresh` does not fill them.
     public internal(set) var chatIndex: ChatIndex?
     public internal(set) var chatIndexLoad = PlanLoad.idle

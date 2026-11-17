@@ -14,6 +14,7 @@ public enum Request: String, CaseIterable, Sendable {
     case ChatTurn, AnswerQuestion, CancelTurn, FeatureChat, ChatText, ChatIndex
     case SaveProject, Projects, RunPlan, ControlPlan, PlanRun
     case Executables
+    case Repairs
 
     public var fields: [String] {
         switch self {
@@ -47,12 +48,13 @@ public enum Request: String, CaseIterable, Sendable {
         case .FeatureChat: return ["feature", "after"]
         case .ChatText: return ["subject", "part", "offset"]
         case .ChatIndex: return []
-        case .SaveProject: return ["project", "revision", "name", "repositories", "instructions", "test_command", "ci_command", "kinds", "default_provider", "capacity"]
+        case .SaveProject: return ["project", "revision", "name", "repositories", "instructions", "test_command", "ci_command", "kinds", "default_provider", "capacity", "repair_limit", "review"]
         case .Projects: return []
         case .RunPlan: return ["plan"]
         case .ControlPlan: return ["plan", "action"]
         case .PlanRun: return ["plan"]
         case .Executables: return []
+        case .Repairs: return []
         }
     }
 
@@ -60,10 +62,11 @@ public enum Request: String, CaseIterable, Sendable {
     /// only from 1.2; every other request keeps the 1.1 frames it always had, so a helper
     /// that does not know 1.2 answers those as before and the chat ones as unknown. M3's
     /// project and plan-runner requests exist only from 1.3, and D3's executables query
-    /// only from 1.4, in the same way.
+    /// only from 1.4, and M4's repairs query only from 1.5, in the same way.
     public var minor: Int64 {
         let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText, .ChatIndex]
         let runner: [Request] = [.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun]
+        if self == .Repairs { return 5 }
         if self == .Executables { return 4 }
         if runner.contains(self) { return 3 }
         return chat.contains(self) ? 2 : Envelope.minor

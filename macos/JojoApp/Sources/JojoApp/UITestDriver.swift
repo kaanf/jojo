@@ -146,6 +146,18 @@ final class UITestDriver {
                 trace("candidate-state validation=\(c?.validation.label ?? "none") scope=\(w.scope.label) decision=\(c?.decision ?? "none") can-accept=\(c?.canAccept ?? false) files=\(w.changedFiles.map { "\($0.scope):\($0.path)" }.joined(separator: ";")) detail=\(c?.validationDetail ?? "") scope-detail=\(w.scopeDetail) reasons=\(c?.reasons.joined(separator: ";") ?? "") provider=\(c?.providerTerminal ?? "") log=\(w.agentLog.joined(separator: ";")) diff-bytes=\(w.diff.utf8.count) report-bytes=\(w.validationReport.utf8.count) pending=\(w.commandPending) status=\(w.status)")
             case "state":
                 trace("state phase=\(model.coordinator.phase.name) connection=\(model.client.connection) duplicates=\(model.coordinator.duplicateRequests) primary-visible=\(delegate.primary?.isVisible ?? false) aux=\(delegate.auxiliary != nil) review-status=\(model.workspace.status) recovery=\(model.workspace.recovery.count) admission=\(model.workspace.admission) pending=\(model.workspace.commandPending)")
+            case "repairs":
+                // M4: Agent Runs shown, so its repairs are read.
+                model.workspace.repairsShown = true
+                model.workspace.loadRepairs()
+            case "repairs-state":
+                // What Agent Runs lists, through the same state it renders.
+                let w = model.workspace
+                let state = AgentRunsState(connection: model.client.connection, admission: w.admission,
+                                           attempts: AgentRunsState.attempts(in: w.rows), recovery: w.recovery,
+                                           result: nil, log: [], commandPending: w.commandPending, repairs: w.repairs)
+                let rows = state.runs.map { "\($0.short)|\($0.pill.label)|\($0.line)|\($0.verdict?.text ?? "-")|\($0.repair?.hold ?? "-")" }
+                trace("repairs-state load=\(w.repairsLoad) rows=\(rows.joined(separator: ";"))")
             case "sleep": break
             default:
                 trace("script-error unknown step \(current)")
@@ -167,6 +179,8 @@ final class UITestDriver {
         case "lost":
             if case .channelLost = model.client.connection { return true }
             return false
+        case "repairs":
+            return model.workspace.repairsLoad == .loaded
         case "review-status":
             return !model.workspace.status.isEmpty
         case _ where condition.hasPrefix("status="):

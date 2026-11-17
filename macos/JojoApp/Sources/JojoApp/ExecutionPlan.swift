@@ -146,12 +146,15 @@ struct ExecutionPlanState: Equatable {
         return nil
     }
 
+    /// A step state as words: the core's names, with "NeedsHuman" spelled out (M4).
+    static func stateName(_ state: String) -> String { state == "NeedsHuman" ? "Needs human" : state }
+
     /// The tone of a step's state, in the words of the status model.
     static func tone(_ state: String) -> Tone {
         switch state {
         case "Integrated": return .ok
-        case "Running", "Validating", "Accepted": return .info
-        case "Review", "Blocked": return .warn
+        case "Running", "Repairing", "Validating", "Reviewing", "Accepted": return .info
+        case "Review", "Blocked", "NeedsHuman": return .warn
         case "Conflict", "Failed", "Refused": return .danger
         default: return .neutral
         }
@@ -321,7 +324,6 @@ struct ExecutionPlanState: Equatable {
         Missing(label: "Plan checks", value: "Not reported. The core validates a plan when it is stored."),
         Missing(label: "Plan revisions", value: "Only the approved revision is reported. A newer revision that is not approved makes the approval stale, and then no plan is reported."),
         Missing(label: "Execution history", value: "Not reported for a step. Attempts are on Agent Runs."),
-        Missing(label: "Repair", value: "Decided, not built: automatic, at most two tries, then a human hold."),
         Missing(label: "Parallel capacity", value: "Decided (D4): one number for the whole core, set in the project record. Shown on Projects."),
     ]
 }
@@ -519,7 +521,7 @@ struct ExecutionPlanView: View {
                             Button { actions.pick(node.id) } label: {
                                 if let run = state.runStep(node.id) {
                                     TaskNode(identifier: run.key, title: run.title,
-                                             detail: "\(ExecutionPlanState.provider(run.provider)) · \(run.state)", selected: node.id == state.selected)
+                                             detail: "\(ExecutionPlanState.provider(run.provider)) · \(ExecutionPlanState.stateName(run.state))", selected: node.id == state.selected)
                                 } else {
                                     TaskNode(identifier: ExecutionPlanState.short(node.id), title: ExecutionPlanState.provider(node.step.provider),
                                              detail: "Step rev \(node.step.revision)", selected: node.id == state.selected)
@@ -597,7 +599,7 @@ struct ExecutionPlanView: View {
                                     meta: [ExecutionPlanState.provider(step.provider), step.kind].compactMap { $0 }.joined(separator: " · "),
                                     detail: step.detail.isEmpty ? (step.dependsOn.isEmpty ? "No dependency" : "After \(step.dependsOn.joined(separator: ", "))") : step.detail,
                                     leading: { EmptyView() },
-                                    trailing: { KindTag(step.state, tone: ExecutionPlanState.tone(step.state)) })
+                                    trailing: { KindTag(ExecutionPlanState.stateName(step.state), tone: ExecutionPlanState.tone(step.state)) })
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -687,9 +689,13 @@ struct ExecutionPlanView: View {
             if let run {
                 InspectorSection("Run") {
                     FactGrid {
-                        Fact("State", run.state)
+                        Fact("State", ExecutionPlanState.stateName(run.state))
                         if !run.detail.isEmpty { Fact("Detail", run.detail) }
                         if let kind = run.kind { Fact("Task kind", kind) }
+                        // M4: the repair counter and the other provider's verdict.
+                        if let repair = run.repair { Fact("Repair", "\(repair.ordinal) of \(repair.limit)") }
+                        else if run.repairs > 0 { Fact("Repairs", "\(run.repairs)") }
+                        if let review = run.review { Fact("Review", review.verdict) }
                         if let attempt = run.attempt { Fact("Attempt") { whole(attempt) } }
                         if let commit = run.commit { Fact("Commit") { whole(commit) } }
                     }

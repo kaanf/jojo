@@ -7,6 +7,8 @@ import SwiftUI
 /// What is happening now.
 enum OperationalState: CaseIterable, Sendable {
     case idle, running, waiting, blocked, awaitingApproval, paused, recoveryRequired, failed, completed
+    /// M4 (D2): the core starts a repair attempt of a failed plan step on its own.
+    case repairing
 
     var label: String {
         switch self {
@@ -19,13 +21,14 @@ enum OperationalState: CaseIterable, Sendable {
         case .recoveryRequired: return "Recovery required"
         case .failed: return "Failed"
         case .completed: return "Completed"
+        case .repairing: return "Repairing"
         }
     }
 
     var tone: Tone {
         switch self {
         case .idle, .waiting, .paused: return .neutral
-        case .running: return .info
+        case .running, .repairing: return .info
         case .blocked, .awaitingApproval: return .warn
         case .recoveryRequired, .failed: return .danger
         case .completed: return .ok
@@ -44,6 +47,7 @@ enum OperationalState: CaseIterable, Sendable {
         case .blocked: return .symbol("exclamationmark.triangle.fill", 9)
         case .paused: return .symbol("pause.fill", 8)
         case .recoveryRequired: return .ringDot
+        case .repairing: return .symbol("arrow.triangle.2.circlepath", 8)
         }
     }
 }

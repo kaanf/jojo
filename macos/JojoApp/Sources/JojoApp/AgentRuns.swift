@@ -24,6 +24,8 @@ struct AgentRunsState: Equatable {
     var result: CandidateReview?
     var log: [String]
     var commandPending: Bool
+    /// M4: repairs, holds and reviews of plan steps (`Repairs`), while the screen is shown.
+    var repairs: RepairList? = nil
 
     /// Log records the workspace reads for a loaded result.
     static let logLimit: Int64 = 64
@@ -56,7 +58,7 @@ struct AgentRunsState: Equatable {
     var runs: [AttemptRun] {
         (attempts ?? []).map { record in
             AttemptRun(record: record, held: recovery.first { $0.attempt == record.id },
-                       result: result?.attempt == record.id ? result : nil)
+                       result: result?.attempt == record.id ? result : nil, repair: repairs?[record.id])
         }
     }
 
@@ -88,6 +90,8 @@ struct AttemptRun: Identifiable, Equatable {
     let record: AttemptRecord
     let held: RecoveryRow?
     let result: CandidateReview?
+    /// M4: the attempt as a plan step's attempt, when the repairs answer lists it.
+    var repair: AttemptRepair? = nil
 
     var id: String { record.id }
     /// The first eight characters of the identity: the list title, under "Attempts".
@@ -100,6 +104,13 @@ struct AttemptRun: Identifiable, Equatable {
     /// attempt without a sealed result may be running, starting or stopped.
     var pill: (state: OperationalState, label: String) {
         if held != nil { return (.recoveryRequired, processGone ? "Confirmed dead" : "Unknown") }
+        // M4: the step's state, as the core derives it, for the step's newest attempt.
+        switch repair?.state {
+        case "Repairing": return (.repairing, "Repairing")
+        case "Reviewing": return (.running, "Reviewing")
+        case "NeedsHuman": return (.blocked, "Needs human")
+        default: break
+        }
         guard let result else { return (.idle, "Not loaded") }
         guard result.sealed else { return (.idle, "Not sealed") }
         switch result.outcome {
@@ -113,6 +124,7 @@ struct AttemptRun: Identifiable, Equatable {
     /// Second line of the list item.
     var line: String {
         if held != nil { return "Held in Recovery Center" }
+        if let repair { return "\(repair.key) · \(repair.counter)" }
         guard let result else { return "Scheduler record: \(record.record)" }
         guard result.sealed else { return "No sealed result yet" }
         return result.reason.isEmpty ? "No reason recorded" : result.reason
@@ -138,6 +150,18 @@ struct AttemptRun: Identifiable, Equatable {
         return entries
     }
 
+    /// M4: the review verdict line and its tone.
+    var verdict: (text: String, tone: Tone)? {
+        guard let review = repair?.review else { return nil }
+        let tone: Tone = switch review.state {
+        case "APPROVED": .ok
+        case "REJECTED": .danger
+        case "RUNNING": .info
+        default: .warn
+        }
+        return (review.verdict, tone)
+    }
+
     var recoveryStatus: String {
         guard held != nil else { return "None reported by the last inspection." }
         return "Held in Recovery Center · " + (processGone ? "every process proven gone" : "process state unknown")
@@ -153,6 +177,8 @@ struct AgentRunsActions {
 /// The Agent Runs destination, bound to the app model.
 struct AgentRunsScreen: View {
     @ObservedObject var model: AppModel
+    /// M4: repairs and reviews are read only while this destination is the shown one.
+    let visible: Bool
     let open: (Screen) -> Void
 
     var body: some View {
@@ -162,8 +188,13 @@ struct AgentRunsScreen: View {
                                   attempts: workspace.snapshotSeq == nil && workspace.rows.isEmpty
                                       ? nil : AgentRunsState.attempts(in: workspace.rows),
                                   recovery: workspace.recovery, result: workspace.candidate, log: workspace.agentLog,
-                                  commandPending: workspace.commandPending),
+                                  commandPending: workspace.commandPending, repairs: workspace.repairs),
             actions: AgentRunsActions(load: { workspace.loadCandidate($0) }, cancel: { workspace.cancelAttempt($0) }, open: open))
+            .onChange(of: visible) {
+                workspace.repairsShown = visible
+                if visible { workspace.loadRepairs() }
+            }
+            .onChange(of: workspace.snapshotSeq) { if visible { workspace.loadRepairs() } }
     }
 }
 
@@ -328,6 +359,7 @@ struct AgentRunsView: View {
             }
             Footnote("Start time, duration and base commit are not reported yet.")
         }
+        if let repair = run.repair { planStep(repair, verdict: run.verdict) }
         VStack(alignment: .leading, spacing: 8) {
             SectionHeading("Recorded facts")
             Card(CardShape(radius: 10, vertical: 8, horizontal: 14)) { Timeline(run.facts) }
@@ -340,6 +372,41 @@ struct AgentRunsView: View {
                 }
             }
             Console(state.console(run))
+        }
+    }
+
+    /// M4: the attempt as a step of a plan run: its repair counter, review and hold.
+    private func planStep(_ repair: AttemptRepair, verdict: (text: String, tone: Tone)?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeading("Plan step")
+            Card(.panel) {
+                VStack(alignment: .leading, spacing: 12) {
+                    WrappingRow(spacing: 28, lineSpacing: 14) {
+                        LabeledField("Step") { value(repair.key) }
+                        LabeledField("Repair") { value(repair.counter.prefix(1).uppercased() + repair.counter.dropFirst()) }
+                        LabeledField("Review") {
+                            if let verdict {
+                                Text(verdict.text).textStyle(.control).foregroundStyle(theme.foreground(verdict.tone))
+                            } else {
+                                value("Not reviewed", known: false)
+                            }
+                        }
+                    }
+                    if let failure = repair.failure {
+                        LabeledField("Why it was repaired") { value(failure) }
+                    }
+                    if let notes = repair.review?.notes, !notes.isEmpty {
+                        LabeledField("Reviewer's notes") { value(notes) }
+                    }
+                    if let objection = repair.review?.objection {
+                        LabeledField("Strongest objection") { value(objection) }
+                    }
+                    if let hold = repair.hold {
+                        NoticeWell("Waits for you: \(hold)")
+                    }
+                }
+            }
+            Footnote("A failed step is repaired at most twice, then waits for you. A review approves nothing; you accept or reject on Verification & Evidence.")
         }
     }
 
@@ -366,6 +433,8 @@ struct AgentRunsView: View {
             InspectorSection("Supervision") {
                 FactGrid {
                     Fact("State") { OperationalPill(run.pill.state, label: run.pill.label) }
+                    if let repair = run.repair { Fact("Repair", repair.counter) }
+                    if let verdict = run.verdict { Fact("Review", verdict.text) }
                     Fact("Scheduler record", run.recordText)
                     Fact("Worktree record", run.record.worktree ?? "None reported")
                 }

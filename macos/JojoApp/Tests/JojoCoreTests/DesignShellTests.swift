@@ -68,13 +68,13 @@ final class DesignShellTests: XCTestCase {
     func test_dw1_operational_states_follow_the_status_table() {
         let tones: [OperationalState: Tone] = [
             .idle: .neutral, .running: .info, .waiting: .neutral, .blocked: .warn, .awaitingApproval: .warn,
-            .paused: .neutral, .recoveryRequired: .danger, .failed: .danger, .completed: .ok,
+            .paused: .neutral, .recoveryRequired: .danger, .failed: .danger, .completed: .ok, .repairing: .info,
         ]
-        XCTAssertEqual(OperationalState.allCases.count, 9)
+        XCTAssertEqual(OperationalState.allCases.count, 10)
         for state in OperationalState.allCases {
             XCTAssertEqual(state.tone, tones[state], state.label)
         }
-        XCTAssertEqual(Set(OperationalState.allCases.map(\.label)).count, 9)
+        XCTAssertEqual(Set(OperationalState.allCases.map(\.label)).count, 10)
         XCTAssertEqual(OperationalState.running.glyph, .haloDot)
         XCTAssertEqual(OperationalState.waiting.glyph, .ring)
         XCTAssertEqual(OperationalState.recoveryRequired.glyph, .ringDot)
@@ -441,6 +441,58 @@ final class DesignShellTests: XCTestCase {
         XCTAssertEqual(state.runs, [])
     }
 
+    /// M4: the `Repairs` answer as the helper sends it, for attempts 3 (a repair being
+    /// reviewed), 4 (the attempt it repairs) and 0 (a step that waits for the human).
+    private var repairs: RepairList {
+        let ids = Self.ids
+        let review: (String, String) -> JSON = { state, notes in
+            .object(["review": .text(ids[2]), "provider": .text("ClaudeCode"), "state": .text(state),
+                     "notes": .text(notes), "objection": state == "REJECTED" ? .text("Zero is not covered.") : .null,
+                     "detail": .text("")])
+        }
+        let row: (String, String?, JSON, String?, JSON) -> JSON = { attempt, state, repair, hold, review in
+            .object(["attempt": .text(attempt), "plan": .text(ids[4]), "step": .text(ids[1]), "key": .text("fix"),
+                     "provider": .text("Codex"), "state": state.map(JSON.text) ?? .null, "repair": repair,
+                     "hold": hold.map(JSON.text) ?? .null, "review": review])
+        }
+        return RepairList(["complete": .bool(true), "attempts": .list([
+            row(ids[3], "Repairing", .object(["ordinal": .int(1), "limit": .int(2), "failure": .text("host validation failed: exit 1")]), nil, .null),
+            row(ids[4], nil, .null, nil, review("REJECTED", "src/fix.txt: handle zero.")),
+            row(ids[0], "NeedsHuman", .object(["ordinal": .int(2), "limit": .int(2), "failure": .text("rejected by Claude Code")]),
+                "host validation failed; 2 of 2 repairs used", .null),
+        ])])!
+    }
+
+    func test_m4_agent_runs_shows_repairing_the_repair_counter_the_verdict_and_the_hold() {
+        var state = runs
+        state.repairs = repairs
+        state.result = nil
+        let runs = state.runs
+        XCTAssertEqual(runs[3].pill.state, .repairing)
+        XCTAssertEqual(runs[3].pill.label, "Repairing")
+        XCTAssertEqual(runs[3].line, "fix · repair 1 of 2")
+        XCTAssertEqual(runs[4].line, "fix · first attempt")
+        XCTAssertEqual(runs[4].pill.label, "Not loaded", "an older attempt has no step state")
+        XCTAssertEqual(runs[4].verdict?.text, "Rejected by Claude Code")
+        XCTAssertEqual(runs[4].verdict?.tone, .danger)
+        XCTAssertEqual(runs[4].repair?.review?.objection, "Zero is not covered.")
+        XCTAssertEqual(runs[0].pill.label, "Needs human")
+        XCTAssertEqual(runs[0].repair?.hold, "host validation failed; 2 of 2 repairs used")
+        XCTAssertEqual(runs[1].pill.label, "Unknown", "a recovery hold outranks the step's state")
+        XCTAssertNil(runs[2].repair, "an attempt the answer does not list is not a plan step's")
+        XCTAssertNil(RepairList(["attempts": .list([.object(["attempt": .text("x")])]), "complete": .bool(true)]),
+                     "a row without its fields makes the answer unreadable")
+        XCTAssertEqual(OperationalState.repairing.label, "Repairing")
+        // The step's own answer on Execution Plan carries the same counter and verdict.
+        var step = Self.run(try! XCTUnwrap(ApprovedPlan(fiveSteps))).steps[0]
+        step.repairOrdinal = 1
+        step.repairLimit = 2
+        XCTAssertEqual(step.repair?.limit, 2)
+        XCTAssertEqual(ExecutionPlanState.stateName("NeedsHuman"), "Needs human")
+        XCTAssertEqual(ExecutionPlanState.tone("Repairing"), .info)
+        XCTAssertEqual(ExecutionPlanState.tone("NeedsHuman"), .warn)
+    }
+
     /// Review aid, as above: Agent Runs with test rows, at the opening size and wide, and its
     /// empty, loading and disconnected forms.
     func test_dw1_agent_runs_renders_in_both_appearances() throws {
@@ -455,12 +507,16 @@ final class DesignShellTests: XCTestCase {
         nothing.attempts = []
         var loading = runs
         loading.attempts = nil
+        var repairing = runs
+        repairing.repairs = repairs
         let opening = CGSize(width: 1120, height: 720), wide = CGSize(width: 1440, height: 1000)
         let cases: [(String, AgentRunsState, String?, CGSize)] = [
             ("agent-runs", runs, nil, opening), ("agent-runs-wide", runs, nil, wide), ("agent-runs-held", closed, ids[1], wide),
             ("agent-runs-unloaded", runs, ids[3], CGSize(width: 1120, height: 1100)),
             ("agent-runs-disconnected", lost, ids[3], wide), ("agent-runs-empty", nothing, nil, opening),
             ("agent-runs-loading", loading, nil, opening),
+            ("agent-runs-repairing", repairing, ids[3], wide), ("agent-runs-rejected", repairing, ids[4], wide),
+            ("agent-runs-needs-human", repairing, ids[0], CGSize(width: 1120, height: 1100)),
         ]
         for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
             for (file, state, selected, size) in cases {
@@ -1374,7 +1430,8 @@ final class DesignShellTests: XCTestCase {
         XCTAssertEqual(concurrency.first?.value, "Decided (D4): one number for the whole core, set in a project record. Shown on Projects.")
         // D2: the board's validator line no longer holds.
         XCTAssertFalse(values(state.page(.defaults))["Validator"]!.contains("no agent"))
-        XCTAssertEqual(values(state.page(.defaults))["Repair"], "Decided, not built: automatic, at most two tries, then a human hold.")
+        // M4: repair and review are built and set per project.
+        XCTAssertEqual(values(state.page(.defaults))["Repair"], "Set per project (M4): automatic, at most two tries, then a hold for you; 0 switches it off. External actions are never retried. Shown on Projects.")
         // D3: a changed binary is warned about, not refused (a pinned one is refused).
         XCTAssertTrue(values(state.page(.discovery))["Changed binary"]!.hasPrefix("Warned, not refused (D3)"))
         XCTAssertFalse(state.page(.discovery).groups.flatMap(\.lines).contains { $0.value.contains("Not built") })
@@ -1762,9 +1819,9 @@ final class DesignShellTests: XCTestCase {
         XCTAssertEqual(plan(connection: .ended(status: 1)).sliceLine.value, "Unknown: the core is not connected.")
         XCTAssertEqual(plan(connection: .ended(status: 1)).status.admission, "Admission unknown")
 
-        // D4 is decided (M3): no number on this screen; it is the project's. D2: decided, not built.
+        // D4 is decided (M3): no number on this screen; it is the project's. D2: built in M4.
         let missing = ExecutionPlanState.missing
-        XCTAssertEqual(missing.first { $0.label == "Repair" }?.value, "Decided, not built: automatic, at most two tries, then a human hold.")
+        XCTAssertNil(missing.first { $0.label == "Repair" }, "the step inspector shows repairs and reviews")
         XCTAssertEqual(missing.first { $0.label == "Parallel capacity" }?.value,
                        "Decided (D4): one number for the whole core, set in the project record. Shown on Projects.")
         XCTAssertEqual(Set(missing.map(\.label)).count, missing.count)
@@ -1887,8 +1944,11 @@ extension DesignShellTests {
             .object(["project": .text(Self.ids[0]), "revision": .int(2), "name": .text("Crew"), "repositories": .list([.text(Self.ids[1])]),
                      "instructions": .text("Keep it small."), "test_command": .list([]), "ci_command": .list([]),
                      "kinds": .list([.object(["kind": .text("docs"), "provider": .text("Codex")])]),
-                     "default_provider": .text("ClaudeCode"), "capacity": .int(2)]),
+                     "default_provider": .text("ClaudeCode"), "capacity": .int(2),
+                     "repair_limit": .int(1), "review": .bool(false)]),
         ])]))
+        XCTAssertEqual(list.projects.first?.repairLimit, 1)
+        XCTAssertEqual(list.projects.first?.review, false)
         XCTAssertEqual(list.projects.first?.kinds.first?.provider, "Codex")
         // Without a started run, nothing on Execution Plan claims a name or a state.
         let plan = try XCTUnwrap(ApprovedPlan(fiveSteps))

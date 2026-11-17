@@ -20,7 +20,7 @@ struct MainView: View {
                         .padding(.horizontal, 20)
                         // A redesigned screen fills the content area and sets its own padding.
                         shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
-                        shown(.agentRuns) { AgentRunsScreen(model: model, open: { screen = $0 }) }
+                        shown(.agentRuns) { AgentRunsScreen(model: model, visible: screen == .agentRuns, open: { screen = $0 }) }
                         shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
                         shown(.featureChat) { FeatureChatScreen(model: model, visible: screen == .featureChat, open: { screen = $0 }) }
                         shown(.executionPlan) { ExecutionPlanScreen(model: model, visible: screen == .executionPlan, open: { screen = $0 }) }

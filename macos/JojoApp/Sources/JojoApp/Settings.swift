@@ -222,8 +222,8 @@ struct SettingsState: Equatable {
                 groups: [
                     SettingsGroup(title: "Default providers", lines: [
                         .missing("Provider per task", "Set per project: a project record maps task kinds to a provider. Shown on Projects."),
-                        SettingsLine(label: "Validator", value: "The core's host validation of a candidate. No reviewing agent yet."),
-                        .missing("Repair", "Decided, not built: automatic, at most two tries, then a human hold."),
+                        SettingsLine(label: "Validator", value: "The core's host validation of a candidate, then a read-only review by the other provider (M4). The review approves nothing."),
+                        .missing("Repair", "Set per project (M4): automatic, at most two tries, then a hold for you; 0 switches it off. External actions are never retried. Shown on Projects."),
                     ]),
                     SettingsGroup(title: "Concurrency", lines: [
                         .missing("Parallel attempts", "Decided (D4): one number for the whole core, set in a project record. Shown on Projects."),
