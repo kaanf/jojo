@@ -64,7 +64,7 @@ python3 scripts/verify.py              # everything, including 17 GUI scenarios 
 python3 scripts/verify.py --skip gui   # without the GUI stage; result is passed but complete: false
 ```
 
-Requirements live in `scripts/gates/current.json`; the result goes to `verification/gate-m4-result.json` and `.log` (earlier results stay in `gate-m0-…`, `gate-r01-…`, `gate-m1-…`, `gate-dw1-…`, `gate-m3-…` and `gate-d3-…`). Last full run (2026-11-17, after M4; after the Liquid Glass step only Swift (103), the script tests (107) and the boundary guard were run, not the full gate): 107 script tests, 476 Rust tests, 103 Swift tests, 18 GUI scenarios, no failures. Rust test names in `required` are written as the test runner prints them, with the module path for unit tests (`protocol::tests::…`).
+Requirements live in `scripts/gates/current.json`; the result goes to `verification/gate-m4-result.json` and `.log` (earlier results stay in `gate-m0-…`, `gate-r01-…`, `gate-m1-…`, `gate-dw1-…`, `gate-m3-…` and `gate-d3-…`). Last full run (2026-11-17, after Liquid Glass step 1): 107 script tests, 476 Rust tests, 103 Swift tests, 18 GUI scenarios, no failures. Rust test names in `required` are written as the test runner prints them, with the module path for unit tests (`protocol::tests::…`).
 
 The twelve P2-04 rehearsal scenarios are run by hand (they passed after R-01; evidence in `~/JojoDisposable/r01-rehearsal/20261116T034931Z`):
 
