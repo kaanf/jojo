@@ -8,12 +8,14 @@ struct MainView: View {
     let delegate: AppDelegate
     @State private var screen = Screen.dashboard
     @State private var range = DashboardRange.today
+    @State private var newFeatureProject: String?
 
     var body: some View {
         Themed {
             AppShell(model: model, screen: $screen, showInspector: { delegate.showAuxiliary() },
                      controls: screen == .dashboard ? AnyView(SegmentedCapsule(selection: $range, label: "Time range")) : nil,
-                     primary: screen == .dashboard ? AnyView(NewFeatureButton(newFeature: newFeature)) : nil) {
+                     primary: screen == .dashboard ? AnyView(NewFeatureButton(newFeature: newFeature)) : nil,
+                     heading: newFeatureHeading) {
                 VStack(alignment: .leading, spacing: 8) {
                     QuitBanner(model: model).padding(EdgeInsets(top: 20, leading: 20, bottom: 0, trailing: 20))
                     ZStack(alignment: .topLeading) {
@@ -26,7 +28,9 @@ struct MainView: View {
                         shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
                         shown(.agentRuns) { AgentRunsScreen(model: model, visible: screen == .agentRuns, open: { screen = $0 }) }
                         shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
-                        shown(.featureChat) { FeatureChatScreen(model: model, visible: screen == .featureChat, open: { screen = $0 }) }
+                        shown(.featureChat) {
+                            FeatureChatScreen(model: model, visible: screen == .featureChat, project: $newFeatureProject, open: { screen = $0 })
+                        }
                         shown(.executionPlan) { ExecutionPlanScreen(model: model, visible: screen == .executionPlan, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                         shown(.settings) { SettingsScreen(model: model, visible: screen == .settings) }
@@ -51,6 +55,14 @@ struct MainView: View {
     /// Destinations that have a screen today; the others show `NotBuiltYet`.
     static let built: Set<Screen> = [.activity, .agentRuns, .approvalInbox, .dashboard, .recoveryCenter, .executionPlan,
                                      .featureChat, .projects, .settings, .sourceControl, .specifications, .verification]
+
+    /// Feature Chat holding no feature is New Feature: "Workspace · Crew · New Feature".
+    private var newFeatureHeading: (title: String, place: String)? {
+        guard screen == .featureChat, model.workspace.chatFeature == nil else { return nil }
+        let projects = model.workspace.projects?.projects ?? []
+        let project = projects.first { $0.id == newFeatureProject } ?? projects.first
+        return ("New Feature", ["Workspace", project?.name].compactMap { $0 }.joined(separator: " · "))
+    }
 
     /// New Feature is Feature Chat holding no feature.
     private func newFeature() {

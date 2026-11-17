@@ -14,7 +14,7 @@ struct FeatureChatState: Equatable {
     var queries: [String] = []
     var index: ChatIndex?
     var indexLoad = PlanLoad.idle
-    /// The feature the screen holds; nil shows New Feature.
+    /// The feature the screen holds; nil shows New Feature (`NewFeatureView`).
     var feature: String?
     /// The held feature's name, from the chat index (protocol 1.6).
     var featureName: String? { index?.features.first { $0.id == feature }?.name }
@@ -23,9 +23,7 @@ struct FeatureChatState: Equatable {
     var prdText = ""
     var commandPending = false
     var outcome: StartOutcome?
-    /// New Feature: the objective and the repository as chosen.
-    var objective = ""
-    var repository: String?
+    /// The provider of the next turn.
     var provider = "ClaudeCode"
     /// The note of the next turn.
     var message = ""
@@ -95,10 +93,10 @@ struct FeatureChatState: Equatable {
         }
     }
 
-    /// The repository a turn of the held feature names: the feature's own, or the chosen one.
+    /// The repository a turn of the held feature names: the feature's own.
     var turnRepository: String? {
-        if let feature, let known = index?.features.first(where: { $0.id == feature }) { return known.repository }
-        return feature == nil ? repository : nil
+        guard let feature else { return nil }
+        return index?.features.first { $0.id == feature }?.repository
     }
 
     /// Why a turn of `kind` cannot be sent, or nil when it can. The helper decides the rest.
@@ -108,11 +106,7 @@ struct FeatureChatState: Equatable {
         if admissionClosed { return "Admission is closed. The core refuses a turn until it is open." }
         if commandPending { return "Unavailable while a command awaits the core." }
         if running != nil { return "A turn is running. Stop it or wait for its result." }
-        if feature == nil {
-            if !objective.contains(where: { $0.isLetter || $0.isNumber }) { return "Describe what users should be able to do." }
-            if repository == nil { return "Choose a registered repository." }
-            return nil
-        }
+        if feature == nil { return "No feature is held. New Feature starts one." }
         if turnRepository == nil { return "The core did not report this feature's repository. Reload." }
         if kind == "Plan", prd?.approved != true {
             return "A plan needs the approved requirements. Approve the draft in the Approval Inbox."
@@ -171,7 +165,6 @@ struct FeatureChatState: Equatable {
         Missing(label: "Discovery history", value: "The turns above and the draft's revisions; no other history is reported."),
         Missing(label: "Suggestions and spikes", value: "Not built."),
         Missing(label: "Export transcript", value: "Not built."),
-        Missing(label: "Project, reference files, design references, constraints", value: "Not built. New Feature takes an objective, a repository and a provider."),
     ]
 }
 
@@ -180,8 +173,6 @@ struct FeatureChatActions {
     var reload: () -> Void = {}
     /// Holds a feature; nil holds none (New Feature).
     var choose: (String?) -> Void = { _ in }
-    var editObjective: (String) -> Void = { _ in }
-    var chooseRepository: (String) -> Void = { _ in }
     var chooseProvider: (String) -> Void = { _ in }
     var editMessage: (String) -> Void = { _ in }
     var editAnswer: (String, String) -> Void = { _, _ in }
@@ -196,8 +187,13 @@ struct FeatureChatScreen: View {
     @ObservedObject var model: AppModel
     /// The chat is read only while this destination is the shown one.
     let visible: Bool
+    /// New Feature's project, shared with the header's place.
+    @Binding var project: String?
     let open: (Screen) -> Void
     @State private var objective = ""
+    @State private var constraints = ""
+    @State private var references: [ReferenceFile] = []
+    @State private var unreadable: [String] = []
     @State private var repository: String?
     @State private var provider = "ClaudeCode"
     @State private var message = ""
@@ -205,30 +201,86 @@ struct FeatureChatScreen: View {
 
     var body: some View {
         let workspace = model.workspace
+        Group {
+            if workspace.chatFeature == nil { newFeature } else { chat }
+        }
+        .onAppear { if visible { read() } }
+        .onChange(of: visible) { if visible { read(); workspace.loadChat() } }
+        .onChange(of: workspace.snapshotSeq) { if visible { read(); workspace.loadChat() } }
+        .onChange(of: workspace.chatFeature) {
+            if workspace.chatFeature != nil { (objective, constraints, references, unreadable) = ("", "", [], []) }
+        }
+    }
+
+    /// The chat index, and the projects while New Feature is shown.
+    private func read() {
+        model.workspace.loadChatIndex()
+        if model.workspace.chatFeature == nil { model.workspace.loadProjects() }
+    }
+
+    private var newFeature: some View {
+        let workspace = model.workspace
+        let state = NewFeatureState(
+            connection: model.client.connection, admission: workspace.admission, queries: model.client.hello?.queries ?? [],
+            projects: workspace.projects, projectsLoad: workspace.projectsLoad, index: workspace.chatIndex,
+            indexLoad: workspace.chatIndexLoad, commandPending: workspace.commandPending, outcome: workspace.turnOutcome,
+            project: project, repository: repository, objective: objective, constraints: constraints,
+            references: references, unreadable: unreadable)
+        return NewFeatureView(
+            state: state,
+            actions: NewFeatureActions(
+                chooseProject: { project = $0; repository = nil },
+                chooseRepository: { repository = $0 },
+                editObjective: { objective = $0 },
+                editConstraints: { constraints = $0 },
+                addReferences: add,
+                removeReference: { name in references.removeAll { $0.name == name } },
+                start: {
+                    guard state.sendBlocked == nil, let repository = state.turnRepository, let provider = state.provider else { return }
+                    workspace.sendTurn(feature: Identity.randomClientID(), kind: "Discover", repository: repository,
+                                       provider: provider, message: state.message)
+                },
+                cancel: { open(.dashboard) },
+                open: open),
+            shown: visible)
+    }
+
+    /// Reads each chosen file as UTF-8 text; a file that is not text is named and left out.
+    private func add(_ urls: [URL]) {
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let name = url.lastPathComponent
+            if let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) {
+                references.removeAll { $0.name == name }
+                references.append(ReferenceFile(name: name, text: text))
+                unreadable.removeAll { $0 == name }
+            } else if !unreadable.contains(name) {
+                unreadable.append(name)
+            }
+        }
+    }
+
+    private var chat: some View {
+        let workspace = model.workspace
         let state = FeatureChatState(
             connection: model.client.connection, admission: workspace.admission, pid: model.client.processIdentifier,
             queries: model.client.hello?.queries ?? [], index: workspace.chatIndex, indexLoad: workspace.chatIndexLoad,
             feature: workspace.chatFeature, chat: workspace.chat, chatLoad: workspace.chatLoad, prdText: workspace.prdText,
-            commandPending: workspace.commandPending, outcome: workspace.turnOutcome, objective: objective,
-            repository: repository, provider: provider, message: message, answers: answers)
-        FeatureChatView(
+            commandPending: workspace.commandPending, outcome: workspace.turnOutcome, provider: provider, message: message,
+            answers: answers)
+        return FeatureChatView(
             state: state,
             actions: FeatureChatActions(
                 open: open,
                 reload: { workspace.loadChatIndex(); workspace.loadChat() },
                 choose: { workspace.openChat($0) },
-                editObjective: { objective = $0 }, chooseRepository: { repository = $0 },
                 chooseProvider: { provider = $0 }, editMessage: { message = $0 },
                 editAnswer: { answers[$0] = $1 },
                 send: { kind in
-                    guard state.sendBlocked(kind) == nil else { return }
-                    if let feature = state.feature, let repository = state.turnRepository {
-                        workspace.sendTurn(feature: feature, kind: kind, repository: repository, provider: provider, message: message)
-                        message = ""
-                    } else if let repository {
-                        workspace.sendTurn(feature: Identity.randomClientID(), kind: "Discover", repository: repository,
-                                           provider: provider, message: objective)
-                    }
+                    guard state.sendBlocked(kind) == nil, let feature = state.feature, let repository = state.turnRepository else { return }
+                    workspace.sendTurn(feature: feature, kind: kind, repository: repository, provider: provider, message: message)
+                    message = ""
                 },
                 stop: { if let turn = state.running?.id { workspace.cancelTurn(turn) } },
                 answer: { question, action in
@@ -239,10 +291,6 @@ struct FeatureChatScreen: View {
                     workspace.loadReview(document)
                     open(.approvalInbox)
                 }))
-            .onAppear { if visible { workspace.loadChatIndex() } }
-            .onChange(of: visible) { if visible { workspace.loadChatIndex(); workspace.loadChat() } }
-            .onChange(of: workspace.snapshotSeq) { if visible { workspace.loadChatIndex(); workspace.loadChat() } }
-            .onChange(of: workspace.chatFeature) { if workspace.chatFeature != nil { objective = "" } }
     }
 }
 
@@ -259,7 +307,7 @@ struct FeatureChatView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         Group {
                             banners
-                            if state.feature == nil { newFeature } else { conversation }
+                            conversation
                             if !beside, state.feature != nil { inspector }
                             missing
                         }
@@ -306,64 +354,6 @@ struct FeatureChatView: View {
         }
     }
 
-    // MARK: New Feature
-
-    private var newFeature: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Card {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Describe the feature").textStyle(.sectionTitle).foregroundStyle(theme.textStrong)
-                        Text("Say what users should be able to do. Jojo investigates the code and asks before anything is planned.")
-                            .textStyle(.body).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
-                    }
-                    LabeledField("What should it do?") {
-                        TextArea(prompt: "Players should be able to…",
-                                 text: Binding(get: { state.objective }, set: actions.editObjective), lines: 4)
-                    }
-                    Footnote("No need to name files, APIs or architecture. That's what discovery is for.")
-                    LabeledField("Repository") { repositories }
-                    LabeledField("Provider") { providers }
-                    NoticeWell("What happens next: 1. Jojo reads the selected repository, read-only. 2. It asks clarifying questions in Feature Chat. 3. It drafts a PRD for your approval. Nothing is executed before you approve a plan.")
-                    HStack(spacing: 10) {
-                        Button { actions.send("Discover") } label: {
-                            HStack(spacing: 6) { Label("Start Discovery", systemImage: "sparkle.magnifyingglass"); ShortcutHint("⌘↵") }
-                        }
-                        .buttonStyle(.jojo(.primary))
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(state.sendBlocked("Discover") != nil)
-                        if let reason = state.sendBlocked("Discover") { DisabledReason(reason) }
-                    }
-                    outcome
-                }
-            }
-            earlierChats
-        }
-    }
-
-    @ViewBuilder
-    private var repositories: some View {
-        switch (state.index, state.indexLoad) {
-        case (let index?, _) where !index.repositories.isEmpty:
-            WrappingRow(spacing: 8, lineSpacing: 8) {
-                ForEach(index.repositories) { repository in
-                    Button { actions.chooseRepository(repository.id) } label: {
-                        FilterChip(title: URL(fileURLWithPath: repository.path).lastPathComponent, isOn: state.repository == repository.id)
-                    }
-                    .buttonStyle(.plain)
-                    .help(repository.path)
-                }
-            }
-        case (_?, _):
-            NoticeWell("No repository is registered with the core. A repository is registered under the disposable root before a chat can read it.")
-        case (nil, .failed(let reason)):
-            NoticeWell(FeatureChatState.loadFailure(reason))
-        case (nil, _):
-            Text(state.link == .connected ? "Reading the registered repositories…" : "Not reported").textStyle(.meta)
-                .foregroundStyle(theme.text3)
-        }
-    }
-
     private var providers: some View {
         HStack(spacing: 8) {
             ForEach(["ClaudeCode", "Codex"], id: \.self) { word in
@@ -371,28 +361,6 @@ struct FeatureChatView: View {
                     FilterChip(title: FeatureChatState.provider(word), isOn: state.provider == word)
                 }
                 .buttonStyle(.plain)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var earlierChats: some View {
-        if let features = state.index?.features, !features.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Earlier chats")
-                Card(.list) {
-                    Rows(features) { feature in
-                        Button { actions.choose(feature.id) } label: {
-                            ListRow(feature.name ?? (feature.objective + (feature.objectiveComplete ? "" : "…")),
-                                    meta: "\(feature.turns) turn\(feature.turns == 1 ? "" : "s")",
-                                    detail: "Feature \(FeatureChatState.short(feature.id)) · repository \(FeatureChatState.short(feature.repository))",
-                                    chevron: true, leading: { LeadingTile(symbol: "bubble.left.and.bubble.right") },
-                                    trailing: { if feature.running { OperationalPill(.running, label: "Investigating") } })
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                if state.index?.featuresComplete == false { Footnote("Only the 32 newest chats are listed.") }
             }
         }
     }

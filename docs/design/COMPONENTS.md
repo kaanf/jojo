@@ -2,7 +2,7 @@
 
 The reusable parts of the app and the status model they draw. Token names refer to [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md). Source: the canvas page "Components & states", board "Components and status model" (`ComponentsMac.dc.html`), and the shell of the product boards (`DashboardMac.dc.html`, `AgentRunsMac.dc.html`, `RecoveryLaunchMac.dc.html`); see [README.md](README.md).
 
-Sections 1 to 12 are the design. Sections 13 to 25 are implementation notes written for the first design system; each is rewritten when its surface moves (DESIGN_SYSTEM.md, section 12).
+Sections 1 to 12 are the design. Sections 13 to 26 are implementation notes written for the first design system; each is rewritten when its surface moves (DESIGN_SYSTEM.md, section 12).
 
 ## 1. Status model
 
@@ -423,3 +423,16 @@ Built in `macos/JojoApp/Sources/JojoApp/Dashboard.swift` on the Liquid Glass tok
 | `QuietCard`, `SkeletonCard`, `Placeholder`, `NoteLine` | A section with nothing to list; Loading (two skeleton bars on a card); the placeholder of STATES.md, section 2 (44 × 44 tile, 15 bold title, a sentence at most 280 wide, small buttons) for the empty Dashboard; a one-line `secondary` `text3` note under a section |
 
 The shell's header (`Header`) takes a screen's own controls (before the icon group) and its one primary action (after it), and the Dashboard's sub line names the day. Other screens pass neither and keep their header.
+
+## 26. Implementation notes: form surfaces (Liquid Glass, step 4, New Feature)
+
+Built in `macos/JojoApp/Sources/JojoApp/NewFeature.swift` for `docs/design/screens/NEW_FEATURE.md`.
+
+| Component | Notes |
+|---|---|
+| `FieldLabel` | A form label in `label` style, `text3`, with "· optional" in normal case |
+| `CheckChip` | A capsule 30 high, padding 0 12, 12 medium, with a 14 × 14 check box (radius 4; on, `accent` with a white check); on, `accentTint`, else `grayBg`. The board's repository chips |
+| `ChoiceCapsule` | `SegmentedCapsule` (section 25) over values known at run time (the projects) |
+| `DropZone` | Radius 14, padding 14 16, a 1.5 dashed `dotOff` outline, a 36 × 36 tile on `accentTint` with an `accent` glyph, a title and `sub` lines, one trailing control |
+
+The text fields are the existing `TextArea`; "What happens next" is a glass panel (radius 16). The header's title and place can be a screen's own (`AppShell`'s `heading`).

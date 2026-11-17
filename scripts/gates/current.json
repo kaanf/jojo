@@ -1,6 +1,6 @@
 {
-  "artifact": "gate-s3",
-  "scope": "Tree after step 3 of the Liquid Glass order (the Dashboard): protocol 1.7 Features; at 1.7 Attempts carry ordinal, repository, project, host validation and newest activity, and Events a sentence; the Dashboard is built and the screen the app opens on.",
+  "artifact": "gate-s4a",
+  "scope": "Tree after New Feature, the first screen of step 4 of the Liquid Glass order: NewFeatureMac.dc.html on the Liquid Glass tokens; project, one repository, constraints and text references in the first ChatTurn message; no core or protocol change.",
   "boundary_tests_min": 107,
   "rust": {
     "passed_min": 482,
@@ -106,7 +106,7 @@
     ]
   },
   "swift": {
-    "tests_min": 114
+    "tests_min": 118
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,

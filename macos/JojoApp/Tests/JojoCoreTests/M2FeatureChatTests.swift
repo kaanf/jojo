@@ -239,13 +239,8 @@ final class M2FeatureChatTests: XCTestCase {
         var old = state()
         old.queries = ["Snapshot", "ApprovedPlan"]
         XCTAssertEqual(old.sendBlocked("Discover"), "This core has no Feature Chat.")
-        // New Feature needs an objective and a registered repository.
-        var fresh = state(feature: nil)
-        XCTAssertEqual(fresh.sendBlocked("Discover"), "Describe what users should be able to do.")
-        fresh.objective = "Players share a link"
-        XCTAssertEqual(fresh.sendBlocked("Discover"), "Choose a registered repository.")
-        fresh.repository = ChatRows.repository
-        XCTAssertNil(fresh.sendBlocked("Discover"))
+        // Without a held feature the chat sends nothing; New Feature starts one (S4NewFeatureTests).
+        XCTAssertEqual(state(feature: nil).sendBlocked("Discover"), "No feature is held. New Feature starts one.")
         // An answer needs words; a refusal is said in words, its code stays visible.
         let open = LeadQuestion(question)!
         var answering = blocked

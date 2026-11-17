@@ -1,5 +1,7 @@
 # Jojo screens: Feature Chat and New Feature
 
+**New Feature was rebuilt on 2026-11-17 from `NewFeatureMac.dc.html`; it is described in [NEW_FEATURE.md](NEW_FEATURE.md).** What this document says about New Feature describes the first board and the screen before that; the list of earlier chats is gone (the Dashboard opens a feature's chat).
+
 Design wave 2, milestone M2. Canvas boards "Feature Chat" (`FeatureChat.dc.html`) and "New Feature" (`NewFeature.dc.html`), read at version `1794837270-18f1` from their markup text. The light and the "Atelier" Feature Chat boards are explorations and were not used. Code: `macos/JojoApp/Sources/JojoApp/FeatureChat.swift` (state, actions, screen, view) and `macos/JojoApp/Sources/JojoCore/FeatureChat.swift` (the answers of the chat queries and the workspace's reads and commands). The protocol is in `docs/architecture/STDIO_PROTOCOL.md`, "Protocol 1.2: Feature Chat".
 
 ## 1. The boards

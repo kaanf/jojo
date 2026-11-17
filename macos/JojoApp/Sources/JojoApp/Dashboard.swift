@@ -312,6 +312,8 @@ struct DashboardActions {
     var openDocument: (String) -> Void = { _ in }
     var openCandidate: (String) -> Void = { _ in }
     var answer: (String) -> Void = { _ in }
+    /// Opens a feature's chat.
+    var openFeature: (String) -> Void = { _ in }
     var newFeature: () -> Void = {}
 }
 
@@ -336,6 +338,7 @@ struct DashboardScreen: View {
                 openDocument: { workspace.loadReview($0); open(.approvalInbox) },
                 openCandidate: { workspace.loadCandidate($0); open(.verification) },
                 answer: { workspace.openChat($0); open(.featureChat) },
+                openFeature: { workspace.openChat($0); open(.featureChat) },
                 newFeature: { workspace.openChat(nil); open(.featureChat) }))
             .onChange(of: visible) { read() }
             .onChange(of: workspace.snapshotSeq) { if visible { read() } }
@@ -570,7 +573,9 @@ struct DashboardView: View {
             } else if shown.isEmpty {
                 QuietCard(filter == .done ? "No feature is done yet." : filter == .needsYou ? "No feature waits for you." : "No active feature.")
             } else {
-                TableScrolling(width: width) { PipelineTable(features: shown, width: max(width, PipelineTable.minimum)) }
+                TableScrolling(width: width) {
+                    PipelineTable(features: shown, width: max(width, PipelineTable.minimum), open: actions.openFeature)
+                }
             }
         }
     }
@@ -1020,6 +1025,8 @@ struct PipelineTable: View {
     @Environment(\.theme) private var theme
     let features: [FeatureSummary]
     let width: CGFloat
+    /// Opens a feature's chat.
+    var open: (String) -> Void = { _ in }
     static let headers = ["Discovery", "Spec", "Planning", "Execution", "Verification", "Evidence"]
 
     /// Below this the table scrolls sideways, as on the board (min-width 820).
@@ -1062,6 +1069,10 @@ struct PipelineTable: View {
                 .padding(.vertical, 12)
                 .padding(.horizontal, 16)
                 .overlay(alignment: .top) { if index > 0 { Rectangle().fill(theme.sep).frame(height: 0.5) } }
+                .contentShape(Rectangle())
+                .onTapGesture { open(f.id) }
+                .accessibilityAddTraits(.isButton)
+                .help("Open the chat of \(f.code)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

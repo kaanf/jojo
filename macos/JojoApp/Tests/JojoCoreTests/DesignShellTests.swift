@@ -2413,12 +2413,7 @@ extension DesignShellTests {
         let planTurn = ChatRows.turn(3, kind: "Plan", provider: "Codex",
                                      summary: "Three steps: the entry point and the usage text in parallel, then a check of both.",
                                      plan: ChatRows.plan(drafted: false), questions: [step])
-        var fresh = state(feature: nil)
-        fresh.objective = "Players should be able to share a link that drops a friend into my lobby."
-        fresh.repository = ChatRows.repository
         let cases: [(String, FeatureChatState, CGSize)] = [
-            ("feature-chat-new-feature", state(feature: nil), wide),
-            ("feature-chat-new-feature-filled", fresh, wide),
             ("feature-chat-investigating", state([ChatRows.turn(1, state: "Running", message: objective)], running: ChatRows.turnID(1)), wide),
             ("feature-chat-blocked", state([first]), wide),
             ("feature-chat-complete", state([firstAnswered, second], prd: ready, prdText: text), wide),

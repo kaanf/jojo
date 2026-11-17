@@ -130,6 +130,9 @@ struct AppShell<Content: View>: View {
     /// primary action after them.
     var controls: AnyView?
     var primary: AnyView?
+    /// The shown screen's own title and place, when they are not the destination's
+    /// (New Feature is Feature Chat holding no feature).
+    var heading: (title: String, place: String)?
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -138,7 +141,7 @@ struct AppShell<Content: View>: View {
             VStack(spacing: 0) {
                 Header(screen: screen, pending: model.workspace.commandPending,
                        refresh: { model.workspace.refresh() }, showInspector: showInspector,
-                       controls: controls, primary: primary)
+                       controls: controls, primary: primary, heading: heading)
                     .padding(EdgeInsets(top: 10, leading: 4, bottom: 6, trailing: 10))
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -336,16 +339,17 @@ struct Header: View {
     let showInspector: () -> Void
     var controls: AnyView?
     var primary: AnyView?
+    var heading: (title: String, place: String)?
     var now = Date()
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(screen.title)
+                Text(heading?.title ?? screen.title)
                     .textStyle(screen == .dashboard ? .dashboardTitle : .pageTitle)
                     .lineLimit(1)
                 // The Dashboard names the day ("Workspace · Monday, 16 November"); the others the screen.
-                Text("\(screen.place) · \(screen == .dashboard ? now.formatted(.dateTime.weekday(.wide).day().month(.wide)) : screen.title)")
+                Text("\(heading?.place ?? screen.place) · \(screen == .dashboard ? now.formatted(.dateTime.weekday(.wide).day().month(.wide)) : heading?.title ?? screen.title)")
                     .textStyle(.secondary)
                     .foregroundStyle(theme.text2)
                     .lineLimit(1)
