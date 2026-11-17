@@ -1,11 +1,11 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 // Dependency-free. JojoCore is Foundation-only transport/lifecycle logic; JojoApp is the
 // native shell (SwiftUI content, AppKit termination/window policy). No package resolution.
 let package = Package(
     name: "JojoAppBoundary",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     products: [
         .library(name: "JojoAppBoundary", targets: ["JojoAppBoundary"]),
         .executable(name: "JojoApp", targets: ["JojoApp"]),

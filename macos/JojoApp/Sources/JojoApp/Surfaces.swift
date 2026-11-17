@@ -342,18 +342,19 @@ struct LoadingBlock: View {
     }
 }
 
-/// A drawn checkbox: `accent` with a white check when on.
+/// A drawn checkbox (COMPONENTS.md, section 5.6): 18 × 18, radius 5, a 1.5 `text3` ring;
+/// on, `accent` with a white check.
 struct CheckBox: View {
     @Environment(\.theme) private var theme
     let isOn: Bool
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 3.5)
+        RoundedRectangle(cornerRadius: 5)
             .fill(isOn ? theme.accent : .clear)
-            .overlay(RoundedRectangle(cornerRadius: 3.5).strokeBorder(isOn ? theme.primaryBorder : theme.text4, lineWidth: 1))
-            .overlay(Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+            .overlay { if !isOn { RoundedRectangle(cornerRadius: 5).strokeBorder(theme.text3, lineWidth: 1.5) } }
+            .overlay(Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
                 .foregroundStyle(theme.onAccent).opacity(isOn ? 1 : 0))
-            .frame(width: 14, height: 14)
+            .frame(width: 18, height: 18)
     }
 }
 
@@ -835,7 +836,7 @@ struct RequestedNotice: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            OperationalPill(.waiting, label: "Requested")
+            OperationalPill(.requested)
             Text(text).textStyle(.meta).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 8)

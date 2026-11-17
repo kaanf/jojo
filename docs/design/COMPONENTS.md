@@ -231,29 +231,32 @@ A grid of small cards (radius 14, padding 12 14, gap 4, columns at least 180 wid
 
 These have no value on the boards; the app uses the system's until they are drawn: pressed and keyboard-focus states, a narrow-window layout of the inspector (the boards wrap it under the content), drag and drop targets, tooltips.
 
-## 13. Implementation notes: app shell and status components (design wave 1)
+## 13. Implementation notes: app shell and status components (Liquid Glass migration)
 
-Built in `macos/JojoApp/Sources/JojoApp`: `Theme.swift` (tokens, typography, card elevation), `StatusComponents.swift` (pills, tag, counter, key cap, buttons), `Shell.swift` (sidebar, toolbar, content). Nothing in this section is from the canvas; these are the values the code needed that sections 1 to 4 do not have.
+Rewritten on 2026-11-17 for the Liquid Glass migration (STATUS.md, step 1). Built in `macos/JojoApp/Sources/JojoApp`: `Theme.swift` (the token tables of DESIGN_SYSTEM.md, sections 2 and 4, the fixed colors as `Palette`, typography, shadow levels, the materials `glassPanel`, `glassCapsule`, `cardElevation` and `well`, and `WindowMaterial`), `StatusComponents.swift` (pills, tag, counter, shortcut hint, buttons, `CapsuleGroup`), `Shell.swift` (window, sidebar, header row, `InspectorPanel`). The package targets macOS 26 (tools 6.2) for `glassEffect`.
 
 | Point | Value in the app |
 |---|---|
-| Window | System window with a full-size content view and a transparent, untitled title bar. The toolbar strip starts at the top of the window; the sidebar content starts below the traffic lights. Opens at 1120 × 720, minimum 900 × 620 |
-| Appearance | Follows the system. There is no switch in the app yet |
+| Window | System window with a full-size content view and a transparent, untitled title bar. `WindowMaterial`: the `window` token over a behind-window blur; padding 8; sidebar and content 10 apart. The sidebar and header start at the top of the window, beside the traffic lights |
+| Glass on screen | `.glassEffect(.regular, in:)`, a rounded rectangle 18 for panels, a capsule for capsules. At shadow level None a 0.5 `sep` ring is added |
+| Glass off screen and under Reduce Transparency | The token at alpha 1 over the opaque window (`Tokens.opaque`), with the rim edges of section 2; set by `\.offscreen`, which replaces the earlier `\.opaqueSidebar` |
+| Shadow level | `\.shadowLevel`, default Reduced. Not settable yet: Settings is read-only until it is rebuilt |
+| Appearance | Follows the system. The Settings › Appearance switch is not built yet |
+| Old token names | `sidebar`, `surface`, `fill`, `hairline`, `info`, `warn` and the other names of the first system are computed from the new tokens (an extension of `Tokens`), so screens not rebuilt yet draw the new values. The old text styles `nav`, `controlStrong`, `meta`, `groupHeader` map to the new table. Both go when the last screen moves |
+| Tone | Six cases: `neutral` gray, `info` blue, `warn` orange, `ok` green, `danger` red, `review` purple |
+| Sidebar | Glass panel 248 wide, padding 14 10 12, a 26 pt space for the traffic lights, the search capsule (30 high, disabled at 60% with the tooltip "The command palette is not available yet." until the palette exists), groups 14 apart |
 | Sidebar glyphs (SF Symbols) | Dashboard `square.grid.2x2`, Projects `folder`, Approval Inbox `tray`, Recovery Center `cross.case`, Feature Chat `bubble.left.and.bubble.right`, Specifications `doc.text`, Execution Plan `list.bullet.indent`, Agent Runs `play.circle`, Source Control `arrow.triangle.branch`, Verification & Evidence `checkmark.shield`, Activity & Audit `clock.arrow.circlepath`, Settings & Providers `gearshape` |
-| Operational pill symbols | Blocked `exclamationmark.triangle.fill`, Paused `pause.fill` |
-| Evidence pill symbols | Passed `checkmark`, Sealed `lock.fill`, Failed `xmark`, Incomplete `circle.lefthalf.filled`, Needs approval `hand.raised.fill`, Not run `minus`, Skipped `forward.fill`, Invalidated `slash.circle`, Unknown a bold "?" |
-| Toolbar symbols | Refresh `arrow.clockwise`, Show Inspector `sidebar.right` |
-| Pressed button | Opacity 0.8. A custom button style has no system pressed state |
-| Dashed outline of Unknown, light | Black at 30% (dark: white at 30%, from the canvas) |
-| Counter on a selected sidebar item | `onAccent` text on white at 20% |
-| Key cap | Height 18, horizontal padding 5 |
-| Search field to first item | 8 |
-| Search field | Drawn disabled (opacity 0.42) with the tooltip "The command palette is not available yet." until the palette exists |
-| Feature switcher | No project or feature exists in the helper yet. It shows "No project" and "No feature selected" on a `tileNeutral` tile, never an example |
-| Status well | Dot: `ok` for admission `Open`, `danger` for any other reported value, an empty ring when unknown. Admission is stated only while the helper connection is ready; otherwise "Admission unknown". The identifier is the helper epoch. The second line is the helper connection, because provider availability is not reported yet |
-| Toolbar breadcrumb | "Jojo › screen", and "Jojo › System › screen" for the System group, until projects and features exist |
-| Toolbar, command pending | A "Requested" pill (Waiting form) while `WorkspaceModel.commandPending` is true |
-| Sidebar counters | Recovery Center: subjects on hold, `warn`. Agent Runs: the snapshot's attempt rows, plain count. Source Control: the loaded attempt's changed paths outside the write scope, `danger` ([screens/SOURCE_CONTROL.md](screens/SOURCE_CONTROL.md), section 5.1). Approval Inbox: none, because the helper does not report pending approvals ([screens/APPROVAL_INBOX.md](screens/APPROVAL_INBOX.md), section 5.1). Specifications: none, for the same reason: which documents are proposed or wait is not reported ([screens/SPECIFICATIONS.md](screens/SPECIFICATIONS.md), section 5.1). Activity & Audit: none, as on its board ([screens/ACTIVITY.md](screens/ACTIVITY.md), section 5.1). Settings & Providers: none, as on its board ([screens/SETTINGS.md](screens/SETTINGS.md), section 5.1). Execution Plan: none, as on its board; nothing reported counts steps that may start ([screens/EXECUTION_PLAN.md](screens/EXECUTION_PLAN.md), section 7.1) |
+| Feature group heading | A gray 16 × 16 badge with "–" and "No project · No feature selected": the helper reports neither yet, so no example is shown |
+| Status card | Card radius 12, padding 10. Dot: `ok` for admission `Open`, `danger` for any other reported value, an empty ring when unknown. Admission is stated only while the helper is connected. Provider pills are not shown: the helper does not report availability or limits yet |
+| Sidebar counters | Recovery Center: subjects on hold, orange pill. Agent Runs: the snapshot's attempt rows, plain count in `text2`. Source Control: the loaded attempt's changed paths outside the write scope, orange pill |
+| Header row | Built by the shell for every screen until each screen draws its own: the title (`pageTitle`, Dashboard `dashboardTitle`), the `sub` line "place · screen" with the place "Workspace", "System" or "No feature selected", then "Requested" (standing pill) while a command awaits the core, then a capsule group with Refresh `arrow.clockwise` and Show Inspector `sidebar.right` |
+| Inspector | `InspectorPanel`: glass panel radius 18, 280 to 300 wide. Used by Agent Runs and Execution Plan; other screens keep their columns until rebuilt |
+| Operational pill | Standing (header, inspector): 22 high with its glyph. In rows and cards: 20 high, no glyph. Glyphs: dot; Running a dot with an `accentTint` halo; Waiting a ring; Recovery required a ring with a dot; Blocked `exclamationmark.triangle.fill`; Paused `pause.fill`; Repairing `arrow.triangle.2.circlepath` |
+| Requested | A state of its own (`OperationalState.requested`, purple) |
+| Evidence pill | The text symbols of section 2.3 at 11 bold |
+| Document tag | `DocumentTag(label, tone:)` draws the other uppercase tags of section 2.4 |
+| Buttons | Primary: `accent` capsule with the inner top highlight of the shadow level. Secondary: glass capsule. Ghost: `accent` text. Destructive: `red` text. Disabled: `grayBg` and `text3`. Pressed: opacity 0.8 (a custom button style has no system pressed state) |
+| Dark accent | White on `#0a84ff` is 3.6:1, under 4.5. Kept as drawn; the test holds it to 3:1 |
 | Destinations without a screen | The Empty form of STATES.md with the destination's glyph and "… is not built yet" |
 
 No screen from before the shell is left: the old Start screen was replaced by Execution Plan. Recovery Center ([screens/RECOVERY_CENTER.md](screens/RECOVERY_CENTER.md)), Agent Runs ([screens/AGENT_RUNS.md](screens/AGENT_RUNS.md)), Verification & Evidence ([screens/VERIFICATION.md](screens/VERIFICATION.md)), Source Control ([screens/SOURCE_CONTROL.md](screens/SOURCE_CONTROL.md)), the Approval Inbox ([screens/APPROVAL_INBOX.md](screens/APPROVAL_INBOX.md)), which replaced the old Review screen, Specifications ([screens/SPECIFICATIONS.md](screens/SPECIFICATIONS.md)), Activity & Audit ([screens/ACTIVITY.md](screens/ACTIVITY.md)), Settings & Providers ([screens/SETTINGS.md](screens/SETTINGS.md)) and Execution Plan ([screens/EXECUTION_PLAN.md](screens/EXECUTION_PLAN.md)) are redesigned. Execution Plan added no component: the lifecycle stepper (section 2.1), the pipeline cells (section 5.4) and the dependency nodes (section 6) stay unbuilt, because the core reports no plan to draw them from.

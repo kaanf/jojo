@@ -257,7 +257,8 @@ struct AgentRunsView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 if wide {
-                    panel(edge: .leading) { Scrolling { inspector(current) } }.frame(width: 280)
+                    InspectorPanel(width: 280) { Scrolling { inspector(current) } }
+                        .padding(EdgeInsets(top: 0, leading: 4, bottom: 8, trailing: 8))
                 }
             }
         }

@@ -27,39 +27,48 @@ final class DesignShellTests: XCTestCase {
         return (max(x, y) + 0.05) / (min(x, y) + 0.05)
     }
 
-    func test_dw1_tokens_match_the_design_system_table() {
-        XCTAssertEqual(Tokens.dark.surface, RGBA(0x232327))
-        XCTAssertEqual(Tokens.light.content, RGBA(0xF5F5F7))
-        XCTAssertEqual(Tokens.dark.fill, .white(0.07))
-        XCTAssertEqual(Tokens.light.fill, .black(0.05))
-        XCTAssertEqual(Tokens.dark.warn, RGBA(0xF4B163))
-        XCTAssertEqual(Tokens.light.warn, RGBA(0x9A5800))
-        XCTAssertEqual(Tokens.dark.dangerRing, RGBA(0xFF8677, 0.35))
-        XCTAssertEqual(Tokens.light.infoTint, RGBA(0x2F6FEB, 0.10))
+    func test_lg_tokens_match_the_design_system_table() {
+        XCTAssertEqual(Tokens.light.window, RGBA(246, 246, 248, 0.74))
+        XCTAssertEqual(Tokens.dark.glass, RGBA(58, 58, 64, 0.46))
+        XCTAssertEqual(Tokens.light.glassStrong, .white(0.78))
+        XCTAssertEqual(Tokens.dark.card, .white(0.065))
+        XCTAssertEqual(Tokens.light.sep, .black(0.09))
+        XCTAssertEqual(Tokens.light.accent, RGBA(0x0071E3))
+        XCTAssertEqual(Tokens.dark.accent, RGBA(0x0A84FF))
+        XCTAssertEqual(Tokens.light.orange, RGBA(0x9A4300))
+        XCTAssertEqual(Tokens.dark.purpleBg, RGBA(191, 90, 242, 0.20))
+        XCTAssertEqual(Tokens.light.grayBg, RGBA(120, 120, 128, 0.14))
+        XCTAssertEqual(Tokens.dark.onAccent, Tokens.light.onAccent)
         XCTAssertEqual(Theme.resolve(.dark), .dark)
         XCTAssertEqual(Theme.resolve(.light), .light)
     }
 
-    func test_dw1_solid_fills_stay_and_elevation_flips() {
-        XCTAssertEqual(Tokens.dark.accent, Tokens.light.accent)
-        XCTAssertEqual(Tokens.dark.onAccent, Tokens.light.onAccent)
-        XCTAssertNil(Tokens.dark.cardShadow)
-        XCTAssertNil(Tokens.dark.liftShadow)
-        XCTAssertEqual(Tokens.light.cardShadow, Elevation(color: .black(0.05), y: 1, blur: 2))
-        XCTAssertEqual(Tokens.light.liftShadow, Elevation(color: .black(0.07), y: 4, blur: 12))
-        XCTAssertNotEqual(Tokens.light.content, Tokens.light.surface)
+    /// Reduce Transparency and off-screen snapshots draw glass as the token at alpha 1 over
+    /// the opaque window; a card stays lighter than the window in light.
+    func test_lg_materials_fall_back_to_opaque_tokens() {
+        for tokens in [Tokens.dark, Tokens.light] {
+            XCTAssertEqual(tokens.opaqueWindow.a, 1)
+            XCTAssertEqual(tokens.opaque(\.glass).a, 1)
+            XCTAssertEqual(tokens.opaque(\.glass), tokens.glass.over(tokens.opaqueWindow))
+        }
+        XCTAssertGreaterThan(luminance(Tokens.light.opaque(\.card)), luminance(Tokens.light.opaqueWindow))
+        XCTAssertGreaterThan(luminance(Tokens.dark.opaque(\.card)), luminance(Tokens.dark.opaqueWindow))
     }
 
-    func test_dw1_status_text_on_its_tint_keeps_4_5_to_1_on_a_card() {
+    func test_lg_status_text_on_its_tint_keeps_4_5_to_1_on_a_card() {
         for tokens in [Tokens.dark, Tokens.light] {
+            let card = tokens.opaque(\.card)
             for tone in Tone.allCases {
-                let background = over(tokens.tint(tone), tokens.surface)
+                let background = over(tokens.tint(tone), card)
                 XCTAssertGreaterThanOrEqual(contrast(tokens.foreground(tone), background), 4.5, "\(tone)")
             }
+            // The board's dark accent (#0a84ff) holds white at 3.6:1: a control, not body text.
+            XCTAssertGreaterThanOrEqual(contrast(tokens.onAccent, tokens.accent), 3)
         }
     }
 
-    func test_dw1_status_darkens_in_light() {
+    func test_lg_status_darkens_in_light() {
+        XCTAssertEqual(Tone.allCases.count, 6)
         for tone in Tone.allCases {
             XCTAssertLessThan(luminance(Tokens.light.foreground(tone)), luminance(Tokens.dark.foreground(tone)), "\(tone)")
         }
@@ -68,13 +77,14 @@ final class DesignShellTests: XCTestCase {
     func test_dw1_operational_states_follow_the_status_table() {
         let tones: [OperationalState: Tone] = [
             .idle: .neutral, .running: .info, .waiting: .neutral, .blocked: .warn, .awaitingApproval: .warn,
-            .paused: .neutral, .recoveryRequired: .danger, .failed: .danger, .completed: .ok, .repairing: .info,
+            .paused: .neutral, .recoveryRequired: .danger, .failed: .danger, .completed: .ok, .requested: .review,
+            .repairing: .info,
         ]
-        XCTAssertEqual(OperationalState.allCases.count, 10)
+        XCTAssertEqual(OperationalState.allCases.count, 11)
         for state in OperationalState.allCases {
             XCTAssertEqual(state.tone, tones[state], state.label)
         }
-        XCTAssertEqual(Set(OperationalState.allCases.map(\.label)).count, 10)
+        XCTAssertEqual(Set(OperationalState.allCases.map(\.label)).count, 11)
         XCTAssertEqual(OperationalState.running.glyph, .haloDot)
         XCTAssertEqual(OperationalState.waiting.glyph, .ring)
         XCTAssertEqual(OperationalState.recoveryRequired.glyph, .ringDot)
@@ -85,27 +95,23 @@ final class DesignShellTests: XCTestCase {
 
     func test_dw1_unknown_evidence_is_never_success_or_failure() {
         XCTAssertEqual(EvidenceState.unknown.tone, .neutral)
-        XCTAssertNil(EvidenceState.unknown.symbol)
-        for state in EvidenceState.allCases where state != .unknown {
-            XCTAssertNotNil(state.symbol, state.label)
-        }
-        XCTAssertEqual(Set(EvidenceState.allCases.compactMap(\.symbol)).count, 8)
+        XCTAssertEqual(EvidenceState.unknown.symbol, "?")
+        XCTAssertEqual(EvidenceState.allCases.map(\.symbol), ["✓", "◆", "✕", "◐", "!", "○", "↷", "⊘", "?"])
         XCTAssertEqual(EvidenceState.passed.tone, .ok)
         XCTAssertEqual(EvidenceState.sealed.tone, .ok)
         XCTAssertEqual(EvidenceState.failed.tone, .danger)
         XCTAssertEqual(EvidenceState.incomplete.tone, .warn)
-        XCTAssertEqual(EvidenceState.needsApproval.tone, .warn)
+        XCTAssertEqual(EvidenceState.needsApproval.tone, .review)
         for state in [EvidenceState.notRun, .skipped, .invalidated] {
             XCTAssertEqual(state.tone, .neutral, state.label)
         }
     }
 
     func test_dw1_document_tags_follow_the_status_table() {
-        XCTAssertEqual(DocumentStatus.allCases.filter(\.outlined), [.proposed, .stale])
         XCTAssertEqual(DocumentStatus.proposed.tone, .info)
         XCTAssertEqual(DocumentStatus.approved.tone, .ok)
         XCTAssertEqual(DocumentStatus.superseded.tone, .neutral)
-        XCTAssertEqual(DocumentStatus.invalidated.tone, .neutral)
+        XCTAssertEqual(DocumentStatus.invalidated.tone, .danger)
         XCTAssertEqual(DocumentStatus.stale.tone, .warn)
     }
 
@@ -116,8 +122,9 @@ final class DesignShellTests: XCTestCase {
                        ["Feature Chat", "Specifications", "Execution Plan", "Agent Runs", "Source Control", "Verification & Evidence"])
         XCTAssertEqual(Screen.screens(in: .system).map(\.title), ["Activity & Audit", "Settings & Providers"])
         XCTAssertEqual(Set(Screen.allCases.map(\.symbol)).count, Screen.allCases.count)
-        XCTAssertEqual(Screen.settings.ancestors, ["Jojo", "System"])
-        XCTAssertEqual(Screen.agentRuns.ancestors, ["Jojo"])
+        XCTAssertEqual(Screen.settings.place, "System")
+        XCTAssertEqual(Screen.recoveryCenter.place, "Workspace")
+        XCTAssertEqual(Screen.agentRuns.place, "No feature selected")
         XCTAssertTrue(MainView.built.contains(.recoveryCenter))
         XCTAssertFalse(MainView.built.contains(.dashboard))
     }
@@ -159,7 +166,7 @@ final class DesignShellTests: XCTestCase {
                     Gallery().padding(EdgeInsets(top: 20, leading: 20, bottom: 28, trailing: 20))
                 }
             }
-            .environment(\.opaqueSidebar, true)
+            .environment(\.offscreen, true)
             .environment(\.colorScheme, scheme)
             .frame(width: 1120, height: 3810)
             guard let directory else { continue }
@@ -328,7 +335,6 @@ final class DesignShellTests: XCTestCase {
                         RecoveryCenterView(state: state, reviewing: reviewing)
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: 1120, height: 720)
@@ -525,7 +531,6 @@ final class DesignShellTests: XCTestCase {
                         AgentRunsView(state: state, selected: selected)
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)
@@ -702,7 +707,6 @@ final class DesignShellTests: XCTestCase {
                         VerificationView(state: state)
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)
@@ -881,7 +885,6 @@ final class DesignShellTests: XCTestCase {
                         SourceControlView(state: state, selected: selected)
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)
@@ -1013,7 +1016,6 @@ final class DesignShellTests: XCTestCase {
                         ApprovalInboxView(state: state)
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)
@@ -1092,7 +1094,6 @@ final class DesignShellTests: XCTestCase {
                         SpecificationsView(state: SpecificationsState(inbox: state))
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)
@@ -1303,7 +1304,6 @@ final class DesignShellTests: XCTestCase {
                         ActivityView(state: state)
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)
@@ -1542,7 +1542,6 @@ final class DesignShellTests: XCTestCase {
                         SettingsView(state: state)
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)
@@ -1884,7 +1883,6 @@ final class DesignShellTests: XCTestCase {
                         ExecutionPlanView(state: state)
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)
@@ -1986,7 +1984,6 @@ extension DesignShellTests {
                 let shell = Themed {
                     AppShell(model: model, screen: .constant(.projects), showInspector: {}) { ProjectsView(state: state) }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: 1120, height: 1150)
@@ -2427,7 +2424,6 @@ extension DesignShellTests {
                         FeatureChatView(state: state)
                     }
                 }
-                .environment(\.opaqueSidebar, true)
                 .environment(\.offscreen, true)
                 .environment(\.colorScheme, scheme)
                 .frame(width: size.width, height: size.height)

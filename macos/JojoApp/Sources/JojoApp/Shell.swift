@@ -2,7 +2,8 @@ import AppKit
 import JojoCore
 import SwiftUI
 
-// The app shell of docs/design/COMPONENTS.md, section 4: sidebar, toolbar and content area.
+// The app shell of docs/design/COMPONENTS.md, section 4: the window material, the sidebar as
+// a glass panel, and the content column that starts with the screen's header row.
 
 /// The sidebar destinations, in canvas order.
 enum Screen: String, CaseIterable, Identifiable, Sendable {
@@ -59,9 +60,14 @@ enum Screen: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Ancestors shown before the screen's own name in the toolbar breadcrumb.
-    var ancestors: [String] {
-        group == .system ? ["Jojo", "System"] : ["Jojo"]
+    /// The place named in the header's `sub` line before the screen's own name. Feature
+    /// screens name the feature, which the core does not report yet.
+    var place: String {
+        switch group {
+        case .workspace: return "Workspace"
+        case .feature: return "No feature selected"
+        case .system: return "System"
+        }
     }
 
     static func screens(in group: Group) -> [Screen] {
@@ -112,6 +118,9 @@ struct ShellStatus: Equatable, Sendable {
     }
 }
 
+
+/// The window (padding 8): the sidebar panel, then the content column, which has no surface
+/// of its own and starts with the header row.
 struct AppShell<Content: View>: View {
     @Environment(\.theme) private var theme
     @ObservedObject var model: AppModel
@@ -120,18 +129,20 @@ struct AppShell<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 10) {
             Sidebar(screen: $screen, status: status, counters: counters)
             VStack(spacing: 0) {
-                ShellToolbar(screen: screen, pending: model.workspace.commandPending,
-                             refresh: { model.workspace.refresh() }, showInspector: showInspector)
+                Header(screen: screen, pending: model.workspace.commandPending,
+                       refresh: { model.workspace.refresh() }, showInspector: showInspector)
+                    .padding(EdgeInsets(top: 10, leading: 4, bottom: 6, trailing: 10))
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .background(theme.content)
             }
-            // The toolbar strip starts at the top of the window, beside the traffic lights.
-            .ignoresSafeArea(.container, edges: .top)
         }
+        .padding(8)
+        // The sidebar and the header start at the top of the window, beside the traffic lights.
+        .ignoresSafeArea(.container, edges: .top)
+        .background(WindowMaterial().ignoresSafeArea())
         .foregroundStyle(theme.text)
     }
 
@@ -145,7 +156,7 @@ struct AppShell<Content: View>: View {
     private var counters: [Screen: SidebarCounter] {
         [.recoveryCenter: SidebarCounter(count: model.workspace.recovery.count, tone: .warn),
          .agentRuns: SidebarCounter(count: AgentRunsState.attempts(in: model.workspace.rows).count, tone: .neutral),
-         .sourceControl: SidebarCounter(count: SourceControlState.violations(in: model.workspace.changedFiles).count, tone: .danger)]
+         .sourceControl: SidebarCounter(count: SourceControlState.violations(in: model.workspace.changedFiles).count, tone: .warn)]
     }
 }
 
@@ -154,6 +165,7 @@ struct SidebarCounter: Equatable {
     var tone: Tone
 }
 
+/// Glass panel, 248 wide, padding 14 10 12, groups 14 apart.
 struct Sidebar: View {
     @Environment(\.theme) private var theme
     @Binding var screen: Screen
@@ -162,25 +174,28 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            SearchField().padding(.bottom, 8)
+            // The system traffic lights sit here.
+            Spacer().frame(height: 26)
+            SearchField().padding(.bottom, 14)
             items(.workspace)
-            FeatureSwitcher().padding(.top, 14).padding(.bottom, 4)
+            FeatureHeading().padding(EdgeInsets(top: 14, leading: 9, bottom: 4, trailing: 9))
             items(.feature)
-            Text("System")
-                .textStyle(.sidebarSection)
-                .foregroundStyle(theme.text3)
-                .padding(EdgeInsets(top: 14, leading: 9, bottom: 4, trailing: 9))
+            heading("System")
             items(.system)
             Spacer(minLength: 12)
-            StatusWell(status: status)
+            StatusCard(status: status)
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 10)
-        .frame(width: 236)
-        .background(SidebarBackground().ignoresSafeArea())
-        .overlay(alignment: .trailing) {
-            Rectangle().fill(theme.sidebarEdge).frame(width: 1).ignoresSafeArea()
-        }
+        .padding(EdgeInsets(top: 14, leading: 10, bottom: 12, trailing: 10))
+        .frame(width: 248)
+        .frame(maxHeight: .infinity)
+        .glassPanel()
+    }
+
+    private func heading(_ title: String) -> some View {
+        Text(title)
+            .textStyle(.sidebarSection)
+            .foregroundStyle(theme.text3)
+            .padding(EdgeInsets(top: 14, leading: 9, bottom: 4, trailing: 9))
     }
 
     private func items(_ group: Screen.Group) -> some View {
@@ -190,69 +205,30 @@ struct Sidebar: View {
     }
 }
 
-/// The system sidebar material; the `sidebar` token, opaque, when transparency is reduced.
-private struct SidebarBackground: View {
-    @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.opaqueSidebar) private var opaque
-
-    var body: some View {
-        if reduceTransparency || opaque {
-            theme.sidebar.opacity(1)
-        } else {
-            SidebarMaterial()
-        }
-    }
-}
-
-private struct SidebarMaterial: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .sidebar
-        view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
-}
-
-private struct OpaqueSidebarKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    /// Draws the sidebar with the opaque `sidebar` token instead of the system material
-    /// (off-screen rendering cannot draw the material).
-    var opaqueSidebar: Bool {
-        get { self[OpaqueSidebarKey.self] }
-        set { self[OpaqueSidebarKey.self] = newValue }
-    }
-}
-
 /// Opens the command palette, which is not built yet: disabled, and says why.
 private struct SearchField: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
         HStack(spacing: 7) {
-            Image(systemName: "magnifyingglass").font(.system(size: 13))
-            Text("Search or run").textStyle(.control).lineLimit(1)
+            Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium))
+            Text("Search or run").textStyle(.body).lineLimit(1)
             Spacer(minLength: 4)
             KeyCap("⌘K")
         }
         .foregroundStyle(theme.text3)
-        .padding(.leading, 8)
-        .padding(.trailing, 5)
-        .frame(height: 28)
-        .background(theme.fill, in: RoundedRectangle(cornerRadius: 7))
-        .opacity(0.42)
+        .padding(.horizontal, 11)
+        .frame(height: 30)
+        .glassCapsule()
+        .opacity(0.6)
         .help("The command palette is not available yet.")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Search or run. Not available yet.")
     }
 }
 
+/// Nav item: 30 high, radius 9, an `accent` glyph, the label and a trailing counter. Chosen:
+/// `accentTint` and a semibold label; under the pointer: `grayBg`.
 private struct SidebarItem: View {
     @Environment(\.theme) private var theme
     @State private var hovered = false
@@ -262,26 +238,25 @@ private struct SidebarItem: View {
     let action: () -> Void
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 6)
+        let shape = RoundedRectangle(cornerRadius: 9)
         Button(action: action) {
             HStack(spacing: 9) {
                 Image(systemName: screen.symbol)
-                    .font(.system(size: 15))
+                    .font(.system(size: 14))
                     .frame(width: 18)
-                    .foregroundStyle(selected ? theme.onAccent : theme.icon)
+                    .foregroundStyle(theme.accent)
                 Text(screen.title)
-                    .textStyle(.nav)
+                    .font(.system(size: 13, weight: selected ? .semibold : .regular))
                     .lineLimit(1)
-                    .foregroundStyle(selected ? theme.onAccent : theme.navText)
+                    .foregroundStyle(theme.text)
                 Spacer(minLength: 4)
                 if let counter, counter.count > 0 {
-                    CounterBadge(counter.count, tone: counter.tone, onAccent: selected)
+                    CounterBadge(counter.count, tone: counter.tone)
                 }
             }
-            .padding(.leading, 9)
-            .padding(.trailing, 8)
-            .frame(height: 28)
-            .background(selected ? theme.accent : hovered ? theme.hover : .clear, in: shape)
+            .padding(.horizontal, 9)
+            .frame(height: 30)
+            .background(selected ? theme.accentTint : hovered ? theme.grayBg : .clear, in: shape)
             .contentShape(shape)
         }
         .buttonStyle(.plain)
@@ -290,50 +265,47 @@ private struct SidebarItem: View {
     }
 }
 
-/// Project and feature of the screens below it. Neither exists in the helper yet, so the
-/// switcher says so instead of showing an example.
-private struct FeatureSwitcher: View {
+/// The heading of the feature group: the project badge and "Project · Feature". Neither
+/// exists in the helper yet, so it says so instead of showing an example.
+private struct FeatureHeading: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             Text("–")
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 24, height: 24)
-                .background(theme.tileNeutral, in: RoundedRectangle(cornerRadius: 6))
-            VStack(alignment: .leading, spacing: 0) {
-                Text("No project").font(.system(size: 11)).foregroundStyle(theme.text3)
-                Text("No feature selected").textStyle(.controlStrong).foregroundStyle(theme.text)
-            }
-            .lineLimit(1)
-            Spacer(minLength: 0)
+                .frame(width: 16, height: 16)
+                .background(Palette.gray.color, in: RoundedRectangle(cornerRadius: 5))
+            Text("No project · No feature selected")
+                .textStyle(.sidebarSection)
+                .foregroundStyle(theme.text3)
+                .lineLimit(1)
         }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 8)
-        .background(theme.fill, in: RoundedRectangle(cornerRadius: 8))
         .help("Projects and features are not available yet.")
     }
 }
 
-private struct StatusWell: View {
+/// The card at the bottom of the sidebar (radius 12, padding 10): the admission dot and
+/// sentence with the session, then the core's connection.
+private struct StatusCard: View {
     @Environment(\.theme) private var theme
     let status: ShellStatus
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 7) {
                 if let tone = status.tone {
-                    Circle().fill(theme.foreground(tone)).frame(width: 7, height: 7)
+                    Circle().fill(theme.foreground(tone)).frame(width: 8, height: 8)
                 } else {
-                    Circle().strokeBorder(theme.text3, lineWidth: 1.5).frame(width: 7, height: 7)
+                    Circle().strokeBorder(theme.text3, lineWidth: 1.5).frame(width: 8, height: 8)
                 }
-                Text(status.admission).font(.system(size: 12)).foregroundStyle(theme.text).lineLimit(1)
+                Text(status.admission).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 Spacer(minLength: 4)
-                Text(status.session).textStyle(.mono).foregroundStyle(theme.text3).lineLimit(1)
+                Text(status.session).textStyle(.secondary).foregroundStyle(theme.text2).lineLimit(1)
             }
             Text(status.core)
-                .font(.system(size: 12))
+                .textStyle(.secondary)
                 .foregroundStyle(theme.text2)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -341,12 +313,15 @@ private struct StatusWell: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.fill2, in: RoundedRectangle(cornerRadius: 9))
+        .cardElevation(radius: 12)
         .accessibilityElement(children: .combine)
     }
 }
 
-struct ShellToolbar: View {
+/// The header row each screen starts with (min height 44): the title and its `sub` line,
+/// then the trailing actions: "Requested" while a command awaits the core, and a capsule
+/// group of icon buttons.
+struct Header: View {
     @Environment(\.theme) private var theme
     let screen: Screen
     /// A command was sent and the core has not confirmed it: "Requested", never success.
@@ -355,38 +330,46 @@ struct ShellToolbar: View {
     let showInspector: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(screen.title).textStyle(.toolbarTitle).foregroundStyle(theme.textStrong).lineLimit(1)
-                HStack(spacing: 5) {
-                    ForEach(screen.ancestors, id: \.self) { name in
-                        Text(name).foregroundStyle(theme.text3)
-                        Text("›").foregroundStyle(theme.text4)
-                    }
-                    Text(screen.title).foregroundStyle(theme.text2)
-                }
-                .textStyle(.meta)
-                .lineLimit(1)
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(screen.title)
+                    .textStyle(screen == .dashboard ? .dashboardTitle : .pageTitle)
+                    .lineLimit(1)
+                Text("\(screen.place) · \(screen.title)")
+                    .textStyle(.secondary)
+                    .foregroundStyle(theme.text2)
+                    .lineLimit(1)
             }
             Spacer(minLength: 12)
             if pending {
-                OperationalPill(.waiting, label: "Requested")
+                OperationalPill(.requested, standalone: true)
                     .help("Sent to core · waiting for confirmation")
             }
-            Button(action: refresh) { Label("Refresh", systemImage: "arrow.clockwise") }
-                .buttonStyle(IconButtonStyle())
-                .help("Refresh")
-            Button(action: showInspector) { Label("Show Inspector", systemImage: "sidebar.right") }
-                .buttonStyle(IconButtonStyle())
-                .help("Show Inspector")
+            CapsuleGroup {
+                Button(action: refresh) { Label("Refresh", systemImage: "arrow.clockwise") }
+                    .buttonStyle(IconButtonStyle())
+                    .help("Refresh")
+                Button(action: showInspector) { Label("Show Inspector", systemImage: "sidebar.right") }
+                    .buttonStyle(IconButtonStyle())
+                    .help("Show Inspector")
+            }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 20)
-        .frame(minHeight: 52)
-        .background(theme.toolbar)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(theme.toolbarEdge).frame(height: 1)
-        }
+        .frame(minHeight: 44)
+    }
+}
+
+/// The trailing inspector: a glass panel 280 to 320 wide, radius 18. The screen gives its
+/// content, which brings its own padding.
+struct InspectorPanel<Content: View>: View {
+    var width: CGFloat = 300
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .glassPanel()
+            .frame(width: width)
     }
 }
 
@@ -398,7 +381,7 @@ struct NotBuiltYet: View {
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: screen.symbol).font(.system(size: 24)).foregroundStyle(theme.text3)
-            Text("\(screen.title) is not built yet").textStyle(.bodyStrong).foregroundStyle(theme.textStrong)
+            Text("\(screen.title) is not built yet").textStyle(.bodyStrong).foregroundStyle(theme.text)
             Text("Runs, review, recovery, start and candidate review are under Agent Runs, Approval Inbox, Recovery Center, Execution Plan and Verification & Evidence.")
                 .textStyle(.body)
                 .foregroundStyle(theme.text2)

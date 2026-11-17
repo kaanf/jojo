@@ -416,11 +416,8 @@ struct ExecutionPlanView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 if beside, let plan = state.plan {
-                    Scrolling { inspector(plan) }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .background(theme.sidebar)
-                        .overlay(alignment: .leading) { Rectangle().fill(theme.sidebarEdge).frame(width: 1) }
-                        .frame(width: 300)
+                    InspectorPanel { Scrolling { inspector(plan) } }
+                        .padding(EdgeInsets(top: 0, leading: 4, bottom: 8, trailing: 8))
                 }
             }
         }

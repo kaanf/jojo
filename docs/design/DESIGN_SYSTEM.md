@@ -2,7 +2,7 @@
 
 Materials, colors, type, spacing, shape and elevation for the SwiftUI app. Transcribed from the Claude Design canvas "Jojo macOS", page "Components & states", board "Themes and tokens" (`ThemeTokensMac.dc.html`), and from the stylesheet the product boards share (the `.mac` rules of `DashboardMac.dc.html`). Source version and conflict rules: [README.md](README.md).
 
-This replaces the first design system (dark-first, opaque surfaces, `--jj-*` tokens, accent `#2F6FEB`), which is kept on the canvas's Archive page. The app's code still uses the first system until the Liquid Glass migration moves it (section 12).
+This replaces the first design system (dark-first, opaque surfaces, `--jj-*` tokens, accent `#2F6FEB`), which is kept on the canvas's Archive page. The app's shell and status components use this system since 2026-11-17; screens move as they are rebuilt (section 12).
 
 The canvas is written in CSS pixels. One CSS pixel is one SwiftUI point.
 
@@ -249,4 +249,4 @@ Accessibility: every status has a shape or a symbol as well as a color. Honor Re
 
 ## 12. Moving the app (the Liquid Glass migration)
 
-The code (`macos/JojoApp/Sources/JojoApp/Theme.swift`) still holds the first system's tokens. The Liquid Glass migration moves it in this order: the token table and materials, the shell (sidebar, toolbar, inspector as glass panels), the status components, then each screen as it is rebuilt. COMPONENTS.md sections 13 to 24 describe the surfaces as built on the first system; each is rewritten when its screen moves.
+Step 1 is done (2026-11-17): `Theme.swift` holds these tokens, the materials and the type scale; the shell (window, sidebar, header row, inspector panel) and the status components are glass. The names of the first system remain as computed aliases of the new tokens until every screen is rebuilt (COMPONENTS.md, section 13). Each screen moves when it is rebuilt from its board (STATUS.md, steps 3, 4 and 6). COMPONENTS.md sections 14 to 24 describe the surfaces as built on the first system; each is rewritten when its screen moves.

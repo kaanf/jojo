@@ -1,12 +1,15 @@
 import SwiftUI
 
 // The status model of docs/design/COMPONENTS.md, sections 1 to 3. Three families that share
-// colors and never share a shape: operational state (capsule, dot glyph), evidence (square,
-// symbol glyph) and document status (uppercase tag). Unknown is never success or failure.
+// colors and never share a shape: operational state (capsule with a dot), evidence (rounded
+// square with a symbol) and document status (uppercase outline tag). Unknown is never
+// success or failure.
 
 /// What is happening now.
 enum OperationalState: CaseIterable, Sendable {
     case idle, running, waiting, blocked, awaitingApproval, paused, recoveryRequired, failed, completed
+    /// Sent to the core, not yet confirmed.
+    case requested
     /// M4 (D2): the core starts a repair attempt of a failed plan step on its own.
     case repairing
 
@@ -21,6 +24,7 @@ enum OperationalState: CaseIterable, Sendable {
         case .recoveryRequired: return "Recovery required"
         case .failed: return "Failed"
         case .completed: return "Completed"
+        case .requested: return "Requested"
         case .repairing: return "Repairing"
         }
     }
@@ -32,33 +36,36 @@ enum OperationalState: CaseIterable, Sendable {
         case .blocked, .awaitingApproval: return .warn
         case .recoveryRequired, .failed: return .danger
         case .completed: return .ok
+        case .requested: return .review
         }
     }
 
+    /// The dot of the standing pill. States that share a hue differ by glyph as well as by
+    /// their word, so color is never the only signal.
     enum Glyph: Equatable {
         case dot, haloDot, ring, ringDot, symbol(String, CGFloat)
     }
 
     var glyph: Glyph {
         switch self {
-        case .idle, .awaitingApproval, .failed, .completed: return .dot
+        case .idle, .awaitingApproval, .failed, .completed, .requested: return .dot
         case .running: return .haloDot
         case .waiting: return .ring
-        case .blocked: return .symbol("exclamationmark.triangle.fill", 9)
-        case .paused: return .symbol("pause.fill", 8)
+        case .blocked: return .symbol("exclamationmark.triangle.fill", 8)
+        case .paused: return .symbol("pause.fill", 7)
         case .recoveryRequired: return .ringDot
         case .repairing: return .symbol("arrow.triangle.2.circlepath", 8)
         }
     }
 }
 
-/// Capsule pill. `label` replaces the state's own name where the design reuses a form
-/// ("Held", "Requested", "Temporarily unavailable").
+/// Capsule pill in the hue's text color on its tint. Standing alone (header, inspector,
+/// legend) it is 22 high with its glyph; in rows and cards it is 20 high without one.
+/// `label` replaces the state's own name where the design reuses a form ("Held").
 struct OperationalPill: View {
     @Environment(\.theme) private var theme
     let state: OperationalState
     var label: String?
-    /// Standing alone (legend, state notice): 11.5 pt and 20 high instead of 11 pt and 18.
     var standalone = false
 
     init(_ state: OperationalState, label: String? = nil, standalone: Bool = false) {
@@ -70,13 +77,12 @@ struct OperationalPill: View {
     var body: some View {
         let color = theme.foreground(state.tone)
         HStack(spacing: 6) {
-            glyph(color)
-            Text(label ?? state.label).textStyle(standalone ? .pillStandalone : .pill).lineLimit(1)
+            if standalone { glyph(color) }
+            Text(label ?? state.label).textStyle(.pill).lineLimit(1)
         }
         .foregroundStyle(color)
-        .padding(.leading, 7)
-        .padding(.trailing, 8)
-        .frame(height: standalone ? 20 : 18)
+        .padding(.horizontal, standalone ? 10 : 8)
+        .frame(height: standalone ? 22 : 20)
         .background(theme.tint(state.tone), in: Capsule())
         .fixedSize()
         .accessibilityElement(children: .ignore)
@@ -86,17 +92,17 @@ struct OperationalPill: View {
     @ViewBuilder private func glyph(_ color: Color) -> some View {
         switch state.glyph {
         case .dot:
-            Circle().fill(color).frame(width: 7, height: 7)
+            Circle().fill(color).frame(width: 6, height: 6)
         case .haloDot:
-            Circle().fill(color).frame(width: 7, height: 7)
-                .padding(3).background(theme.tint(state.tone), in: Circle()).padding(-3)
+            Circle().fill(color).frame(width: 6, height: 6)
+                .padding(3).background(theme.accentTint, in: Circle()).padding(-3)
         case .ring:
             Circle().strokeBorder(color, lineWidth: 1.5).frame(width: 7, height: 7)
         case .ringDot:
             Circle().strokeBorder(color, lineWidth: 1.5).frame(width: 9, height: 9)
                 .overlay(Circle().fill(color).frame(width: 3, height: 3))
         case .symbol(let name, let size):
-            Image(systemName: name).font(.system(size: size, weight: .semibold))
+            Image(systemName: name).font(.system(size: size, weight: .bold))
         }
     }
 }
@@ -123,28 +129,29 @@ enum EvidenceState: CaseIterable, Sendable {
         switch self {
         case .passed, .sealed: return .ok
         case .failed: return .danger
-        case .incomplete, .needsApproval: return .warn
+        case .incomplete: return .warn
+        case .needsApproval: return .review
         case .notRun, .skipped, .invalidated, .unknown: return .neutral
         }
     }
 
-    /// SF Symbol; `nil` for Unknown, which draws a bold question mark.
-    var symbol: String? {
+    /// The text symbol of COMPONENTS.md, section 2.3.
+    var symbol: String {
         switch self {
-        case .passed: return "checkmark"
-        case .sealed: return "lock.fill"
-        case .failed: return "xmark"
-        case .incomplete: return "circle.lefthalf.filled"
-        case .needsApproval: return "hand.raised.fill"
-        case .notRun: return "minus"
-        case .skipped: return "forward.fill"
-        case .invalidated: return "slash.circle"
-        case .unknown: return nil
+        case .passed: return "✓"
+        case .sealed: return "◆"
+        case .failed: return "✕"
+        case .incomplete: return "◐"
+        case .needsApproval: return "!"
+        case .notRun: return "○"
+        case .skipped: return "↷"
+        case .invalidated: return "⊘"
+        case .unknown: return "?"
         }
     }
 }
 
-/// Square pill (radius 4). Unknown has no fill: a dashed outline and a question mark.
+/// Rounded square (radius 6), 22 high: the symbol, then the label, in the hue on its tint.
 struct EvidencePill: View {
     @Environment(\.theme) private var theme
     let state: EvidenceState
@@ -156,25 +163,14 @@ struct EvidencePill: View {
     }
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 4)
         HStack(spacing: 5) {
-            if let symbol = state.symbol {
-                Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
-            } else {
-                Text("?").font(.system(size: 10, weight: .bold))
-            }
-            Text(label ?? state.label).textStyle(.pillStandalone).strikethrough(state == .invalidated).lineLimit(1)
+            Text(state.symbol).font(.system(size: 11, weight: .bold))
+            Text(label ?? state.label).textStyle(.pill).strikethrough(state == .invalidated).lineLimit(1)
         }
         .foregroundStyle(theme.foreground(state.tone))
-        .padding(.leading, 6)
-        .padding(.trailing, 7)
-        .frame(height: 18)
-        .background(state == .unknown ? Color.clear : theme.tint(state.tone), in: shape)
-        .overlay {
-            if state == .unknown {
-                shape.strokeBorder(theme.dashedOutline, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-            }
-        }
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .background(theme.tint(state.tone), in: RoundedRectangle(cornerRadius: 6))
         .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label ?? state.label)
@@ -199,73 +195,77 @@ enum DocumentStatus: CaseIterable, Sendable {
         switch self {
         case .proposed: return .info
         case .approved: return .ok
-        case .superseded, .invalidated: return .neutral
+        case .superseded: return .neutral
+        case .invalidated: return .danger
         case .stale: return .warn
         }
     }
-
-    /// Proposed and Stale are outlined; the others are filled.
-    var outlined: Bool { self == .proposed || self == .stale }
 }
 
-/// Uppercase tag (radius 4). A revision reference ("PRD rev 4") uses the Approved form.
+/// Uppercase tag: 18 high, radius 4, a 1 pt ring in the text color and no fill. A revision
+/// reference ("PRD rev 4") uses the Approved form.
 struct DocumentTag: View {
     @Environment(\.theme) private var theme
-    let status: DocumentStatus
-    var label: String?
+    let tone: Tone
+    let label: String
+    var struck = false
 
     init(_ status: DocumentStatus, label: String? = nil) {
-        self.status = status
+        tone = status.tone
+        self.label = label ?? status.label
+        struck = status == .invalidated
+    }
+
+    /// The other uppercase tags of the same shape ("Eligible", "Not available yet").
+    init(_ label: String, tone: Tone) {
+        self.tone = tone
         self.label = label
     }
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 4)
-        Text(label ?? status.label)
+        let color = theme.foreground(tone)
+        Text(label)
             .textStyle(.tag)
-            .strikethrough(status == .invalidated)
+            .strikethrough(struck)
             .lineLimit(1)
-            .foregroundStyle(theme.foreground(status.tone))
-            .padding(.horizontal, 8)
-            .frame(height: 19)
-            .background(status.outlined ? Color.clear : theme.tint(status.tone), in: shape)
-            .overlay {
-                if status.outlined {
-                    shape.strokeBorder(status == .proposed ? theme.infoRing : theme.warnRing, lineWidth: 1)
-                }
-            }
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .frame(height: 18)
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(color, lineWidth: 1))
             .fixedSize()
     }
 }
 
-/// Counter badge. The text color carries the meaning: warn needs the human, info is
-/// running, danger is failures, neutral is a plain count.
+/// A count beside a nav item or a group heading. A plain count is `text2` at 12; a count
+/// that needs the human is a pill 18 high in its hue (blue for open questions and proposed
+/// documents, orange for what waits on the human, red for violations).
 struct CounterBadge: View {
     @Environment(\.theme) private var theme
     let count: Int
     var tone = Tone.neutral
-    /// On a selected sidebar item the badge sits on `accent`.
-    var onAccent = false
 
-    init(_ count: Int, tone: Tone = .neutral, onAccent: Bool = false) {
+    init(_ count: Int, tone: Tone = .neutral) {
         self.count = count
         self.tone = tone
-        self.onAccent = onAccent
     }
 
     var body: some View {
-        Text("\(count)")
-            .textStyle(.counter)
-            .monospacedDigit()
-            .foregroundStyle(onAccent ? theme.onAccent : tone == .neutral ? theme.text3 : theme.foreground(tone))
-            .padding(.horizontal, 6)
-            .frame(height: 17)
-            .background(onAccent ? Color.white.opacity(0.2) : theme.fill, in: Capsule())
-            .fixedSize()
+        if tone == .neutral {
+            Text("\(count)").textStyle(.secondary).monospacedDigit().foregroundStyle(theme.text2).fixedSize()
+        } else {
+            Text("\(count)")
+                .textStyle(.pill)
+                .monospacedDigit()
+                .foregroundStyle(theme.foreground(tone))
+                .padding(.horizontal, 6)
+                .frame(minWidth: 18, minHeight: 18)
+                .background(theme.tint(tone), in: Capsule())
+                .fixedSize()
+        }
     }
 }
 
-/// Key cap ("⌘K").
+/// A shortcut hint ("⌘K"), 11 in `text3`.
 struct KeyCap: View {
     @Environment(\.theme) private var theme
     let keys: String
@@ -275,24 +275,19 @@ struct KeyCap: View {
     }
 
     var body: some View {
-        Text(keys)
-            .textStyle(.kbd)
-            .foregroundStyle(theme.text3)
-            .padding(.horizontal, 5)
-            .frame(height: 18)
-            .background(theme.fill, in: RoundedRectangle(cornerRadius: 5))
-            .shadow(color: theme.kbdShadow, radius: 0, y: 1)
+        Text(keys).textStyle(.kbd).foregroundStyle(theme.text3)
     }
 }
 
-/// The four button kinds. One primary action per area; destructive actions always confirm.
+/// The button kinds of COMPONENTS.md, section 3. One primary action per area; destructive
+/// actions always confirm.
 struct JojoButtonStyle: ButtonStyle {
     enum Kind: CaseIterable, Sendable {
         case primary, secondary, ghost, destructive
     }
 
     var kind = Kind.secondary
-    /// Inspector and empty-state size: 26 high instead of 28.
+    /// Small: 28 high, text 12 (inspector actions, empty states, row actions).
     var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -302,52 +297,53 @@ struct JojoButtonStyle: ButtonStyle {
     private struct Face: View {
         @Environment(\.theme) private var theme
         @Environment(\.isEnabled) private var enabled
-        @State private var hovered = false
+        @Environment(\.shadowLevel) private var level
         let configuration: Configuration
         let kind: Kind
         let compact: Bool
 
         var body: some View {
-            let shape = RoundedRectangle(cornerRadius: 6)
-            configuration.label
+            let label = configuration.label
                 .labelStyle(ButtonLabelStyle())
-                .textStyle(.control)
+                .font(.system(size: compact ? 12 : 13, weight: .medium))
                 .lineLimit(1)
                 .foregroundStyle(foreground)
-                .padding(.horizontal, compact ? 10 : 11)
-                .frame(height: compact ? 26 : 28)
-                .background(background, in: shape)
-                .overlay { if let border { shape.strokeBorder(border, lineWidth: 1) } }
-                .contentShape(shape)
+                .padding(.horizontal, 14)
+                .frame(height: compact ? 28 : 32)
+                .contentShape(Capsule())
                 // Pressed is not drawn on the canvas; a custom style has no system pressed state.
-                .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.42)
-                .onHover { hovered = $0 }
+                .opacity(configuration.isPressed ? 0.8 : 1)
+            if !enabled {
+                label.background(theme.grayBg, in: Capsule())
+            } else {
+                switch kind {
+                case .primary:
+                    label
+                        .background(theme.accent, in: Capsule())
+                        .overlay { if level != .none { Capsule().strokeBorder(topLight, lineWidth: 1) } }
+                        .shadow(color: level == .full ? RGBA(0, 113, 227, 0.35).color : .clear, radius: 5, y: 2)
+                case .secondary:
+                    label.glassCapsule()
+                case .ghost, .destructive:
+                    label
+                }
+            }
+        }
+
+        /// The primary button's inner top highlight.
+        private var topLight: LinearGradient {
+            LinearGradient(stops: [.init(color: .white.opacity(level == .full ? 0.35 : 0.3), location: 0),
+                                   .init(color: .clear, location: 0.1)],
+                           startPoint: .top, endPoint: .bottom)
         }
 
         private var foreground: Color {
+            guard enabled else { return theme.text3 }
             switch kind {
             case .primary: return theme.onAccent
             case .secondary: return theme.text
-            case .ghost: return theme.text2
-            case .destructive: return theme.danger
-            }
-        }
-
-        private var background: Color {
-            switch kind {
-            case .primary: return theme.accent
-            case .secondary: return theme.fill
-            case .ghost: return hovered && enabled ? theme.fill : .clear
-            case .destructive: return theme.dangerTint
-            }
-        }
-
-        private var border: Color? {
-            switch kind {
-            case .primary: return theme.primaryBorder
-            case .secondary: return theme.hairline
-            case .ghost: return nil
-            case .destructive: return theme.dangerRing
+            case .ghost: return theme.accent
+            case .destructive: return theme.red
             }
         }
     }
@@ -369,7 +365,7 @@ extension ButtonStyle where Self == JojoButtonStyle {
     }
 }
 
-/// A keyboard shortcut shown inside a button ("⌘↵").
+/// A keyboard shortcut shown inside a button ("⌘↵"): 12 at 75%.
 struct ShortcutHint: View {
     let keys: String
 
@@ -378,11 +374,11 @@ struct ShortcutHint: View {
     }
 
     var body: some View {
-        Text(keys).font(.system(size: 11)).opacity(0.72)
+        Text(keys).font(.system(size: 12)).opacity(0.75)
     }
 }
 
-/// A disabled control always says why.
+/// A disabled control always says why, in `secondary` style beside it.
 struct DisabledReason: View {
     @Environment(\.theme) private var theme
     let text: String
@@ -394,13 +390,24 @@ struct DisabledReason: View {
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: "info.circle").font(.system(size: 12))
-            Text(text).textStyle(.meta)
+            Text(text).textStyle(.secondary)
         }
         .foregroundStyle(theme.text3)
     }
 }
 
-/// Toolbar icon button: 28 × 28, 16 pt glyph, `fill` under the pointer.
+/// A glass capsule group (padding 2) of icon buttons or related-view text buttons.
+struct CapsuleGroup<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(spacing: 0) { content() }
+            .padding(2)
+            .glassCapsule()
+    }
+}
+
+/// Icon button: a 32 × 32 capsule inside a `CapsuleGroup`, `grayBg` under the pointer.
 struct IconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Face(configuration: configuration)
@@ -413,15 +420,14 @@ struct IconButtonStyle: ButtonStyle {
         let configuration: Configuration
 
         var body: some View {
-            let shape = RoundedRectangle(cornerRadius: 6)
             configuration.label
                 .labelStyle(.iconOnly)
-                .font(.system(size: 16))
-                .foregroundStyle(theme.text2)
-                .frame(width: 28, height: 28)
-                .background(hovered && enabled ? theme.fill : .clear, in: shape)
-                .contentShape(shape)
-                .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.42)
+                .font(.system(size: 15))
+                .foregroundStyle(enabled ? theme.text : theme.text3)
+                .frame(width: 32, height: 32)
+                .background(hovered && enabled ? theme.grayBg : .clear, in: Capsule())
+                .contentShape(Capsule())
+                .opacity(configuration.isPressed ? 0.8 : 1)
                 .onHover { hovered = $0 }
         }
     }

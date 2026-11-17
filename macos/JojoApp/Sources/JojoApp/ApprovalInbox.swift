@@ -154,7 +154,7 @@ struct ReviewMark: View {
 
     var body: some View {
         if state.requested {
-            OperationalPill(.waiting, label: "Requested", standalone: true)
+            OperationalPill(.requested, standalone: true)
         } else if state.stale {
             DocumentTag(.stale)
         } else if bundle.priorDecision == nil {
@@ -358,7 +358,7 @@ struct ApprovalInboxView: View {
                     FactLine("Staleness", last: true) {
                         HStack(spacing: 8) {
                             if state.requested {
-                                OperationalPill(.waiting, label: "Requested")
+                                OperationalPill(.requested)
                                 Text("a decision was sent · waiting for the core").foregroundStyle(theme.text3)
                             } else if state.stale {
                                 DocumentTag(.stale)
