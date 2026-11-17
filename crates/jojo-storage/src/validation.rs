@@ -340,7 +340,7 @@ fn runs(c: &Connection, id: &str) -> Result<Vec<ValidationRun>, StorageError> {
     Ok(out)
 }
 
-fn rejected(c: &Connection, id: &str) -> Result<bool, StorageError> {
+pub(crate) fn rejected(c: &Connection, id: &str) -> Result<bool, StorageError> {
     Ok(c.query_optional(
         "SELECT 1 FROM events WHERE kind='CandidateRejected' AND substr(payload,1,33)=?1",
         &[Value::Text(&format!("{id}|"))],

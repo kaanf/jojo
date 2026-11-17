@@ -164,8 +164,8 @@ fn record(h: &mut H) {
     h.send("snapshot before hello", "Snapshot", object([]));
     h.at("hello 1.0", 0, "Hello", object([]));
     // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2, 1.5
-    // since D3).
-    h.at("hello 1.6", 6, "Hello", object([("junk", n(1))]));
+    // since D3, 1.7 since 1.6).
+    h.at("hello 1.7", 7, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1127,6 +1127,48 @@ fn record(h: &mut H) {
         "SaveProject",
         Json::Object(old),
     );
+    // 1.6: the attempts and documents queries, unknown before 1.6, each with exactly the
+    // field `before`; an event carries its time and actor and a feature its name only at
+    // 1.6, so the 1.1 and 1.2 answers above stay as they were.
+    h.at(
+        "attempts at 1.5",
+        5,
+        "Attempts",
+        object([("before", Json::Null)]),
+    );
+    h.at(
+        "attempts none",
+        6,
+        "Attempts",
+        object([("before", Json::Null)]),
+    );
+    h.at("attempts without a field", 6, "Attempts", object([]));
+    h.at(
+        "attempts bad cursor",
+        6,
+        "Attempts",
+        object([("before", bad())]),
+    );
+    h.at(
+        "documents at 1.5",
+        5,
+        "Documents",
+        object([("before", Json::Null)]),
+    );
+    h.at("documents none", 6, "Documents", object([("before", n(9))]));
+    h.at(
+        "documents with a field",
+        6,
+        "Documents",
+        object([("before", Json::Null), ("pending", Json::Bool(true))]),
+    );
+    h.at(
+        "events far ahead at 1.6",
+        6,
+        "Events",
+        object([("after", n(1_000_000)), ("limit", n(8))]),
+    );
+    h.at("chat index at 1.6", 6, "ChatIndex", object([]));
 }
 
 #[test]
@@ -1143,7 +1185,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.6 => 1.5 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs","slice":true}
+hello 1.7 => 1.6 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1349,4 +1391,13 @@ repairs at 1.4 => 1.4 Error {"code":"UnknownType"}
 repairs none => 1.5 Response {"attempts":[],"complete":true}
 repairs with a field => 1.5 Error {"code":"InvalidPayload: unexpected or missing fields"}
 save project without repair settings => 1.5 Error {"code":"InvalidPayload: unexpected or missing fields"}
+attempts at 1.5 => 1.5 Error {"code":"UnknownType"}
+attempts none => 1.6 Response {"attempts":[],"next":null}
+attempts without a field => 1.6 Error {"code":"InvalidPayload: unexpected or missing fields"}
+attempts bad cursor => 1.6 Error {"code":"expected integer"}
+documents at 1.5 => 1.5 Error {"code":"UnknownType"}
+documents none => 1.6 Response {"candidates":[],"documents":[],"next":null,"pending":0}
+documents with a field => 1.6 Error {"code":"InvalidPayload: unexpected or missing fields"}
+events far ahead at 1.6 => 1.6 Response []
+chat index at 1.6 => 1.6 Response {"features":[],"features_complete":true,"repositories":[],"repositories_complete":true}
 "#;

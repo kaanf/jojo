@@ -2,8 +2,8 @@ import JojoCore
 import SwiftUI
 
 // Activity & Audit (docs/design/screens/ACTIVITY.md): the events the core committed, as the
-// `Events` answer gives them. The workspace reads them when this screen asks. The helper
-// reports no time, no actor and no hash for an event, so none is shown and no chain is verified.
+// `Events` answer gives them. The workspace reads them when this screen asks. Since 1.6 the
+// helper reports the time and actor of an event; it reports no hash, so no chain is verified.
 
 /// What the screen shows: the events the workspace holds, and the search, the type filters
 /// and the chosen event, which live in the screen.
@@ -21,7 +21,20 @@ struct ActivityState: Equatable {
     /// Event types that are switched off.
     var hidden: Set<String> = []
     var selected: Int64?
+    /// The day the groups are named from ("Today").
+    var now = Date()
 
+    /// The core reported times and actors (protocol 1.6).
+    var attributed: Bool { events.contains { $0.at != nil } }
+
+    /// Who caused an event, as shown.
+    static func actor(_ event: JournalEvent) -> String? {
+        switch event.actor {
+        case nil: return nil
+        case "Core": return "Jojo core"
+        case let actor?: return providerName(actor)
+        }
+    }
     var link: RecoveryCenterState.Link {
         switch connection {
         case .ready: return .connected
@@ -52,7 +65,8 @@ struct ActivityState: Equatable {
 
     /// Search reads what the core reported about a loaded event, nothing else.
     static func matches(_ event: JournalEvent, _ needle: String) -> Bool {
-        needle.isEmpty || [event.type, event.payload, event.aggregateKind ?? "", event.aggregateID ?? "", record(event)]
+        needle.isEmpty || [event.type, event.payload, event.aggregateKind ?? "", event.aggregateID ?? "", record(event),
+                           actor(event) ?? ""]
             .contains { $0.lowercased().contains(needle) }
     }
 
@@ -61,20 +75,34 @@ struct ActivityState: Equatable {
         events.reversed().filter { !hidden.contains($0.type) && Self.matches($0, needle) }
     }
 
-    /// The shown events of one engine epoch. The core reports no time to group by.
+    /// The shown events of one day, or of one engine epoch from a core that reports no time.
     struct Group: Identifiable, Equatable {
-        let epoch: Int64
+        let title: String
         var events: [JournalEvent]
-        var id: Int64 { events.first?.seq ?? epoch }
-        var title: String { "Epoch \(epoch)" }
+        var id: Int64 { events.first?.seq ?? 0 }
+    }
+
+    /// "Today", "Yesterday" or the date of an event.
+    func day(_ event: JournalEvent) -> String {
+        guard let at = event.at else { return "Epoch \(event.epoch)" }
+        let calendar = Calendar.current
+        if calendar.isDate(at, inSameDayAs: now) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(at, inSameDayAs: yesterday) {
+            return "Yesterday"
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.dateFormat = "EEEE d MMMM"
+        return formatter.string(from: at)
     }
 
     var groups: [Group] {
         shown.reduce(into: []) { groups, event in
-            if groups.last?.epoch == event.epoch {
+            let title = day(event)
+            if groups.last?.title == title {
                 groups[groups.count - 1].events.append(event)
             } else {
-                groups.append(Group(epoch: event.epoch, events: [event]))
+                groups.append(Group(title: title, events: [event]))
             }
         }
     }
@@ -168,7 +196,8 @@ struct ActivityView: View {
                         if state.events.isEmpty {
                             placeholder.frame(minHeight: 260)
                         } else {
-                            ListSearchField(prompt: "Search the loaded events: type, payload, subject, event number",
+                            ListSearchField(prompt: state.attributed ? "Search the loaded events: type, actor, payload, subject, event number"
+                                                            : "Search the loaded events: type, payload, subject, event number",
                                         text: Binding(get: { state.query }, set: { actions.search($0) }))
                             chips
                             if state.shown.isEmpty { unmatched.frame(minHeight: 200) } else { table }
@@ -263,7 +292,7 @@ struct ActivityView: View {
     private var table: some View {
         Card(.panelList) {
             VStack(spacing: 0) {
-                RecordHeader()
+                RecordHeader(attributed: state.attributed)
                 let last = state.shown.last?.seq
                 ForEach(state.groups) { group in
                     RecordGroup(group.title)
@@ -271,7 +300,8 @@ struct ActivityView: View {
                         Button { actions.select(event.seq) } label: {
                             RecordRow(type: event.type, text: event.payload.isEmpty ? "(empty payload)" : event.payload, mono: true,
                                       subject: ActivityState.subject(event), record: ActivityState.record(event),
-                                      selected: event.seq == state.chosen?.seq, last: event.seq == last)
+                                      selected: event.seq == state.chosen?.seq, last: event.seq == last,
+                                      time: clockTime(event.at, now: state.now), actor: ActivityState.actor(event))
                         }
                         .buttonStyle(.plain)
                     }
@@ -295,7 +325,9 @@ struct ActivityView: View {
                     Text("The journal starts here.").textStyle(.meta).foregroundStyle(theme.text3)
                 }
             }
-            Footnote("Events are append-only in the core. It reports no hash for them, so the app verifies no chain. Not reported: the time and the actor of an event; events are grouped by the engine epoch that committed them. There is no export and no filter by project or date.")
+            Footnote(state.attributed
+                     ? "Events are append-only in the core. It reports no hash for them, so the app verifies no chain. The actor is the human for a command sent from the app, a provider for a record of its output, and Jojo core for everything else. There is no export and no filter by project or date."
+                     : "Events are append-only in the core. It reports no hash for them, so the app verifies no chain. Not reported by this core: the time and the actor of an event; events are grouped by the engine epoch that committed them. There is no export and no filter by project or date.")
         }
     }
 
@@ -321,8 +353,16 @@ struct ActivityView: View {
                 InspectorSection("Record") {
                     FactGrid {
                         Fact("Record ID") { identifier(ActivityState.record(event)) }
-                        Fact("Time") { missing("Not reported") }
-                        Fact("Actor") { missing("Not reported") }
+                        Fact("Time") {
+                            if let at = event.at {
+                                Text(at.formatted(date: .abbreviated, time: .standard)).font(.system(size: 12.5))
+                            } else {
+                                missing("Not reported")
+                            }
+                        }
+                        Fact("Actor") {
+                            if let actor = ActivityState.actor(event) { Text(actor).font(.system(size: 12.5)) } else { missing("Not reported") }
+                        }
                         Fact("Epoch", "\(event.epoch)")
                         Fact("Subject") {
                             if let id = event.aggregateID {

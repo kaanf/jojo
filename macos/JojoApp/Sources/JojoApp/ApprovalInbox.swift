@@ -18,6 +18,11 @@ struct ApprovalInboxState: Equatable {
     var decisionOutstanding: Bool
     /// The loaded attempt result, read-only here; its decision is on Verification & Evidence.
     var candidate: CandidateReview?
+    /// Protocol 1.6: documents with names and approval states, and the candidates that
+    /// wait; nil from an older helper, which leaves the snapshot's list.
+    var list: DocumentList? = nil
+    /// The time ages are counted from.
+    var now = Date()
 
     /// One document the snapshot knows. Its approval state is not reported.
     struct Document: Identifiable, Equatable {
@@ -41,6 +46,29 @@ struct ApprovalInboxState: Equatable {
     }
 
     var documents: [Document] { Self.documents(in: rows) }
+
+    /// What the core reports about the loaded document.
+    var summary: DocumentSummary? { review.flatMap { list?[$0.subject] } }
+
+    /// The tag of a document's approval state.
+    static func tag(_ d: DocumentSummary) -> (DocumentStatus, String?) {
+        switch d.approval {
+        case "Pending": return d.stale ? (.stale, nil) : (.proposed, "Needs approval")
+        case "Approved": return (.approved, nil)
+        case "Rejected": return (.invalidated, "Rejected")
+        case "Revoked": return (.invalidated, "Revoked")
+        case "NotReady": return (.superseded, "Has findings")
+        default: return (.superseded, "Waiting")
+        }
+    }
+
+    static func symbol(_ kind: String) -> String {
+        switch kind {
+        case "Prd": return "doc.text"
+        case "Adr": return "building.columns"
+        default: return "list.bullet.indent"
+        }
+    }
 
     struct Kind: Equatable {
         let name: String
@@ -74,8 +102,9 @@ struct ApprovalInboxState: Equatable {
         String(identity.prefix(12))
     }
 
-    static func title(_ bundle: ReviewBundle) -> String {
-        "\(short(bundle.subject)) rev \(bundle.revision)"
+    static func title(_ bundle: ReviewBundle, _ summary: DocumentSummary? = nil) -> String {
+        guard let summary else { return "\(short(bundle.subject)) rev \(bundle.revision)" }
+        return "\(summary.name) rev \(bundle.revision)"
     }
 
     static func upstream(_ bundle: ReviewBundle) -> String {
@@ -86,9 +115,16 @@ struct ApprovalInboxState: Equatable {
         }
     }
 
-    /// The bundle names the event of the latest decision, not what was decided.
-    static func latestDecision(_ bundle: ReviewBundle) -> String {
-        bundle.priorDecision.map { "event \($0) · the action is not reported" } ?? "None recorded"
+    /// The bundle names the event of the latest decision; since 1.6 the core also says
+    /// what it was when it applies to this revision.
+    static func latestDecision(_ bundle: ReviewBundle, _ summary: DocumentSummary? = nil, now: Date = Date()) -> String {
+        guard let event = bundle.priorDecision else { return "None recorded" }
+        guard let summary else { return "event \(event) · the action is not reported" }
+        let when = clockTime(summary.decided, now: now, seconds: false).map { " · \($0)" } ?? ""
+        switch summary.approval {
+        case "Approved", "Rejected", "Revoked": return "\(summary.approval) · event \(event)\(when)"
+        default: return "event \(event) · on an earlier revision"
+        }
     }
 
     var link: RecoveryCenterState.Link {
@@ -169,6 +205,8 @@ struct ApprovalInboxActions {
     var load: (String) -> Void = { _ in }
     var decide: (DecisionAction) -> Void = { _ in }
     var open: (Screen) -> Void = { _ in }
+    /// Loads a waiting candidate and opens Verification & Evidence, where it is decided.
+    var candidate: (String) -> Void = { _ in }
 }
 
 struct ApprovalInboxScreen: View {
@@ -181,8 +219,12 @@ struct ApprovalInboxScreen: View {
             state: ApprovalInboxState(connection: model.client.connection, admission: workspace.admission,
                                       rows: workspace.rows, review: workspace.review, reviewStale: workspace.reviewStale,
                                       decisionOutstanding: model.client.outstandingCommands.values.contains("HumanDecision"),
-                                      candidate: workspace.candidate),
-            actions: ApprovalInboxActions(load: { workspace.loadReview($0) }, decide: { workspace.decide($0) }, open: open))
+                                      candidate: workspace.candidate, list: workspace.documents),
+            actions: ApprovalInboxActions(load: { workspace.loadReview($0) }, decide: { workspace.decide($0) }, open: open,
+                                          candidate: { attempt in
+                                              workspace.loadCandidate(attempt)
+                                              open(.verification)
+                                          }))
     }
 }
 
@@ -283,7 +325,78 @@ struct ApprovalInboxView: View {
 
     // MARK: Leading panel
 
+    @ViewBuilder
     private var leading: some View {
+        if let list = state.list { reported(list) } else { snapshotList }
+    }
+
+    /// Protocol 1.6: what waits for the human first, then every other document.
+    private func reported(_ list: DocumentList) -> some View {
+        let others = list.documents.filter { $0.approval != "Pending" }
+        return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionHeading("Waiting for you · \(list.pending)")
+                HStack(spacing: 6) {
+                    InputField(prompt: "Document identity (32 hex)", text: $identity, mono: true, submit: { actions.load(identity) })
+                    Button("Load") { actions.load(identity) }.buttonStyle(.jojo(.secondary, compact: true))
+                }
+            }
+            .padding(EdgeInsets(top: 12, leading: 16, bottom: 8, trailing: 12))
+            if list.pending == 0 {
+                Text("Nothing waits for your decision.").textStyle(.secondary).foregroundStyle(theme.text3)
+                    .padding(.horizontal, 18).padding(.bottom, 6)
+            }
+            VStack(spacing: 2) {
+                ForEach(list.waiting) { document in item(document) }
+                ForEach(list.candidates) { candidate in item(candidate) }
+            }
+            if !others.isEmpty {
+                SectionHeading("Documents · \(others.count)")
+                    .padding(EdgeInsets(top: 14, leading: 16, bottom: 6, trailing: 12))
+                VStack(spacing: 2) {
+                    ForEach(others) { document in item(document) }
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Footnote("Approvals are type-specific. There is no approve-all.")
+                if list.more { Footnote("Only the newest documents are listed; load an older one by its identity.") }
+                Footnote("A candidate is accepted or rejected on Verification & Evidence.")
+            }
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func item(_ document: DocumentSummary) -> some View {
+        let loaded = document.id == state.review?.subject
+        let (status, label) = ApprovalInboxState.tag(document)
+        return Button { actions.load(document.id) } label: {
+            RequestRow(kind: document.kindName, age: shortAge(document.created, now: state.now),
+                       title: document.title ?? document.featureName ?? document.kindName, detail: "rev \(document.revision)", status: loaded && state.stale ? .stale : status,
+                       statusLabel: loaded && state.stale ? nil : label, symbol: ApprovalInboxState.symbol(document.kind),
+                       awaiting: document.approval == "Pending", selected: loaded)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .help("Document \(document.id)")
+        .accessibilityAddTraits(loaded ? .isSelected : [])
+    }
+
+    private func item(_ candidate: PendingCandidate) -> some View {
+        Button { actions.candidate(candidate.id) } label: {
+            RequestRow(kind: "Candidate", age: shortAge(candidate.validated, now: state.now),
+                       title: candidate.title ?? candidate.key ?? ApprovalInboxState.short(candidate.id),
+                       detail: candidate.featureName ?? "host validation passed", status: .proposed,
+                       statusLabel: "Needs decision", symbol: "checkmark.seal", awaiting: true)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .help("Attempt \(candidate.id): open it on Verification & Evidence")
+    }
+
+    /// An older helper: the snapshot's documents, by identity.
+    private var snapshotList: some View {
         let documents = state.documents
         return VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
@@ -332,10 +445,10 @@ struct ApprovalInboxView: View {
         return VStack(alignment: .leading, spacing: 6) {
             WrappingRow(spacing: 8, lineSpacing: 6) {
                 RequestTile(symbol: kind.symbol, awaiting: bundle.priorDecision == nil, size: 22)
-                Text("\(kind.name) · \(kind.approval)").textStyle(.secondary).foregroundStyle(theme.text2)
+                Text("\(state.summary?.kindName ?? kind.name) · \(kind.approval)").textStyle(.secondary).foregroundStyle(theme.text2)
                 ReviewMark(state: state, bundle: bundle)
             }
-            Text(ApprovalInboxState.title(bundle)).font(.system(size: 20, weight: .bold)).tracking(-0.4)
+            Text(ApprovalInboxState.title(bundle, state.summary)).font(.system(size: 20, weight: .bold)).tracking(-0.4)
                 .foregroundStyle(theme.textStrong).help("Document \(bundle.subject)")
             Text("bundle \(ApprovalInboxState.short(bundle.hash))").textStyle(.mono).foregroundStyle(theme.text3)
                 .help("Bundle digest \(bundle.hash)")
@@ -349,12 +462,17 @@ struct ApprovalInboxView: View {
                     FactLine("Requested action",
                              "Approve, reject or revoke exactly this revision. A decision binds every digest below; the core refuses it if any of them changed.")
                     FactLine("Why approval", ApprovalInboxState.kind(bundle).why)
+                    if let summary = state.summary {
+                        FactLine("Feature", summary.featureName ?? "Not reported")
+                        FactLine("Requested", clockTime(summary.created, now: state.now) ?? "Not reported")
+                        if let author = summary.author { FactLine("Written by", author == "Model" ? "The lead agent" : "A human") }
+                    }
                     FactLine("Revision", "\(bundle.revision)")
                     FactLine("Content") { digest(bundle.contentHash) }
                     FactLine("Displayed") { digest(bundle.displayedHash) }
                     FactLine("Context") { digest(bundle.contextHash) }
                     FactLine("Upstream approvals", ApprovalInboxState.upstream(bundle))
-                    FactLine("Latest decision", ApprovalInboxState.latestDecision(bundle))
+                    FactLine("Latest decision", ApprovalInboxState.latestDecision(bundle, state.summary, now: state.now))
                     FactLine("Staleness", last: true) {
                         HStack(spacing: 8) {
                             if state.requested {
@@ -371,7 +489,9 @@ struct ApprovalInboxView: View {
                     }
                 }
             }
-            Footnote("Not reported: the document's name and text, its feature and repository, what it affects, its risks, and the time of the request.")
+            Footnote(state.summary == nil
+                     ? "Not reported: the document's name and text, its feature and repository, what it affects, its risks, and the time of the request."
+                     : "Not reported: the document's text, its repository, what it affects and its risks.")
                 .padding(.horizontal, 2)
         }
     }

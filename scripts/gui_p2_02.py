@@ -79,7 +79,8 @@ def fake_start_and_recovery_controls(app, helper):
     g.check(opened == {'digest': 'fixture-2'}, f'reviewed start binds the fresh digest: {opened}', ev)
     g.check([r['payload'] for r in starts] == [START_PAYLOAD, START_PAYLOAD], f'Start carries identities only: {starts}', ev)
     g.check(len({r['id'] for r in starts}) == 2, 'each explicit Start is its own command', ev)
-    g.check(all(r['minor'] == 1 for r in rec if 'minor' in r), 'protocol 1.1 frames', ev)
+    # 1.6: the documents query behind the sidebar counter is read at 1.6 with every snapshot.
+    g.check(all(r['minor'] == 1 for r in rec if 'minor' in r and r['type'] != 'Documents'), 'protocol 1.1 frames', ev)
     g.check(not set(got) & {'CancelAttempt', 'HumanDecision', 'ConfirmClose', 'RegisterRepository', 'ImportBundle'},
             f'only the clicked controls sent commands: {got}', ev)
     g.check('admission=Open' in state and 'pending=false' in state and 'Start accepted for attempt' in state,

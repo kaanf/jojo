@@ -1386,7 +1386,8 @@ impl ReadView<'_> {
     /// M2 (protocol 1.2): what a client needs to find its way to a chat. The registered
     /// repositories, in identity order, and the features that have turns, newest first,
     /// each list bounded and saying whether it is complete. Read-only.
-    pub fn ipc_chat_index(&self) -> Result<Json, StorageError> {
+    /// `named` (protocol 1.6) adds each feature's name.
+    pub fn ipc_chat_index(&self, named: bool) -> Result<Json, StorageError> {
         let repositories = self.conn.query(
             "SELECT id,path FROM local_repositories ORDER BY id LIMIT ?1",
             &[Value::Int(to_db(INDEX_ROWS as u64 + 1)?)],
@@ -1417,7 +1418,7 @@ impl ReadView<'_> {
                 continue;
             };
             let cut: String = first.message.chars().take(INDEX_TEXT_CHARS).collect();
-            feature_rows.push(object([
+            let Json::Object(mut row) = object([
                 ("feature", identity(first.feature.0)),
                 ("repository", identity(first.repository.0)),
                 (
@@ -1427,7 +1428,14 @@ impl ReadView<'_> {
                 ("objective", text(cut)),
                 ("turns", number(turns.len() as u64)),
                 ("running", Json::Bool(last.result.is_none())),
-            ]));
+            ]) else {
+                unreachable!("a feature row is an object")
+            };
+            if named {
+                let name = crate::overview::feature_name(self.conn, feature)?;
+                row.push(("name".into(), name.map_or(Json::Null, text)));
+            }
+            feature_rows.push(Json::Object(row));
         }
         Ok(object([
             ("repositories", Json::List(repository_rows)),

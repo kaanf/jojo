@@ -281,3 +281,47 @@ Changed in 1.5 for every client:
 - Schema 15 records repairs, holds, reviews, their results and stops, and the executable of each review (`review_executables`; `Executables` counts a review as a run).
 
 The policy is `crates/jojo-domain/src/repair.rs`; the review prompt and verdict are `crates/jojo-domain/src/review.rs`; the decisions are in `docs/roadmap/DESIGN_ROADMAP_DIFFERENCES.md`, D2 and E10.
+
+## Protocol 1.6: user-facing data
+
+Protocol minor 6 adds two read-only queries and, for a frame of minor ≥ 6, three fields of existing answers. Nothing is stored for them: the helper derives each value from what the core already records (schema 15 unchanged). The helper's `MINOR` is 6; Hello for a frame of minor ≥ 6 lists `Attempts Documents` after `Repairs`. A frame of minor ≤ 5 naming either is answered `UnknownType`. Each payload has exactly the field `before`; anything else is `InvalidPayload: unexpected or missing fields`, and a `before` that is neither `null` nor a non-negative integer is refused as such. The derivation is `crates/jojo-storage/src/overview.rs`.
+
+The macOS client sends `Documents` at minor 6 after every snapshot (the Approval Inbox's sidebar counter follows the journal on every screen), `Attempts` at minor 6 only while Agent Runs is shown, `ChatIndex` at minor 6, and `Events` at minor 6 only for Activity & Audit (the poll that notices new events stays at minor 1).
+
+### Attempts
+
+`Attempts {before}` returns `attempts`, at most 16, newest reservation first, and `next` (`null`, or the `before` of the following page). `before` is `null` for the newest page. Each entry:
+
+| Field | Meaning |
+|---|---|
+| `order` | The attempt's place in reservation order; the cursor |
+| `attempt`, `step` | The attempt and its plan step |
+| `key`, `title` | The step's key and title from its lead plan (title at most 160 characters); `null` for a step of an imported plan |
+| `plan`, `feature`, `feature_name` | The execution plan the attempt was admitted under, its feature and the feature's name (below); `null` when unknown |
+| `provider` | `ClaudeCode` or `Codex` once a process was issued; `null` before |
+| `state` | The attempt's lifecycle state, from its newest record: `Reserved`, `Preparing` (a worktree exists), `Launching` (a process was issued), `Running` (the process root was identified), `Stopping` (a stop was requested), `Settling` (the process tree is proven gone and the result is being sealed); `Unsupervised` (unsealed and reserved by an earlier helper: nobody supervises it now; the Recovery Center decides it), `Held` (held for recovery); after its result `Succeeded`, `Failed`, `Cancelled`, `Interrupted` |
+| `started_at_unix_ms`, `ended_at_unix_ms` | When its first process was issued and when its result was sealed; `null` until then |
+
+### Documents
+
+`Documents {before}` returns `documents`, at most 16, newest revision first, and `next` (`null`, or the `before` of the following page: the `order` of the last row). A document is a requirements document (PRD), an ADR, a validation plan or an execution plan; its newest revision is described. Every answer also carries, whatever the page, `candidates` (at most 16, newest first) and `pending` (the number of documents whose state is `Pending` plus the number of all waiting candidates). Each document:
+
+| Field | Meaning |
+|---|---|
+| `document`, `kind`, `revision` | The subject; `Prd`, `Adr`, `ValidationPlan` or `ExecutionPlan`; its newest revision |
+| `title` | A requirements document's own title (at most 160 characters); `null` for the others |
+| `feature`, `feature_name` | Its feature (an ADR's or a plan's is its requirements document's) and the feature's name |
+| `author` | `Human` or `Model` for a requirements document; `null` for the others |
+| `approval` | `Pending` (waits for the human's decision), `Approved`, `Rejected`, `Revoked` (the latest decision applies to this revision), `Waiting` (an upstream document is not approved), `NotReady` (a requirements document with findings) |
+| `stale` | `Pending` after a decision on an earlier revision |
+| `created_at_unix_ms`, `decided_at_unix_ms` | When the revision was created; when the decision that applies to it was recorded (`null` without one) |
+| `order` | The event that created the revision; the cursor |
+
+A waiting candidate is a sealed attempt whose newest host validation passed and that the human neither accepted nor rejected: `attempt`, `key`, `title`, `feature`, `feature_name`, `receipt` (the passing receipt's event) and `validated_at_unix_ms`. It is accepted or rejected with `CandidateDecision`, as before.
+
+### Changed for a frame of minor ≥ 6
+
+- `Events` gives each event `at_unix_ms` (when it was recorded) and `actor`: `Human` for an event of a command a client sent (a command identity whose top bit is clear; the helper's own commands use reserved identities), `ClaudeCode` or `Codex` for a record of that provider's output (a provider stream record, and every event of the command that sealed a lead turn that replied or a review that gave a verdict), and `Core` for everything else, including events without a command (`EngineStarted`).
+- `ChatIndex` gives each feature `name`: the title of its newest requirements document, else the first non-empty line of its first message, at most 160 characters.
+
+A frame of minor 1 to 5 is answered exactly as before. `crates/jojo-storage/tests/r01_frames.rs` sends its newer-than-helper Hello at minor 7 and pins nine more answers at its end (217 in all).

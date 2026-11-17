@@ -16,6 +16,8 @@ struct FeatureChatState: Equatable {
     var indexLoad = PlanLoad.idle
     /// The feature the screen holds; nil shows New Feature.
     var feature: String?
+    /// The held feature's name, from the chat index (protocol 1.6).
+    var featureName: String? { index?.features.first { $0.id == feature }?.name }
     var chat: FeatureChatPage?
     var chatLoad = PlanLoad.idle
     var prdText = ""
@@ -170,7 +172,6 @@ struct FeatureChatState: Equatable {
         Missing(label: "Suggestions and spikes", value: "Not built."),
         Missing(label: "Export transcript", value: "Not built."),
         Missing(label: "Project, reference files, design references, constraints", value: "Not built. New Feature takes an objective, a repository and a provider."),
-        Missing(label: "Feature names", value: "Not reported. A feature is its identity and its first objective."),
     ]
 }
 
@@ -382,7 +383,7 @@ struct FeatureChatView: View {
                 Card(.list) {
                     Rows(features) { feature in
                         Button { actions.choose(feature.id) } label: {
-                            ListRow(feature.objective + (feature.objectiveComplete ? "" : "…"),
+                            ListRow(feature.name ?? (feature.objective + (feature.objectiveComplete ? "" : "…")),
                                     meta: "\(feature.turns) turn\(feature.turns == 1 ? "" : "s")",
                                     detail: "Feature \(FeatureChatState.short(feature.id)) · repository \(FeatureChatState.short(feature.repository))",
                                     chevron: true, leading: { LeadingTile(symbol: "bubble.left.and.bubble.right") },
@@ -402,7 +403,8 @@ struct FeatureChatView: View {
     private var conversation: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Feature \(FeatureChatState.short(state.feature ?? ""))").textStyle(.sectionTitle).foregroundStyle(theme.textStrong)
+                Text(state.featureName ?? "Feature \(FeatureChatState.short(state.feature ?? ""))").textStyle(.sectionTitle)
+                    .foregroundStyle(theme.textStrong)
                 if let repository = state.turnRepository {
                     Text("Repository \(FeatureChatState.short(repository))").textStyle(.meta).foregroundStyle(theme.text3)
                 }

@@ -62,7 +62,8 @@ def fake_review_shows_not_run_unknown_and_pass_distinctly_and_accepts_only_a_pas
     g.check(decisions == [{**SUBJECT, 'receipt': 31, 'action': 'Accept'}],
             f'one Accept, bound to digest and receipt, only after PASS: {decisions}', ev)
     g.check(got.index('CandidateDecision') > got.index('Validate'), 'no decision before validation', ev)
-    g.check(all(r['minor'] == 1 for r in rec if 'minor' in r), 'protocol 1.1 frames', ev)
+    # 1.6: the documents query behind the sidebar counter is read at 1.6 with every snapshot.
+    g.check(all(r['minor'] == 1 for r in rec if 'minor' in r and r['type'] != 'Documents'), 'protocol 1.1 frames', ev)
     g.check(ev[-1].startswith('will-terminate outcome=clean '), 'shutdown behaviour unchanged', ev)
     return {'gui_exit': code, 'states': states, 'helper_commands': sorted(set(got))}
 

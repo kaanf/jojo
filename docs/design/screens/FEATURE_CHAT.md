@@ -33,7 +33,7 @@ Values not on the canvas: the inspector column is 320 wide and stands beside the
 
 ## 3. Not built, and said so on screen
 
-Lifecycle stepper and task counts (the core has no lifecycle stage and runs no plan before M3), assumptions as records (they are in the draft's text), decisions in use, a discovery history beyond the turns and revisions, suggestions and spikes, export of the transcript, project, reference files, design references and technical constraints, feature names, choice buttons for a question, the sidebar counter. "Not reported by the core" at the end of the screen lists them.
+Lifecycle stepper and task counts (the core has no lifecycle stage and runs no plan before M3), assumptions as records (they are in the draft's text), decisions in use, a discovery history beyond the turns and revisions, suggestions and spikes, export of the transcript, project, reference files, design references and technical constraints, choice buttons for a question, the sidebar counter. "Not reported by the core" at the end of the screen lists them.
 
 ## 4. Where the board and the decisions in force differ
 
@@ -44,3 +44,7 @@ Lifecycle stepper and task counts (the core has no lifecycle stage and runs no p
 ## 5. States
 
 Disconnected and incompatible: a danger banner, the last chat stays visible, nothing can be sent. Admission closed: a warning banner with "Open Review" (Recovery Center). A core without the chat queries (an older helper): a warning banner, and every send says "This core has no Feature Chat." A turn command in flight: the Requested form; a refusal: a warning banner with a sentence and the core's code; an unknown outcome: the Unknown pill, never sent again. The chat and the index are read only while the screen is shown (`visible`), and again on every new snapshot.
+
+## 6. User-facing data (protocol 1.6)
+
+`ChatIndex` is read at minor 6 and gives each feature its `name`: the title of its newest requirements document, else the first line of its first message. "Earlier chats" lists the name, and the conversation's heading is the name instead of "Feature <identity>". "Feature names" is no longer in "Not reported by the core".

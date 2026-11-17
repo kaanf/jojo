@@ -60,7 +60,7 @@ struct SpecificationsScreen: View {
                 connection: model.client.connection, admission: workspace.admission,
                 rows: workspace.rows, review: workspace.review, reviewStale: workspace.reviewStale,
                 decisionOutstanding: model.client.outstandingCommands.values.contains("HumanDecision"),
-                candidate: workspace.candidate)),
+                candidate: workspace.candidate, list: workspace.documents)),
             actions: SpecificationsActions(load: { workspace.loadReview($0) }, open: open))
     }
 }
@@ -133,7 +133,51 @@ struct SpecificationsView: View {
 
     // MARK: Leading panel
 
+    @ViewBuilder
     private var leading: some View {
+        if let list = state.inbox.list { reported(list) } else { snapshotList }
+    }
+
+    /// Protocol 1.6: the documents by name, newest first, each with its approval state.
+    private func reported(_ list: DocumentList) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeading("Documents · \(list.documents.count)")
+                .padding(EdgeInsets(top: 14, leading: 16, bottom: 6, trailing: 14))
+            if list.documents.isEmpty {
+                Text("The core reports no documents yet.").textStyle(.secondary).foregroundStyle(theme.text3)
+                    .padding(.horizontal, 18)
+            } else {
+                VStack(spacing: 2) {
+                    ForEach(list.documents) { document in item(document) }
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Footnote("Choosing a document loads its review. It is the same document the Approval Inbox shows and decides.")
+                if list.more { Footnote("Only the newest documents are listed.") }
+                Footnote("Not reported: earlier revisions and the sections inside a document.")
+            }
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func item(_ document: DocumentSummary) -> some View {
+        let loaded = document.id == state.review?.subject
+        let (status, label) = ApprovalInboxState.tag(document)
+        return Button { actions.load(document.id) } label: {
+            DocumentRow(name: document.name, detail: "\(document.kindName) · rev \(document.revision)",
+                        status: loaded && state.inbox.stale ? .stale : status,
+                        statusLabel: loaded && state.inbox.stale ? nil : label, selected: loaded)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .help("Document \(document.id)")
+        .accessibilityAddTraits(loaded ? .isSelected : [])
+    }
+
+    /// An older helper: the snapshot's documents, by identity.
+    private var snapshotList: some View {
         let documents = state.documents
         return VStack(alignment: .leading, spacing: 0) {
             SectionHeading("Documents · \(documents.count)")
@@ -173,12 +217,13 @@ struct SpecificationsView: View {
     private func head(_ bundle: ReviewBundle) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             WrappingRow(spacing: 8, lineSpacing: 6) {
-                Text(ApprovalInboxState.kind(bundle).name).textStyle(.secondary).foregroundStyle(theme.text2)
+                Text(state.inbox.summary?.kindName ?? ApprovalInboxState.kind(bundle).name).textStyle(.secondary)
+                    .foregroundStyle(theme.text2)
                 ReviewMark(state: state.inbox, bundle: bundle)
                 Text(SpecificationsState.contentDigest(bundle)).textStyle(.mono).foregroundStyle(theme.text3)
                     .help("Content digest \(bundle.contentHash)")
             }
-            Text(ApprovalInboxState.title(bundle)).font(.system(size: 22, weight: .bold)).tracking(-0.44)
+            Text(ApprovalInboxState.title(bundle, state.inbox.summary)).font(.system(size: 22, weight: .bold)).tracking(-0.44)
                 .foregroundStyle(theme.textStrong).help("Document \(bundle.subject)")
         }
     }
@@ -193,6 +238,10 @@ struct SpecificationsView: View {
                 VStack(spacing: 0) {
                     FactLine("Document") { digest(bundle.subject) }
                     FactLine("Revision", "\(bundle.revision)")
+                    if let summary = state.inbox.summary {
+                        FactLine("Feature", summary.featureName ?? "Not reported")
+                        FactLine("Created", clockTime(summary.created, now: state.inbox.now) ?? "Not reported")
+                    }
                     FactLine("Snapshot record") {
                         if let record = state.record {
                             digest(record)
@@ -255,7 +304,7 @@ struct SpecificationsView: View {
             Card(.panel) {
                 VStack(alignment: .leading, spacing: 10) {
                     FactGrid {
-                        Fact("Subject", ApprovalInboxState.title(bundle))
+                        Fact("Subject", ApprovalInboxState.title(bundle, state.inbox.summary))
                         Fact("Content hash") {
                             Text(SpecificationsState.contentDigest(bundle)).font(.system(size: 11.5, design: .monospaced))
                                 .help("Content digest \(bundle.contentHash)")
@@ -286,7 +335,12 @@ struct SpecificationsView: View {
         if let bundle = state.review {
             Card(.panelList) {
                 VStack(alignment: .leading, spacing: 2) {
-                    if let event = bundle.priorDecision {
+                    if let event = bundle.priorDecision, let summary = state.inbox.summary {
+                        Text(ApprovalInboxState.latestDecision(bundle, summary, now: state.inbox.now)).textStyle(.control)
+                            .foregroundStyle(theme.text)
+                        Text("The latest decision on this document (event \(event)).")
+                            .textStyle(.secondary).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
+                    } else if let event = bundle.priorDecision {
                         Text("event \(event)").font(.system(size: 11.5, design: .monospaced)).foregroundStyle(theme.text)
                         Text("The latest decision on this document. What was decided is not reported.")
                             .textStyle(.secondary).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
@@ -297,7 +351,9 @@ struct SpecificationsView: View {
                 .padding(.vertical, 9)
                 .padding(.horizontal, 14)
             }
-            Footnote("Not reported: what was decided, by whom and when, and the decisions on earlier revisions.")
+            Footnote(state.inbox.summary == nil
+                     ? "Not reported: what was decided, by whom and when, and the decisions on earlier revisions."
+                     : "A decision is always the human's. Not reported: the decisions on earlier revisions.")
                 .padding(.horizontal, 2)
         } else {
             unloaded

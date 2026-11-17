@@ -469,7 +469,7 @@ fn t16_seeded_concurrent_schedules_keep_capacity_ownership_and_receipts() {
             let cursor = s.read(|v| v.event_cursor()).0;
             let mut seen = 0u64;
             while seen < cursor {
-                let page = s.read(|v| v.ipc_events(seen, 8));
+                let page = s.read(|v| v.ipc_events(seen, 8, false));
                 let Json::List(rows) = page else { panic!() };
                 assert!(!rows.is_empty());
                 for row in rows {

@@ -72,7 +72,8 @@ public struct SnapshotRow: Equatable, Sendable, Identifiable {
 
 /// One committed event as the `Events` answer gives it: its sequence, the engine epoch that
 /// committed it, its type, the aggregate it changed and the first 512 characters of its
-/// payload. The helper sends no time, no actor and no hash.
+/// payload; at 1.6 also the time it was recorded and who caused it (Human, ClaudeCode,
+/// Codex or Core). The helper sends no hash.
 public struct JournalEvent: Equatable, Sendable, Identifiable {
     public let seq: Int64
     public let epoch: Int64
@@ -83,6 +84,9 @@ public struct JournalEvent: Equatable, Sendable, Identifiable {
     public let payload: String
     /// False when the payload is longer than the excerpt the answer carries.
     public let detailComplete: Bool
+    /// Nil from a helper older than 1.6.
+    public let at: Date?
+    public let actor: String?
     public var id: Int64 { seq }
 
     public init?(_ row: JSON) {
@@ -92,6 +96,8 @@ public struct JournalEvent: Equatable, Sendable, Identifiable {
         aggregateKind = row["aggregate_kind"]?.string
         aggregateID = row["aggregate_id"]?.string
         revision = row["revision"]?.integer
+        at = helperDate(row["at_unix_ms"]?.integer)
+        actor = row["actor"]?.string
     }
 }
 
@@ -338,6 +344,13 @@ public final class WorkspaceModel {
     public internal(set) var repairs: RepairList?
     public internal(set) var repairsLoad = PlanLoad.idle
     public var repairsShown = false
+    /// Protocol 1.6: attempts with names and live state, read with the repairs.
+    public internal(set) var attempts: AttemptList?
+    public internal(set) var attemptsLoad = PlanLoad.idle
+    /// Protocol 1.6: documents, waiting candidates and the count of what waits for the
+    /// human, read with every snapshot for the sidebar counter.
+    public internal(set) var documents: DocumentList?
+    public internal(set) var documentsLoad = PlanLoad.idle
     /// M2: Feature Chat. Read only when that screen asks; `refresh` does not fill them.
     public internal(set) var chatIndex: ChatIndex?
     public internal(set) var chatIndexLoad = PlanLoad.idle
@@ -393,6 +406,7 @@ public final class WorkspaceModel {
                 self.snapshotSeq = seq
                 self.admission = p["admission"]?.string ?? ""
                 self.loading = false
+                self.loadDocuments()
             case .error(let code) where code.contains("SnapshotChanged") && attempt < 3:
                 return self.loadSnapshot(after: "", cursor: nil, collected: [], attempt: attempt + 1)
             default:
@@ -452,7 +466,8 @@ public final class WorkspaceModel {
 
     /// Pages of the existing `Events` query, in sequence order, up to `before` or the end.
     private func readEvents(after: Int64, before: Int64?, collected: [JournalEvent], done: @escaping ([JournalEvent]) -> Void) {
-        client.query(.Events, ["after": .int(after), "limit": .int(Int64(Self.eventPage))]) { [weak self] reply in
+        client.query(Request.Events.rawValue, ["after": .int(after), "limit": .int(Int64(Self.eventPage))],
+                     minor: Request.attributedEvents) { [weak self] reply in
             guard let self else { return }
             switch reply {
             case .list(let rows):

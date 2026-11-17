@@ -1,9 +1,9 @@
 {
-  "artifact": "gate-m4",
-  "scope": "Tree after M4: a failed plan step is repaired at most twice with its failure in the prompt, then held for the human; a step whose host validation passed is reviewed read-only by the other provider; repair limit and reviewer per project; protocol 1.5 Repairs; schema 15.",
+  "artifact": "gate-s2",
+  "scope": "Tree after step 2 of the Liquid Glass order (user-facing data in the core): protocol 1.6 Attempts and Documents; events carry time and actor and the chat index names features at 1.6; Agent Runs, Approval Inbox (with the sidebar counter), Specifications, Activity & Audit and Feature Chat show them; schema 15 unchanged.",
   "boundary_tests_min": 107,
   "rust": {
-    "passed_min": 476,
+    "passed_min": 479,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -82,7 +82,10 @@
       "m4_a_rejecting_review_sends_its_notes_to_the_repair",
       "m4_with_repair_and_review_switched_off_a_failure_is_held_at_once_and_nothing_reviews",
       "m4_without_the_reviewer_a_passed_step_goes_straight_to_the_human",
-      "m4_a_review_that_cannot_start_holds_the_step_for_the_human"
+      "m4_a_review_that_cannot_start_holds_the_step_for_the_human",
+      "overview::tests::s2_an_attempt_state_follows_its_newest_record",
+      "s2_documents_carry_names_and_approval_states_and_count_what_waits",
+      "s2_attempts_report_live_state_names_and_times_and_events_their_actor"
     ],
     "ignored": [
       "child_fixture",
@@ -100,7 +103,7 @@
     ]
   },
   "swift": {
-    "tests_min": 103
+    "tests_min": 108
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,

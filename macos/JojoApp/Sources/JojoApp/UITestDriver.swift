@@ -150,6 +150,7 @@ final class UITestDriver {
                 // M4: Agent Runs shown, so its repairs are read.
                 model.workspace.repairsShown = true
                 model.workspace.loadRepairs()
+                model.workspace.loadAttempts()
             case "repairs-state":
                 // What Agent Runs lists, through the same state it renders.
                 let w = model.workspace

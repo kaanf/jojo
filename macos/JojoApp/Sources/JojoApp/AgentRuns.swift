@@ -26,6 +26,11 @@ struct AgentRunsState: Equatable {
     var commandPending: Bool
     /// M4: repairs, holds and reviews of plan steps (`Repairs`), while the screen is shown.
     var repairs: RepairList? = nil
+    /// Protocol 1.6: names, live state and times of the newest attempts (`Attempts`), while
+    /// the screen is shown; nil from an older helper.
+    var summaries: AttemptList? = nil
+    /// The time a running attempt's duration is counted to.
+    var now = Date()
 
     /// Log records the workspace reads for a loaded result.
     static let logLimit: Int64 = 64
@@ -55,11 +60,22 @@ struct AgentRunsState: Equatable {
 
     var loading: Bool { attempts == nil && (link == .connected || link == .starting) }
 
+    /// The snapshot's attempts; newest first when the core reports their order.
     var runs: [AttemptRun] {
-        (attempts ?? []).map { record in
+        let runs = (attempts ?? []).map { record in
             AttemptRun(record: record, held: recovery.first { $0.attempt == record.id },
-                       result: result?.attempt == record.id ? result : nil, repair: repairs?[record.id])
+                       result: result?.attempt == record.id ? result : nil, repair: repairs?[record.id],
+                       summary: summaries?[record.id])
         }
+        guard summaries != nil else { return runs }
+        return runs.enumerated().sorted { a, b in
+            switch (a.element.summary?.order, b.element.summary?.order) {
+            case let (x?, y?): return x > y
+            case (.some, nil): return true
+            case (nil, .some): return false
+            case (nil, nil): return a.offset < b.offset
+            }
+        }.map(\.element)
     }
 
     /// Why "Cancel Attempt" cannot be sent, or nil when it can.
@@ -92,16 +108,30 @@ struct AttemptRun: Identifiable, Equatable {
     let result: CandidateReview?
     /// M4: the attempt as a plan step's attempt, when the repairs answer lists it.
     var repair: AttemptRepair? = nil
+    /// Protocol 1.6: what the core reports about the attempt.
+    var summary: AttemptSummary? = nil
 
     var id: String { record.id }
-    /// The first eight characters of the identity: the list title, under "Attempts".
+    /// The first eight characters of the identity.
     var short: String { String(record.id.prefix(8)) }
-    var title: String { "Attempt \(short)" }
+    /// The task's title, else its key, else the identity.
+    var title: String { summary?.title ?? summary?.key.map { "Step \($0)" } ?? "Attempt \(short)" }
+
+    /// How long it ran: to its end, or to `now` while it runs.
+    func duration(now: Date) -> String? {
+        guard let started = summary?.started else { return nil }
+        let end = summary?.ended ?? (summary?.live == true ? now : nil)
+        guard let end else { return nil }
+        let seconds = Int(max(0, end.timeIntervalSince(started)))
+        return seconds < 60 ? "\(seconds)s" : seconds < 3600 ? "\(seconds / 60)m \(seconds % 60)s"
+            : "\(seconds / 3600)h \(seconds / 60 % 60)m"
+    }
     var processGone: Bool { held?.structured?.processAbsent == true }
     var recordText: String { record.record + (record.recordComplete ? "" : " … (partial)") }
 
-    /// The core reports no lifecycle state per attempt. "Running" is never derived: an
-    /// attempt without a sealed result may be running, starting or stopped.
+    /// Since 1.6 the core reports the lifecycle state of an attempt. From an older helper
+    /// "Running" is never derived: an attempt without a sealed result may be running,
+    /// starting or stopped.
     var pill: (state: OperationalState, label: String) {
         if held != nil { return (.recoveryRequired, processGone ? "Confirmed dead" : "Unknown") }
         // M4: the step's state, as the core derives it, for the step's newest attempt.
@@ -110,6 +140,17 @@ struct AttemptRun: Identifiable, Equatable {
         case "Reviewing": return (.running, "Reviewing")
         case "NeedsHuman": return (.blocked, "Needs human")
         default: break
+        }
+        if let summary {
+            switch summary.state {
+            case "Running", "Launching", "Preparing", "Settling": return (.running, summary.state)
+            case "Reserved": return (.waiting, "Reserved")
+            case "Stopping": return (.paused, "Stopping")
+            case "Held", "Unsupervised", "Interrupted": return (.recoveryRequired, summary.state)
+            case "Succeeded": return (.completed, "Succeeded")
+            case "Failed": return (.failed, "Failed")
+            default: return (.idle, summary.state)
+            }
         }
         guard let result else { return (.idle, "Not loaded") }
         guard result.sealed else { return (.idle, "Not sealed") }
@@ -124,7 +165,10 @@ struct AttemptRun: Identifiable, Equatable {
     /// Second line of the list item.
     var line: String {
         if held != nil { return "Held in Recovery Center" }
-        if let repair { return "\(repair.key) · \(repair.counter)" }
+        if let repair { return [summary?.featureName, repair.key, repair.counter].compactMap { $0 }.joined(separator: " · ") }
+        if let summary {
+            return [summary.featureName, summary.provider.map(providerName)].compactMap { $0 }.joined(separator: " · ")
+        }
         guard let result else { return "Scheduler record: \(record.record)" }
         guard result.sealed else { return "No sealed result yet" }
         return result.reason.isEmpty ? "No reason recorded" : result.reason
@@ -188,13 +232,22 @@ struct AgentRunsScreen: View {
                                   attempts: workspace.snapshotSeq == nil && workspace.rows.isEmpty
                                       ? nil : AgentRunsState.attempts(in: workspace.rows),
                                   recovery: workspace.recovery, result: workspace.candidate, log: workspace.agentLog,
-                                  commandPending: workspace.commandPending, repairs: workspace.repairs),
+                                  commandPending: workspace.commandPending, repairs: workspace.repairs,
+                                  summaries: workspace.attempts),
             actions: AgentRunsActions(load: { workspace.loadCandidate($0) }, cancel: { workspace.cancelAttempt($0) }, open: open))
             .onChange(of: visible) {
                 workspace.repairsShown = visible
-                if visible { workspace.loadRepairs() }
+                if visible {
+                    workspace.loadRepairs()
+                    workspace.loadAttempts()
+                }
             }
-            .onChange(of: workspace.snapshotSeq) { if visible { workspace.loadRepairs() } }
+            .onChange(of: workspace.snapshotSeq) {
+                if visible {
+                    workspace.loadRepairs()
+                    workspace.loadAttempts()
+                }
+            }
     }
 }
 
@@ -316,7 +369,9 @@ struct AgentRunsView: View {
                 VStack(spacing: 2) {
                     ForEach(runs) { run in item(run, selected: run.id == current.id) }
                 }
-                Footnote("Tasks, features and lifecycle stages are not reported yet. Attempts are listed by identity.")
+                Footnote(state.summaries == nil
+                         ? "Tasks, features and lifecycle stages are not reported by this core. Attempts are listed by identity."
+                         : "Attempts newest first, named by their plan step. An imported plan's steps have no names.")
                     .padding(EdgeInsets(top: 12, leading: 18, bottom: 14, trailing: 16))
             }
         }
@@ -326,7 +381,8 @@ struct AgentRunsView: View {
         Button { selected = run.id } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
-                    Text(run.short).textStyle(.controlStrong).foregroundStyle(theme.text).lineLimit(1)
+                    Text(run.summary == nil ? run.short : run.title).textStyle(.controlStrong).foregroundStyle(theme.text)
+                        .lineLimit(1).truncationMode(.tail)
                     Spacer(minLength: 0)
                     OperationalPill(run.pill.state, label: run.pill.label)
                 }
@@ -354,11 +410,24 @@ struct AgentRunsView: View {
                 WrappingRow(spacing: 28, lineSpacing: 14) {
                     LabeledField("Attempt") { identifier(run.id) }
                     LabeledField("State") { OperationalPill(run.pill.state, label: run.pill.label) }
+                    if let summary = run.summary {
+                        LabeledField("Feature") { value(summary.featureName ?? "None", known: summary.featureName != nil) }
+                        LabeledField("Provider") {
+                            value(summary.provider.map(providerName) ?? "Not started", known: summary.provider != nil)
+                        }
+                        LabeledField("Started") {
+                            value(clockTime(summary.started, now: state.now) ?? "Not started", known: summary.started != nil)
+                        }
+                        LabeledField("Duration") {
+                            value(run.duration(now: state.now) ?? "—", known: run.duration(now: state.now) != nil)
+                        }
+                    }
                     LabeledField("Scheduler record") { value(run.recordText) }
                     LabeledField("Worktree record") { value(run.record.worktree ?? "None reported", known: run.record.worktree != nil) }
                 }
             }
-            Footnote("Start time, duration and base commit are not reported yet.")
+            Footnote(run.summary == nil ? "Start time, duration and base commit are not reported by this core."
+                                        : "The base commit is not reported yet.")
         }
         if let repair = run.repair { planStep(repair, verdict: run.verdict) }
         VStack(alignment: .leading, spacing: 8) {
@@ -434,6 +503,11 @@ struct AgentRunsView: View {
             InspectorSection("Supervision") {
                 FactGrid {
                     Fact("State") { OperationalPill(run.pill.state, label: run.pill.label) }
+                    if let summary = run.summary {
+                        Fact("Provider", summary.provider.map(providerName) ?? "Not started")
+                        Fact("Started", clockTime(summary.started, now: state.now) ?? "Not started")
+                        if let ended = clockTime(summary.ended, now: state.now) { Fact("Ended", ended) }
+                    }
                     if let repair = run.repair { Fact("Repair", repair.counter) }
                     if let verdict = run.verdict { Fact("Review", verdict.text) }
                     Fact("Scheduler record", run.recordText)
@@ -450,7 +524,9 @@ struct AgentRunsView: View {
             }
             InspectorSection("Actions") { stop(run) }
             InspectorSection("Not reported yet", last: true) {
-                Text("Provider and session, PID and process group, liveness, start and stop times, worktree path, branch, base commit, continuation, resource claims and checkpoints.")
+                Text(run.summary == nil
+                     ? "Provider and session, PID and process group, liveness, start and stop times, worktree path, branch, base commit, continuation, resource claims and checkpoints."
+                     : "Session, PID and process group, worktree path, branch, base commit, continuation, resource claims and checkpoints.")
                     .textStyle(.meta).foregroundStyle(theme.text3).lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
             }

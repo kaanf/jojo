@@ -15,6 +15,7 @@ public enum Request: String, CaseIterable, Sendable {
     case SaveProject, Projects, RunPlan, ControlPlan, PlanRun
     case Executables
     case Repairs
+    case Attempts, Documents
 
     public var fields: [String] {
         switch self {
@@ -55,6 +56,8 @@ public enum Request: String, CaseIterable, Sendable {
         case .PlanRun: return ["plan"]
         case .Executables: return []
         case .Repairs: return []
+        case .Attempts: return ["before"]
+        case .Documents: return ["before"]
         }
     }
 
@@ -62,15 +65,22 @@ public enum Request: String, CaseIterable, Sendable {
     /// only from 1.2; every other request keeps the 1.1 frames it always had, so a helper
     /// that does not know 1.2 answers those as before and the chat ones as unknown. M3's
     /// project and plan-runner requests exist only from 1.3, and D3's executables query
-    /// only from 1.4, and M4's repairs query only from 1.5, in the same way.
+    /// only from 1.4, and M4's repairs query only from 1.5, in the same way. The attempts
+    /// and documents queries exist only from 1.6; at 1.6 the chat index also names each
+    /// feature (Activity & Audit reads events at `Request.attributedEvents` for the same
+    /// reason).
     public var minor: Int64 {
-        let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText, .ChatIndex]
+        let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText]
         let runner: [Request] = [.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun]
+        if [.Attempts, .Documents, .ChatIndex].contains(self) { return 6 }
         if self == .Repairs { return 5 }
         if self == .Executables { return 4 }
         if runner.contains(self) { return 3 }
         return chat.contains(self) ? 2 : Envelope.minor
     }
+
+    /// The minor at which an event carries its time and actor (protocol 1.6).
+    public static let attributedEvents: Int64 = 6
 
     /// A payload carries exactly this request's fields: nothing missing, nothing else.
     public func accepts(_ payload: [String: JSON]) -> Bool {

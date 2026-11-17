@@ -83,7 +83,7 @@ A chip that is off, an empty table, a search without a result, a failed or pendi
 
 Built in `macos/JojoApp/Sources/JojoApp/Activity.swift` on the shared surfaces of COMPONENTS.md, sections 14 to 20. Before it, this destination showed "Activity & Audit is not built yet".
 
-**What the helper reports about an event.** The `Events` query (`after`, `limit`; at most 8 rows a page, in sequence order) answers with a list. One row has: `seq` (the sequence number), `epoch` (the engine epoch that committed it), `type`, `aggregate_kind` and `aggregate_id` (the aggregate it changed, or null), `revision` (of that aggregate, or null), `payload` (its first 512 characters) and `detail_complete` (false when the payload is longer). That is all (`ipc_events` in `crates/jojo-storage/src/ipc_queries.rs`). The answer has **no time**, **no actor**, **no category** above the type, **no sentence** that says what happened, and **no hash**. The screen shows exactly these fields. A part of the canvas without a source says so on screen; nothing is filled with an example.
+**What the helper reports about an event.** The `Events` query (`after`, `limit`; at most 8 rows a page, in sequence order) answers with a list. One row has: `seq` (the sequence number), `epoch` (the engine epoch that committed it), `type`, `aggregate_kind` and `aggregate_id` (the aggregate it changed, or null), `revision` (of that aggregate, or null), `payload` (its first 512 characters) and `detail_complete` (false when the payload is longer). That is all (`ipc_events` in `crates/jojo-storage/src/ipc_queries.rs`). From a helper older than 1.6 the answer has **no time** and **no actor** (since 1.6 it has both; section 6), and from any helper **no category** above the type, **no sentence** that says what happened, and **no hash**. The screen shows exactly these fields. A part of the canvas without a source says so on screen; nothing is filled with an example.
 
 **No hash chain is verified.** The board says "hash-chained" and shows a record hash, the previous record's hash and "Chain: Verified". The helper reports no hash for an event and the app computes none, so the app verifies nothing. The screen says "Not reported" for both hashes and shows the evidence pill "Not verified" (the Not run form), never "Verified". [DESIGN_ROADMAP_DIFFERENCES.md](../../roadmap/DESIGN_ROADMAP_DIFFERENCES.md), section 4, names this screen "Existing event journal (hash chain not verified)".
 
@@ -141,3 +141,14 @@ The Approval Inbox ("Approval History") and Specifications ("View Approval Histo
 | Chip that is off, chip count, search field, kind tag, record row | COMPONENTS.md, section 20 |
 | Number of events a read reaches back | 64, in pages of 8 (the helper's largest page); one read stops after 256 events |
 | Empty state glyphs | `clock.arrow.circlepath`, and `magnifyingglass` for a search without a result |
+
+## 6. User-facing data (protocol 1.6)
+
+Activity & Audit reads `Events` at minor 6 (`Request.attributedEvents`), so each event carries `at_unix_ms` and `actor` (`docs/architecture/STDIO_PROTOCOL.md`, "Protocol 1.6"). The poll that notices new events stays at minor 1.
+
+- **Columns.** "Time" (58, "HH:mm:ss" in the viewer's time zone, with the date when not today), "Actor" (76), "Type", "Event", "Subject". The "Record" column is left out while the time and actor are shown; the record identifier is in the record panel.
+- **Actor.** "Human" for an event of a command sent from the app, "Claude Code" or "Codex" for a record of that provider's output (and the events of the command that sealed a lead turn that replied or a review with a verdict), "Jojo core" for everything else. Search also matches the actor.
+- **Groups.** By day: "Today", "Yesterday", then "Monday 16 November". Events of a helper older than 1.6 are still grouped by "Epoch n".
+- **Record panel.** "Time" and "Actor" show the values; the footnote says how the actor is decided.
+
+Still not reported: a category above the type, a sentence that says what happened, a cause, record hashes (**no chain is verified**), export, filters by project or date. Snapshot: `s2-activity` (`S2UserFacingDataTests`).

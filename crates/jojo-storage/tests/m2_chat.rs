@@ -1557,3 +1557,238 @@ fn m4_a_review_that_cannot_start_holds_the_step_for_the_human() {
     assert_eq!(h.step_field(&plan, 0, "review"), Json::Null);
     assert!(h.read(|v| v.unfinished_review()).is_none());
 }
+
+// ---- Protocol 1.6: user-facing data ----
+
+impl H {
+    fn ok6(&mut self, kind: &str, payload: Json) -> Json {
+        let r = self.at(6, kind, payload);
+        assert_eq!(r.kind, "Response", "{kind}: {:?}", r.payload);
+        r.payload
+    }
+
+    /// Discovery to a drafted requirements document, not approved.
+    fn approved_requirements_draft(&mut self, repository: &str) -> Json {
+        let chat = self.chat(0);
+        for question in items(field(&items(field(&chat, &["turns"]))[0], &["questions"])).to_vec() {
+            self.ok(
+                "AnswerQuestion",
+                object([
+                    ("question", field(&question, &["question"]).clone()),
+                    ("revision", field(&question, &["revision"]).clone()),
+                    ("action", text("Answer")),
+                    ("answer", text("As simple as possible.")),
+                ]),
+            );
+        }
+        let chat = self.turn(4002, repository, "ClaudeCode", "");
+        field(&chat, &["prd", "document"]).clone()
+    }
+
+    fn documents(&mut self) -> Json {
+        self.ok6("Documents", object([("before", Json::Null)]))
+    }
+
+    fn attempts(&mut self) -> Vec<Json> {
+        let page = self.ok6("Attempts", object([("before", Json::Null)]));
+        assert_eq!(field(&page, &["next"]), &Json::Null);
+        items(field(&page, &["attempts"])).to_vec()
+    }
+
+    /// The approval state of each listed document of `kind`.
+    fn approvals(&mut self, kind: &str) -> Vec<String> {
+        let documents = self.documents();
+        items(field(&documents, &["documents"]))
+            .iter()
+            .filter(|d| str_of(d, &["kind"]) == kind)
+            .map(|d| str_of(d, &["approval"]).to_owned())
+            .collect()
+    }
+
+    /// Every event, read at `minor` in pages of eight.
+    fn all_events(&mut self, minor: u64) -> Vec<Json> {
+        let mut out: Vec<Json> = Vec::new();
+        loop {
+            let after = out.last().map_or(0, |e| uint(field(e, &["seq"])).unwrap());
+            let r = self.at(
+                minor,
+                "Events",
+                object([("after", number(after)), ("limit", number(8))]),
+            );
+            assert_eq!(r.kind, "Response", "{:?}", r.payload);
+            let page = items(&r.payload).to_vec();
+            if page.is_empty() {
+                return out;
+            }
+            out.extend(page);
+        }
+    }
+}
+
+#[test]
+fn s2_documents_carry_names_and_approval_states_and_count_what_waits() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h_save_project(&mut h, &repository);
+    // Before a requirements document exists, a feature is named by its first message.
+    h.turn(
+        4001,
+        &repository,
+        "Codex",
+        "slugify should be usable from the shell.\nfixture: lead",
+    );
+    let index = h.ok6("ChatIndex", object([]));
+    let feature = items(field(&index, &["features"]))[0].clone();
+    assert_eq!(
+        str_of(&feature, &["name"]),
+        "slugify should be usable from the shell."
+    );
+    // A 1.2 frame is answered as before: no name.
+    let old = h.ok("ChatIndex", object([]));
+    assert!(get(&items(field(&old, &["features"]))[0], "name").is_err());
+    assert_eq!(field(&h.documents(), &["pending"]), &number(0));
+
+    // The drafted requirements document waits for the human and names the feature.
+    let prd = h.approved_requirements_draft(&repository);
+    let documents = h.documents();
+    let rows = items(field(&documents, &["documents"])).to_vec();
+    assert_eq!(rows.len(), 1, "{documents:?}");
+    let title = str_of(&rows[0], &["title"]).to_owned();
+    assert!(!title.is_empty());
+    assert_eq!(field(&rows[0], &["document"]), &prd);
+    assert_eq!(str_of(&rows[0], &["kind"]), "Prd");
+    assert_eq!(str_of(&rows[0], &["approval"]), "Pending");
+    assert_eq!(str_of(&rows[0], &["author"]), "Model");
+    assert_eq!(str_of(&rows[0], &["feature_name"]), title);
+    assert_eq!(field(&rows[0], &["stale"]), &Json::Bool(false));
+    assert!(uint(field(&rows[0], &["created_at_unix_ms"])).unwrap() > 0);
+    assert_eq!(field(&rows[0], &["decided_at_unix_ms"]), &Json::Null);
+    assert_eq!(field(&documents, &["pending"]), &number(1));
+    let index = h.ok6("ChatIndex", object([]));
+    assert_eq!(
+        str_of(&items(field(&index, &["features"]))[0], &["name"]),
+        title
+    );
+
+    h.approve(&prd);
+    assert_eq!(h.approvals("Prd"), ["Approved"]);
+    let documents = h.documents();
+    assert_eq!(field(&documents, &["pending"]), &number(0));
+    let row = &items(field(&documents, &["documents"]))[0];
+    assert!(uint(field(row, &["decided_at_unix_ms"])).unwrap() > 0);
+
+    // The ADR waits first; the two plans exist only once it is approved, then both wait.
+    let row = h.drafted_plan(&repository, 4003, "fixture: lead-kinds");
+    let plan = field(&row, &["plan"]).clone();
+    assert_eq!(h.approvals("Adr"), ["Pending"]);
+    assert_eq!(field(&h.documents(), &["pending"]), &number(1));
+    h.approve(&field(&plan, &["adr"]).clone());
+    assert_eq!(h.approvals("ValidationPlan"), ["Pending"]);
+    assert_eq!(h.approvals("ExecutionPlan"), ["Pending"]);
+    let documents = h.documents();
+    assert_eq!(field(&documents, &["pending"]), &number(2));
+    for d in items(field(&documents, &["documents"])) {
+        assert_eq!(str_of(d, &["feature_name"]), title, "{d:?}");
+    }
+    // Newest first; a document's own title only for requirements.
+    let kinds: Vec<_> = items(field(&documents, &["documents"]))
+        .iter()
+        .map(|d| str_of(d, &["kind"]).to_owned())
+        .collect();
+    assert_eq!(kinds.last().unwrap(), "Prd");
+    assert_eq!(kinds.len(), 4);
+}
+
+#[test]
+fn s2_attempts_report_live_state_names_and_times_and_events_their_actor() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let (_, _, plan, _, _) = h.approved_kinds_plan(&repository);
+    let title = {
+        let documents = h.documents();
+        let rows = items(field(&documents, &["documents"])).to_vec();
+        str_of(rows.last().unwrap(), &["title"]).to_owned()
+    };
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.s().tick().unwrap();
+    // Both steps wait two seconds in the fixture: each is seen running.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let running = loop {
+        let rows = h.attempts();
+        if rows.len() == 2 && rows.iter().all(|r| str_of(r, &["state"]) == "Running") {
+            break rows;
+        }
+        assert!(std::time::Instant::now() < deadline, "{rows:?}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let mut keys: Vec<_> = running
+        .iter()
+        .map(|r| {
+            assert_eq!(str_of(r, &["feature_name"]), title);
+            assert_eq!(field(r, &["plan"]), &plan);
+            assert!(!str_of(r, &["title"]).is_empty());
+            assert!(uint(field(r, &["started_at_unix_ms"])).unwrap() > 0);
+            assert_eq!(field(r, &["ended_at_unix_ms"]), &Json::Null);
+            (
+                str_of(r, &["key"]).to_owned(),
+                str_of(r, &["provider"]).to_owned(),
+            )
+        })
+        .collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            ("api".to_owned(), "ClaudeCode".to_owned()),
+            ("usage".to_owned(), "Codex".to_owned())
+        ]
+    );
+    // Settled and validated: succeeded, and both candidates wait for the human.
+    h.run_until(&plan, |s| s[0] == "Review" && s[1] == "Review");
+    for r in h.attempts() {
+        assert_eq!(str_of(&r, &["state"]), "Succeeded");
+        let started = uint(field(&r, &["started_at_unix_ms"])).unwrap();
+        assert!(uint(field(&r, &["ended_at_unix_ms"])).unwrap() >= started);
+    }
+    let documents = h.documents();
+    let candidates = items(field(&documents, &["candidates"])).to_vec();
+    assert_eq!(candidates.len(), 2, "{documents:?}");
+    assert_eq!(field(&documents, &["pending"]), &number(2));
+    for c in &candidates {
+        assert_eq!(str_of(c, &["feature_name"]), title);
+        assert!(uint(field(c, &["validated_at_unix_ms"])).unwrap() > 0);
+    }
+
+    // Who caused each event: the core, the human through the app, each provider.
+    let events = h.all_events(6);
+    let actor = |kind: &str| -> Vec<String> {
+        let mut found: Vec<String> = events
+            .iter()
+            .filter(|e| str_of(e, &["type"]) == kind)
+            .map(|e| str_of(e, &["actor"]).to_owned())
+            .collect();
+        found.dedup();
+        found
+    };
+    assert_eq!(actor("EngineStarted"), ["Core"]);
+    assert_eq!(actor("PlanRunStarted"), ["Human"]);
+    assert_eq!(actor("HumanDecision"), ["Human"]);
+    assert_eq!(actor("SchedulerReserved"), ["Core"]);
+    let mut providers = actor("ProviderOutput");
+    providers.sort();
+    providers.dedup();
+    assert_eq!(providers, ["ClaudeCode", "Codex"]);
+    let mut leads = actor("LeadTurnFinished");
+    leads.sort();
+    leads.dedup();
+    assert_eq!(leads, ["ClaudeCode", "Codex"]);
+    assert!(
+        events
+            .iter()
+            .all(|e| uint(field(e, &["at_unix_ms"])).unwrap() > 0)
+    );
+    // A 1.1 frame is answered as before: no time, no actor.
+    let old = h.all_events(1);
+    assert_eq!(old.len(), events.len());
+    assert!(get(&old[0], "actor").is_err() && get(&old[0], "at_unix_ms").is_err());
+}

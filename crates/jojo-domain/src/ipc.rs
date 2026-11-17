@@ -10,7 +10,9 @@ pub const MAJOR: i64 = 1;
 /// 1.3 (M3) adds project records and the plan runner.
 /// 1.4 (D3) adds the executables query.
 /// 1.5 (M4) adds the repairs query; a project record carries its repair limit and reviewer.
-pub const MINOR: i64 = 5;
+/// 1.6 adds the attempts and documents queries; at 1.6 an event carries its time and
+/// actor and a feature of the chat index its name.
+pub const MINOR: i64 = 6;
 pub const MAX_FRAME: usize = 64 * 1024;
 pub const MAX_PAGE: u32 = 8;
 

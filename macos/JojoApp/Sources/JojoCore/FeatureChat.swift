@@ -19,6 +19,12 @@ public struct ChatIndex: Equatable, Sendable {
         public let objectiveComplete: Bool
         public let turns: Int64
         public let running: Bool
+        /// The title of its newest requirements document, else the first line of its first
+        /// message (protocol 1.6); nil from an older helper.
+        public var name: String? = nil
+
+        /// The name, else the objective.
+        public var shownName: String { name ?? objective }
     }
 
     public let repositories: [Repository]
@@ -39,7 +45,7 @@ public struct ChatIndex: Equatable, Sendable {
                   let objective = r["objective"]?.string, let complete = r["objective_complete"]?.boolean,
                   let turns = r["turns"]?.integer, let running = r["running"]?.boolean else { return nil }
             return Feature(id: id, repository: repository, objective: objective, objectiveComplete: complete,
-                           turns: turns, running: running)
+                           turns: turns, running: running, name: r["name"]?.string)
         }
         guard repositories.count == repositoryItems.count, features.count == featureItems.count else { return nil }
         (self.repositories, self.repositoriesComplete) = (repositories, repositoriesComplete)

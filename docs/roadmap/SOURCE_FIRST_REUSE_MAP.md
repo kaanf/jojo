@@ -219,8 +219,8 @@ M0 is the close-out of Phase 2; M1–M6 are Phase 3.
 
 **Order from 2026-11-17.** Steps 1 to 7 are done. The human decided to build the canvas's current Product page (the `…Mac.dc.html` boards, macOS 26 Liquid Glass) as drawn and to extend the core for the data it shows. Step 8 is replaced by:
 
-8. The Liquid Glass migration: tokens, materials, the glass shell and the status components (`docs/design/DESIGN_SYSTEM.md`, `COMPONENTS.md`).
-9. User-facing data in the core: names of features, tasks and documents; the live state of an attempt; pending approvals; time and actor of events.
+8. The Liquid Glass migration: tokens, materials, the glass shell and the status components (`docs/design/DESIGN_SYSTEM.md`, `COMPONENTS.md`). Done 2026-11-17.
+9. User-facing data in the core: names of features, tasks and documents; the live state of an attempt; pending approvals; time and actor of events. Done 2026-11-17: protocol 1.6, no schema change (DESIGN_ROADMAP_DIFFERENCES.md, E11).
 10. Dashboard.
 11. The screens in flow order, each from its `…Mac.dc.html` board: New Feature, Feature Chat, Specifications, Approval Inbox, Execution Plan, Agent Runs, Source Control, Verification & Evidence.
 12. M5 with design wave 4 (push and draft PR on the rebuilt Source Control and Approval Inbox). The demo is complete here.

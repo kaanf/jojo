@@ -73,12 +73,13 @@ final class M2FeatureChatTests: XCTestCase {
 
     func test_m2_chat_requests_are_sent_at_minor_2_and_every_other_request_stays_at_1() {
         let (h, model) = ready()
+        // Since 1.6 the chat index is read at 1.6, where it names each feature.
         XCTAssertEqual(Request.allCases.filter { $0.minor == 2 },
-                       [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText, .ChatIndex])
+                       [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText])
         XCTAssertEqual(h.fake.last("Hello")?.minor, 1)
         XCTAssertEqual(h.fake.last("Snapshot")?.minor, 1)
         model.loadChatIndex()
-        XCTAssertEqual(h.fake.last("ChatIndex")?.minor, 2)
+        XCTAssertEqual(h.fake.last("ChatIndex")?.minor, 6)
         XCTAssertEqual(h.fake.last("ChatIndex")?.payload, [:])
         model.openChat(ChatRows.feature)
         XCTAssertEqual(h.fake.last("FeatureChat")?.minor, 2)

@@ -943,6 +943,8 @@ struct RequestRow: View {
     var mono = false
     var detail: String?
     var status: DocumentStatus?
+    /// The tag's word when it is not the status's own ("Rejected", "Waiting").
+    var statusLabel: String?
     let symbol: String
     var awaiting = false
     var selected = false
@@ -961,7 +963,7 @@ struct RequestRow: View {
                     .foregroundStyle(theme.text).lineLimit(1).truncationMode(.middle)
                 HStack(spacing: 6) {
                     if let detail { Text(detail).textStyle(.meta).foregroundStyle(theme.text3).lineLimit(1) }
-                    if let status { DocumentTag(status) }
+                    if let status { DocumentTag(status, label: statusLabel) }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1047,6 +1049,8 @@ struct DocumentRow: View {
     var mono = false
     var detail: String?
     var status: DocumentStatus?
+    /// The tag's word when it is not the status's own.
+    var statusLabel: String?
     var indented = false
     var quiet = false
     var selected = false
@@ -1058,7 +1062,7 @@ struct DocumentRow: View {
                 Text(name).font(.system(size: quiet ? 12 : 12.5, weight: quiet ? .regular : .semibold, design: mono ? .monospaced : .default))
                     .foregroundStyle(quiet ? theme.text2 : theme.text).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 0)
-                if let status { DocumentTag(status) }
+                if let status { DocumentTag(status, label: statusLabel) }
             }
             if let detail { Text(detail).textStyle(.meta).foregroundStyle(theme.text3).lineLimit(1) }
         }
@@ -1206,6 +1210,9 @@ enum RecordColumns {
     static let subject: CGFloat = 92
     static let record: CGFloat = 64
     static let gap: CGFloat = 10
+    /// Protocol 1.6: the time and actor columns, when the core reports them.
+    static let time: CGFloat = 58
+    static let actor: CGFloat = 76
 }
 
 /// The column captions of a record table, with a hairline below.
@@ -1215,13 +1222,20 @@ struct RecordHeader: View {
     var event = "Event"
     var subject = "Subject"
     var record = "Record"
+    /// Draw the time and actor columns.
+    var attributed = false
 
     var body: some View {
         HStack(spacing: RecordColumns.gap) {
+            if attributed {
+                Text("Time").frame(width: RecordColumns.time, alignment: .leading)
+                Text("Actor").frame(width: RecordColumns.actor, alignment: .leading)
+            }
             Text(type).frame(width: RecordColumns.type, alignment: .leading)
             Text(event).frame(maxWidth: .infinity, alignment: .leading)
             Text(subject).frame(width: RecordColumns.subject, alignment: .leading)
-            Text(record).frame(width: RecordColumns.record, alignment: .leading)
+            // With the time and actor columns the record identifier is in the record panel only.
+            if !attributed { Text(record).frame(width: RecordColumns.record, alignment: .leading) }
         }
         .font(.system(size: 11, weight: .semibold)).foregroundStyle(theme.text3).lineLimit(1)
         .padding(.vertical, 8)
@@ -1261,17 +1275,29 @@ struct RecordRow: View {
     let record: String
     var selected = false
     var last = false
+    /// Protocol 1.6: when the record was made and who caused it; both columns are drawn
+    /// when either is given.
+    var time: String? = nil
+    var actor: String? = nil
 
     var body: some View {
         HStack(spacing: RecordColumns.gap) {
+            if time != nil || actor != nil {
+                Text(time ?? "—").font(.system(size: 11.5, design: .monospaced)).foregroundStyle(theme.text2)
+                    .lineLimit(1).frame(width: RecordColumns.time, alignment: .leading)
+                Text(actor ?? "—").font(.system(size: 12)).foregroundStyle(theme.text2)
+                    .lineLimit(1).frame(width: RecordColumns.actor, alignment: .leading)
+            }
             HStack(spacing: 0) { KindTag(type, tone: tone) }.frame(width: RecordColumns.type, alignment: .leading)
             Text(text).font(.system(size: mono ? 12 : 13, design: mono ? .monospaced : .default)).foregroundStyle(theme.text)
                 .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             Text(subject ?? "—").font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(subject == nil ? theme.text4 : theme.text2)
                 .lineLimit(1).truncationMode(.middle).frame(width: RecordColumns.subject, alignment: .leading)
-            Text(record).font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.text3)
-                .lineLimit(1).frame(width: RecordColumns.record, alignment: .leading)
+            if time == nil, actor == nil {
+                Text(record).font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.text3)
+                    .lineLimit(1).frame(width: RecordColumns.record, alignment: .leading)
+            }
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 14)
@@ -1538,4 +1564,28 @@ struct ChatMessage<Content: View>: View {
         .padding(.horizontal, 12)
         .background(human ? theme.fill2 : Color.clear, in: RoundedRectangle(cornerRadius: 10))
     }
+}
+
+/// How long ago a time the core reported was: "now", "12m", "3h", "2d".
+func shortAge(_ date: Date?, now: Date) -> String? {
+    guard let date else { return nil }
+    let seconds = max(0, now.timeIntervalSince(date))
+    switch seconds {
+    case ..<60: return "now"
+    case ..<3600: return "\(Int(seconds / 60))m"
+    case ..<86400: return "\(Int(seconds / 3600))h"
+    default: return "\(Int(seconds / 86400))d"
+    }
+}
+
+/// A time the core reported, in the viewer's time zone: "14:05:09", with the date when it
+/// is not today ("17 Nov 14:05").
+func clockTime(_ date: Date?, now: Date, seconds: Bool = true) -> String? {
+    guard let date else { return nil }
+    let calendar = Calendar.current
+    let format = calendar.isDate(date, inSameDayAs: now) ? (seconds ? "HH:mm:ss" : "HH:mm") : "d MMM HH:mm"
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_GB")
+    formatter.dateFormat = format
+    return formatter.string(from: date)
 }

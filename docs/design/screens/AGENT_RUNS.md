@@ -117,7 +117,7 @@ A part of the canvas without a source says so on screen; nothing is filled with 
 
 ### 4.2 Attempt state
 
-The core does not report a lifecycle state per attempt, so the pill is derived, in this order:
+A helper older than 1.6 reports no lifecycle state per attempt, so the pill is derived, in this order (since 1.6 the core reports it; section 6):
 
 | Known about the attempt | Pill | Second line in the list |
 |---|---|---|
@@ -130,7 +130,7 @@ The core does not report a lifecycle state per attempt, so the pill is derived, 
 | Loaded result, not sealed | "Not sealed", Idle form | "No sealed result yet" |
 | Nothing loaded | "Not loaded", Idle form | "Scheduler record: RESERVED" (the core's text) |
 
-"Running" is never shown: an attempt without a sealed result may be running, starting or stopped, and the core does not say which.
+From a helper older than 1.6 "Running" is never shown: an attempt without a sealed result may be running, starting or stopped, and that core does not say which.
 
 ### 4.3 Recorded facts
 
@@ -184,3 +184,14 @@ Not on the canvas; D2 asked for them (`docs/roadmap/DESIGN_ROADMAP_DIFFERENCES.m
 - Inspector, Supervision: "Repair" and "Review" facts.
 
 There is no command here: accept and reject stay on Verification & Evidence, and nothing restarts a held step. Snapshots: `agent-runs-repairing`, `agent-runs-rejected`, `agent-runs-needs-human`.
+
+## 6. User-facing data (protocol 1.6)
+
+The screen reads the `Attempts` query with the repairs: while it is shown, and again with each new snapshot (`WorkspaceModel.loadAttempts`). The answer is the core's, derived from its records (`docs/architecture/STDIO_PROTOCOL.md`, "Protocol 1.6"); an older helper answers `UnknownType` and the screen stays as sections 4 and 5 describe.
+
+- **List.** Attempts newest first. The title is the step's title from its lead plan, else "Step <key>", else "Attempt <8 characters>". The second line is "<feature> · <provider>", or "<feature> · <step key> · repair 1 of 2" for a plan step the repairs answer lists. The footnote says that the attempts are named by their plan step and that an imported plan's steps have no names.
+- **Pill.** A recovery hold and the step states of section 5 still come first. Then the core's state: "Running", "Launching", "Preparing" and "Settling" in the Running form; "Reserved" in the Waiting form; "Stopping" in the Paused form; "Held", "Unsupervised" and "Interrupted" in the Recovery required form; "Succeeded" Completed; "Failed" Failed; "Cancelled" Idle. **"Running" is shown** for an attempt whose process root the core identified and whose result is not sealed.
+- **Detail.** The summary card adds Feature, Provider, Started (the time the first process was issued; with the date when not today) and Duration (to the sealed result, or to now while it runs). The footnote says only that the base commit is not reported.
+- **Inspector, Supervision.** Adds Provider, Started and Ended. "Not reported yet" keeps: session, PID and process group, worktree path, branch, base commit, continuation, resource claims and checkpoints.
+
+Still not reported: events per attempt with their times (the "Recorded facts" stay the core's records without times), the lifecycle strip, task groups and filters, the safe-stop command. The sidebar counter still counts the snapshot's attempt rows. Snapshot: `s2-agent-runs` (`S2UserFacingDataTests`).

@@ -105,7 +105,7 @@ Then a row of buttons (gap 6, wraps): primary "Approve Revision", which opens th
 
 Built in `macos/JojoApp/Sources/JojoApp/Specifications.swift` on the shared surfaces of COMPONENTS.md, sections 14 to 19. Before it, this destination showed "Specifications is not built yet".
 
-**The helper reports no document text.** The requests the core knows (`SPECS` in `crates/jojo-domain/src/protocol.rs`) have none that returns the text of a document, its name, its kind, its sections, its earlier revisions, its questions and assumptions or its validation. What exists is the snapshot (`artifact` and `review_document` rows: an identity and the core's record, a digest) and the `ReviewBundle` answer for one document (its revision, the bundle digest, the digests of its content, of what was displayed and of its context, the events of the upstream approvals it binds, and the event of the latest decision on it). The screen shows exactly that. A part of the canvas without a source says so on screen; nothing is filled with an example.
+**The helper reports no document text.** (Since protocol 1.6 it reports names, kinds and approval states; section 6.) The requests the core knows (`SPECS` in `crates/jojo-domain/src/protocol.rs`) have none that returns the text of a document, its name, its kind, its sections, its earlier revisions, its questions and assumptions or its validation. What exists is the snapshot (`artifact` and `review_document` rows: an identity and the core's record, a digest) and the `ReviewBundle` answer for one document (its revision, the bundle digest, the digests of its content, of what was displayed and of its context, the events of the upstream approvals it binds, and the event of the latest decision on it). The screen shows exactly that. A part of the canvas without a source says so on screen; nothing is filled with an example.
 
 **The loaded document is shared with the Approval Inbox.** The screen has no load or query of its own. Choosing a document calls the workspace's `loadReview`, and the screen shows `WorkspaceModel.review`: the one review the workspace holds. The Approval Inbox shows and decides that same document, so a document chosen here is the loaded one there, and the other way round. The screen takes a plain value (`SpecificationsState`), which wraps the `ApprovalInboxState` of that review; the list of documents and the kind of a document are the Approval Inbox's functions (`ApprovalInboxState.documents(in:)`, `ApprovalInboxState.kind(_:)`), not a second copy of the rule.
 
@@ -172,3 +172,13 @@ The decision mark is the one the Approval Inbox shows in its head, now one view 
 | Lines of "Approval history" and of an empty "Traceability" | Padding 9 by 14, the sentence at 12 in `text2` |
 | Fact that is not reported or not loaded | The words in `text3` |
 | Empty state glyph | `doc.text` |
+
+## 6. User-facing data (protocol 1.6)
+
+The screen uses the `Documents` answer the workspace reads after every snapshot (Approval Inbox, section 6); an older helper leaves the screen as section 5 describes.
+
+- **Leading panel.** "Documents · n", newest first, each a document row with its name (a requirements document's title, else "<feature> · <kind>"), "<kind> · rev n" and its approval tag. The footnote keeps: earlier revisions and the sections inside a document.
+- **Main column.** The title and the kind line as on the Approval Inbox; "Recorded by the core" adds Feature and Created.
+- **Approval history.** What the latest decision was and when, when it applies to this revision; the footnote keeps that the decisions on earlier revisions are not reported.
+
+Still not reported: the text of a document, its sections and earlier revisions, validation findings, requirements and the tasks that implement them.

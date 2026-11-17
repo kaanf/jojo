@@ -41,7 +41,7 @@ impl Service {
             RequestKind::Events => {
                 let q = protocol::EventsQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_events(q.after, q.limit))
+                    .read(|v| v.ipc_events(q.after, q.limit, e.minor >= 6))
                     .map_err(|e| e.to_string())
             }
             RequestKind::EventDetail => {
@@ -112,7 +112,7 @@ impl Service {
                     return Err("InvalidPayload: unexpected or missing fields".into());
                 }
                 reader
-                    .read(|v| v.ipc_chat_index())
+                    .read(|v| v.ipc_chat_index(e.minor >= 6))
                     .map_err(|e| e.to_string())
             }
             // Protocol 1.3 (M3): project records.
@@ -144,6 +144,19 @@ impl Service {
                     return Err("InvalidPayload: unexpected or missing fields".into());
                 }
                 reader.read(|v| v.ipc_repairs()).map_err(|e| e.to_string())
+            }
+            // Protocol 1.6: user-facing data.
+            RequestKind::Attempts | RequestKind::Documents => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let q = protocol::OverviewQuery::parse(p)?;
+                reader
+                    .read(|v| match kind {
+                        RequestKind::Attempts => v.ipc_attempts(q.before),
+                        _ => v.ipc_documents(q.before),
+                    })
+                    .map_err(|e| e.to_string())
             }
             _ => unreachable!("not a snapshot query: {kind:?}"),
         }

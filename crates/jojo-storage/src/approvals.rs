@@ -56,10 +56,13 @@ fn hash(fields: &[&str]) -> String {
     }
     sha256_hex(&[&bytes])
 }
-fn decisions(c: &Connection, id: ArtifactId) -> Result<Vec<HumanDecision>, StorageError> {
+pub(crate) fn decisions(
+    c: &Connection,
+    id: ArtifactId,
+) -> Result<Vec<HumanDecision>, StorageError> {
     c.query("SELECT seq,bundle,action,origin,command,revision,content_hash,displayed_hash,upstream FROM human_decisions WHERE subject=?1 ORDER BY seq", &[Value::Text(&id_to_text(id.0))], |r| Ok((r.int(0)?,r.text(1)?,r.text(2)?,r.text(3)?,r.text(4)?,r.int(5)?,r.text(6)?,r.text(7)?,r.text(8)?)))?.into_iter().map(|(seq,bundle,action,origin,command,revision,content_hash,displayed_hash,upstream)| Ok(HumanDecision {seq:EventSeq(from_db(seq)?),subject:id,bundle,action,origin,command,revision:Revision(from_db(revision)?),content_hash,displayed_hash,upstream})).collect()
 }
-fn approval_inputs_ready(c: &Connection, id: ArtifactId) -> Result<bool, StorageError> {
+pub(crate) fn approval_inputs_ready(c: &Connection, id: ArtifactId) -> Result<bool, StorageError> {
     if version(c, id, None)?.is_some() {
         return Ok(review_readiness(c, id)?.is_some_and(|r| r.is_ready()));
     }

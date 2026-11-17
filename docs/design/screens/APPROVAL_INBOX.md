@@ -120,7 +120,7 @@ The screen has no load or query of its own. It shows the one review the workspac
 
 A part of the canvas without a source says so on screen; nothing is filled with an example.
 
-**The list is not a list of pending approvals.** The helper does not report which documents wait for approval, nor a request as an object with a kind, an age and a place. The snapshot does list the documents that exist, so the leading panel lists those, under the heading "Documents", and says that their approval state is not reported. Choosing one loads its review; this is the same `loadReview` the identity field calls.
+**From a helper older than 1.6 the list is not a list of pending approvals** (since 1.6 it is; section 6). The helper does not report which documents wait for approval, nor a request as an object with a kind, an age and a place. The snapshot does list the documents that exist, so the leading panel lists those, under the heading "Documents", and says that their approval state is not reported. Choosing one loads its review; this is the same `loadReview` the identity field calls.
 
 **Four kinds, two built.** Approvals are of four kinds (spec, plan, push, PR) and there is no approve-all. Spec and plan approvals are decisions on a document and are built. Push and pull request approvals belong to milestone M5: the core has no such command and reports no such request, and the screen says so. Baseline changes and scope expansions, which the board also draws, are not approval kinds of the core.
 
@@ -205,3 +205,13 @@ The three buttons are enabled or disabled together, as on the old screen: which 
 | Digests in the facts | Identifiers in `text`, wrapping and selectable |
 | Fact that is not reported or not loaded | The words in `text3` |
 | Empty state glyph | `tray` |
+
+## 6. User-facing data (protocol 1.6)
+
+The workspace reads the `Documents` query after every snapshot, on every screen (`WorkspaceModel.loadDocuments`), so the sidebar counter follows the journal. An older helper answers `UnknownType`; then the screen is as section 5 describes and the sidebar item has no counter.
+
+- **Sidebar counter.** The number of things that wait for the human (`pending`): documents whose state is Pending and candidates whose host validation passed and that nobody accepted or rejected. In the review (purple) hue.
+- **Leading panel.** "Waiting for you · n", the identity field, then the waiting documents and the waiting candidates; then "Documents · n" with every other listed document. A row is the request row of COMPONENTS.md: the kind ("Requirements", "Architecture decision", "Validation plan", "Execution plan", "Candidate"), the age ("1m", "3h", "2d") from when the revision was created or the candidate validated, the title (a requirements document's own title, else the feature's name; a candidate's step title), "rev n" or the feature, and a tag: "Needs approval" (Proposed form), Stale, Approved, "Rejected" or "Revoked" (Invalidated form), "Waiting" (an upstream document is not approved) or "Has findings". Choosing a document loads its review as before; choosing a candidate loads it and opens Verification & Evidence, where it is accepted or rejected.
+- **Main column.** The title is "<name> rev n", where an ADR or a plan is named "<feature> · <kind>"; the kind line uses the core's kind (so a validation plan is no longer read as an execution plan). Facts add Feature, Requested (the time the revision was created) and Written by (the lead agent or a human, for requirements). "Latest decision" says what was decided and when ("Approved · event 20 · 14:05"), or that it was on an earlier revision. The footnote keeps: the document's text, its repository, what it affects and its risks.
+
+Still not reported: the text of a document, what a decision affects and risks, supporting evidence, a history of decisions per document, push and pull request approvals (M5). Snapshot: `s2-approval-inbox` (`S2UserFacingDataTests`).
