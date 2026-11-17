@@ -1839,6 +1839,9 @@ pub fn run_turn(
             }
             if streams_closed {
                 if sup.tree().absent() {
+                    if !crate::process::may_conclude_absent(exited, drain_deadline, now()) {
+                        continue;
+                    }
                     run.conclusion = TurnConclusion::TreeAbsent;
                     break;
                 }

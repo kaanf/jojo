@@ -251,6 +251,9 @@ fn execute(
             }
             if streams_closed {
                 if sup.tree().absent() {
+                    if !crate::process::may_conclude_absent(exit.is_some(), drain, now()) {
+                        continue;
+                    }
                     break;
                 }
                 if exit.is_some() {

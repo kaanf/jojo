@@ -1533,3 +1533,28 @@ impl Drop for Supervised {
         self.abandon.store(true, Ordering::Release);
     }
 }
+
+/// Whether a supervision loop may conclude that a run's process tree is absent once its
+/// output streams are closed and no process of it is left. The waiter announces
+/// `RootTerminated` before it reaps the root and sends `Exited`, so the exit status can
+/// still be on its way: the loop waits for it until the drain deadline, and only then
+/// concludes without it (which never counts as a clean exit).
+pub(crate) fn may_conclude_absent(exited: bool, drain_deadline: Option<u64>, now: u64) -> bool {
+    exited || drain_deadline.is_some_and(|d| now >= d)
+}
+
+#[cfg(test)]
+mod conclusion_tests {
+    use super::may_conclude_absent;
+
+    #[test]
+    fn an_absent_tree_waits_for_the_root_exit_status_until_the_drain_deadline() {
+        assert!(may_conclude_absent(true, None, 0));
+        assert!(
+            !may_conclude_absent(false, Some(10), 9),
+            "the status may still be on its way"
+        );
+        assert!(may_conclude_absent(false, Some(10), 10));
+        assert!(!may_conclude_absent(false, None, 99));
+    }
+}

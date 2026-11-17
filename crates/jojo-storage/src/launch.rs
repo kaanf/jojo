@@ -1133,6 +1133,9 @@ fn supervise(
             if streams_closed {
                 let tree = sup.tree();
                 if tree.absent() {
+                    if !crate::process::may_conclude_absent(exited, drain_deadline, run.now()) {
+                        continue;
+                    }
                     run.observe(ObservationKind::TreeAbsent, "exited without stop".into());
                     run.report.outcome = LaunchOutcome::TreeAbsent {
                         stop_requested: false,

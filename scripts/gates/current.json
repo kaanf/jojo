@@ -3,7 +3,7 @@
   "scope": "Tree after the rest of step 4 of the Liquid Glass order: Specifications, Approval Inbox, Execution Plan, Agent Runs, Source Control and Verification & Evidence from their Mac boards; protocol 1.9 adds Document, Decisions, PlanDetail and AttemptDetail; no schema change.",
   "boundary_tests_min": 107,
   "rust": {
-    "passed_min": 485,
+    "passed_min": 486,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -91,7 +91,8 @@
       "s3_an_open_blocking_question_blocks_the_feature_and_names_it",
       "features::tests::s4_an_assumption_a_newer_revision_drops_is_dropped_from_that_revision",
       "s4_a_chat_at_1_8_dates_its_turns_and_lists_the_drafts_assumptions",
-      "s4c_documents_plans_and_attempts_report_their_details_at_1_9"
+      "s4c_documents_plans_and_attempts_report_their_details_at_1_9",
+      "process::conclusion_tests::an_absent_tree_waits_for_the_root_exit_status_until_the_drain_deadline"
     ],
     "ignored": [
       "child_fixture",
