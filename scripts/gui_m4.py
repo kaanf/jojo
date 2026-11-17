@@ -23,7 +23,7 @@ def agent_runs_shows_repairing_the_counter_the_verdict_and_the_hold(app, helper)
     ev, rec = s.events(), s.received()
     shown = [e for e in ev if e.startswith('repairs-state ')]
     g.check(code == 0 and len(shown) == 1, f'exit {code}, {len(shown)} states', ev)
-    rows = dict((r.split('|')[0], r.split('|')[1:]) for r in shown[0].split(' rows=', 1)[1].split(';'))
+    rows = dict((r.split('|')[0], r.split('|')[1:]) for r in shown[0].split(' rows=', 1)[1].split(' || '))
     g.check(rows.get('b2b2b2b2') == ['Repairing', 'fix · repair 1 of 2', '-', '-'],
             f'the repair attempt is Repairing with its counter: {rows}', ev)
     g.check(rows.get('a1a1a1a1') == ['Not loaded', 'fix · first attempt', 'Rejected by Claude Code', '-'],

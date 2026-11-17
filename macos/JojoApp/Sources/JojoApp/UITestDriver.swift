@@ -157,7 +157,7 @@ final class UITestDriver {
                                            attempts: AgentRunsState.attempts(in: w.rows), recovery: w.recovery,
                                            result: nil, log: [], commandPending: w.commandPending, repairs: w.repairs)
                 let rows = state.runs.map { "\($0.short)|\($0.pill.label)|\($0.line)|\($0.verdict?.text ?? "-")|\($0.repair?.hold ?? "-")" }
-                trace("repairs-state load=\(w.repairsLoad) rows=\(rows.joined(separator: ";"))")
+                trace("repairs-state load=\(w.repairsLoad) rows=\(rows.joined(separator: " || "))")
             case "sleep": break
             default:
                 trace("script-error unknown step \(current)")
