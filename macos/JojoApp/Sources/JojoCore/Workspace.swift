@@ -374,6 +374,8 @@ public final class WorkspaceModel {
     var comparisonKey = ""
     /// A note another screen prepared for Feature Chat's composer ("Request Changes").
     public var chatDraft: String?
+    /// The attempt another screen asked Agent Runs to show ("Inspect Attempt").
+    public var focusAttempt: String?
     /// Protocol 1.9: the newest decisions on documents (the Approval Inbox).
     public internal(set) var decisions: [DecisionSummary] = []
     public internal(set) var decisionsLoad = PlanLoad.idle

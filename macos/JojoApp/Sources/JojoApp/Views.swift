@@ -11,12 +11,13 @@ struct MainView: View {
     @State private var newFeatureProject: String?
     @State private var exportingTranscript = false
     @State private var specificationMode = SpecificationMode.document
+    @State private var chosenPlan: String?
 
     var body: some View {
         Themed {
             AppShell(model: model, screen: $screen, showInspector: { delegate.showAuxiliary() },
                      controls: controls,
-                     primary: screen == .dashboard ? AnyView(NewFeatureButton(newFeature: newFeature)) : nil,
+                     primary: primary,
                      heading: featureHeading ?? screenHeading) {
                 VStack(alignment: .leading, spacing: 8) {
                     QuitBanner(model: model).padding(EdgeInsets(top: 20, leading: 20, bottom: 0, trailing: 20))
@@ -31,17 +32,16 @@ struct MainView: View {
                         shown(.agentRuns) { AgentRunsScreen(model: model, visible: screen == .agentRuns, open: { screen = $0 }) }
                         shown(.approvalInbox) {
                             ApprovalInboxScreen(model: model, visible: screen == .approvalInbox, open: { screen = $0 },
-                                                compare: { document in
-                                                    specificationMode = .compare
-                                                    model.workspace.loadReview(document)
-                                                    screen = .specifications
-                                                })
+                                                compare: compare)
                         }
                         shown(.featureChat) {
                             FeatureChatScreen(model: model, visible: screen == .featureChat, project: $newFeatureProject,
                                               exporting: $exportingTranscript, open: { screen = $0 })
                         }
-                        shown(.executionPlan) { ExecutionPlanScreen(model: model, visible: screen == .executionPlan, open: { screen = $0 }) }
+                        shown(.executionPlan) {
+                            ExecutionPlanScreen(model: model, visible: screen == .executionPlan, chosenPlan: $chosenPlan,
+                                                open: { screen = $0 }, compare: compare)
+                        }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                         shown(.settings) { SettingsScreen(model: model, visible: screen == .settings) }
                         shown(.sourceControl) { SourceControlScreen(model: model, open: { screen = $0 }) }
@@ -118,6 +118,20 @@ struct MainView: View {
                                         HeaderButton(title: "Affected Tasks") { screen = .executionPlan }])
             })
         }
+        if screen == .executionPlan {
+            let state = planState
+            let workspace = model.workspace
+            return AnyView(HeaderButtons(buttons: [
+                HeaderButton(title: "Review Plan", disabled: state.plan == nil ? "No plan yet." : nil) {
+                    if let plan = state.plan { workspace.loadReview(plan.id) }
+                    screen = .approvalInbox
+                },
+                HeaderButton(title: "Approve Plan", disabled: state.approveBlocked) { workspace.decide(.Approve) },
+                HeaderButton(title: state.pauseTitle, disabled: state.pauseBlocked) {
+                    if let run = state.run { workspace.controlPlan(run.plan, run.state == "PAUSED" ? "Resume" : "Pause") }
+                },
+            ]))
+        }
         if screen == .approvalInbox {
             return AnyView(HeaderButtons(buttons: [HeaderButton(title: "Approval History") { screen = .activity }]))
         }
@@ -126,6 +140,37 @@ struct MainView: View {
             return AnyView(ChatHeaderActions(export: { exportingTranscript = true }))
         }
         return nil
+    }
+
+    /// The Dashboard's New Feature; Execution Plan's Start Eligible Tasks (RunPlan, or
+    /// Resume of a paused run).
+    private var primary: AnyView? {
+        if screen == .dashboard { return AnyView(NewFeatureButton(newFeature: newFeature)) }
+        if screen == .executionPlan {
+            let state = planState
+            let workspace = model.workspace
+            return AnyView(Button("Start Eligible Tasks · \(state.eligibleCount)") {
+                guard let plan = state.plan else { return }
+                if state.run?.state == "PAUSED" { workspace.controlPlan(plan.id, "Resume") } else { workspace.runPlan(plan.id) }
+            }
+            .buttonStyle(.jojo(.primary))
+            .disabled(state.runBlocked != nil)
+            .help(state.runBlocked ?? "Starts the plan's eligible steps up to the capacity."))
+        }
+        return nil
+    }
+
+    /// Opens Specifications comparing a document's two newest revisions.
+    private func compare(_ document: String) {
+        specificationMode = .compare
+        model.workspace.loadReview(document)
+        screen = .specifications
+    }
+
+    /// The Execution Plan header: Review Plan, Approve Plan, Pause Admission and the
+    /// primary Start Eligible Tasks.
+    private var planState: ExecutionPlanState {
+        ExecutionPlanScreen(model: model, visible: false, chosenPlan: $chosenPlan, open: { _ in }, compare: { _ in }).state
     }
 
     /// New Feature is Feature Chat holding no feature.
