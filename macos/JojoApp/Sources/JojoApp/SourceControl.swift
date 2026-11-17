@@ -1,24 +1,72 @@
 import JojoCore
 import SwiftUI
 
-// Source Control (docs/design/screens/SOURCE_CONTROL.md): the changed paths, the write scope
-// and the diff of the one attempt result the workspace holds. It has no load of its own.
+// Source Control (docs/design/screens/SOURCE_CONTROL.md), from `SourceControlMac.dc.html`:
+// the held feature's candidates by attempt, one candidate's branch facts, changed files,
+// status, scope banner and diff (unified or side by side), and in the inspector the scope
+// validation, external actions (M5) and CI. The loaded candidate is the one Verification &
+// Evidence shows (`loadCandidate`); protocol 1.9 (`AttemptDetail`) adds its head and the
+// patterns of its write scope.
 
-/// What the screen shows. Every field is the helper's answer; nothing is inferred here.
+/// Unified or Side by side.
+enum DiffLayout: String, CaseIterable, Identifiable, Sendable {
+    case unified = "Unified", sideBySide = "Side by side"
+    var id: String { rawValue }
+}
+
+/// One line of a file's diff with both line numbers.
+struct DiffRow: Equatable, Identifiable {
+    enum Kind: Equatable { case context, added, removed, hunk }
+    let id: Int
+    let kind: Kind
+    let old: Int?
+    let new: Int?
+    let text: String
+}
+
+/// One changed file's part of the diff.
+struct FileDiff: Equatable {
+    let path: String
+    let rows: [DiffRow]
+    var added: Int { rows.filter { $0.kind == .added }.count }
+    var removed: Int { rows.filter { $0.kind == .removed }.count }
+
+    /// "+48 −6"; nil without a counted line.
+    var counts: String? {
+        let parts = [added > 0 ? "+\(added)" : nil, removed > 0 ? "−\(removed)" : nil].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+}
+
+/// What the screen shows. Every value is the helper's answer.
 struct SourceControlState: Equatable {
-    /// The loaded attempt result, the one Verification & Evidence shows.
-    var loaded: VerificationState
-    /// The base the changed paths were compared with; empty until they arrive.
-    var base: String
+    var connection: HelperConnection
+    var scope = FeatureScope()
+    /// The held feature's attempts that have a candidate (1.7), newest first.
+    var candidates: [AttemptSummary] = []
+    /// The loaded attempt's result, changed files, diff and the base they were compared with.
+    var result: CandidateReview?
+    var files: [ChangedFile] = []
+    var diff = ""
+    var base = ""
+    var verdict = ValidationVerdict.notRun
+    /// Protocol 1.9: the loaded attempt beyond `Attempts`.
+    var detail: AttemptDetail?
+    var layout = DiffLayout.unified
+    /// The chosen file; nil shows the first.
+    var chosenFile: String?
+    var reportsDetail = true
+
+    var link: RecoveryCenterState.Link { coreLink(connection) }
 
     /// The badge of a kind of change, from the core's word.
-    static func change(_ kind: String) -> (letter: String, tone: Tone, name: String) {
+    static func change(_ kind: String) -> (letter: String, color: RGBA, name: String) {
         switch kind {
-        case "Added": return ("A", .ok, "Added")
-        case "Modified": return ("M", .warn, "Modified")
-        case "Deleted": return ("D", .danger, "Deleted")
-        case "TypeChanged": return ("T", .warn, "Type changed")
-        default: return ("?", .neutral, kind)
+        case "Added": return ("A", Palette.green, "Added")
+        case "Modified": return ("M", RGBA(0xFF9F0A), "Modified")
+        case "Deleted": return ("D", Palette.red, "Deleted")
+        case "TypeChanged": return ("T", RGBA(0xFF9F0A), "Type changed")
+        default: return ("?", Palette.gray, kind)
         }
     }
 
@@ -28,413 +76,381 @@ struct SourceControlState: Equatable {
         return (String(path[path.index(after: slash)...]), String(path[..<slash]))
     }
 
-    static func short(_ identity: String) -> String {
-        String(identity.prefix(12))
-    }
-
-    /// One file's part of the diff, from its "diff --git" line to the next.
-    struct Section: Equatable {
-        /// The changed path the header names; `nil` when it names none of them.
-        let path: String?
-        let lines: [DiffLine]
-
-        var added: Int { lines.filter { $0.kind == .added }.count }
-        var removed: Int { lines.filter { $0.kind == .removed }.count }
-
-        /// "+48 −6"; `nil` when the section has no counted line.
-        var counts: String? {
-            let parts = [added > 0 ? "+\(added)" : nil, removed > 0 ? "−\(removed)" : nil].compactMap { $0 }
-            return parts.isEmpty ? nil : parts.joined(separator: " ")
+    /// The scope the core gave a path, in words.
+    static func scope(_ file: ChangedFile) -> (label: String, ok: Bool?) {
+        switch file.scope {
+        case "ALLOWED": return ("In scope", true)
+        case "OUT_OF_SCOPE": return ("Out of scope", false)
+        case "BASELINE": return ("Protected baseline", false)
+        default: return ("Unknown", nil)
         }
-    }
-
-    static func sections(of lines: [DiffLine], paths: [String]) -> [Section] {
-        let headers = Dictionary(paths.map { ("diff --git a/\($0) b/\($0)", $0) }, uniquingKeysWith: { first, _ in first })
-        var sections: [Section] = []
-        var (path, current): (String?, [DiffLine]) = (nil, [])
-        for line in lines {
-            if line.kind == .header, line.text.hasPrefix("diff --git ") {
-                if !current.isEmpty { sections.append(Section(path: path, lines: current)) }
-                (path, current) = (headers[line.text], [])
-            }
-            current.append(line)
-        }
-        if !current.isEmpty { sections.append(Section(path: path, lines: current)) }
-        return sections
-    }
-
-    var sections: [Section] {
-        Self.sections(of: DiffLine.parse(loaded.diff), paths: loaded.changedFiles.map(\.path))
     }
 
     /// The changed paths the core put outside the write scope or in the protected baseline.
     static func violations(in files: [ChangedFile]) -> [ChangedFile] {
-        files.filter { VerificationState.scope($0).state == .failed }
+        files.filter { scope($0).ok == false }
     }
 
-    var violations: [ChangedFile] { Self.violations(in: loaded.changedFiles) }
+    var violations: [ChangedFile] { Self.violations(in: files) }
 
-    /// The write scope in the status strip: the core's verdict, with the number of violations.
-    var scopePill: (state: EvidenceState, label: String?) {
-        switch loaded.scope {
-        case .pass: return (.passed, "In scope")
-        case .fail:
-            let count = violations.count
-            return (.failed, count == 0 ? nil : count == 1 ? "1 violation" : "\(count) violations")
-        case .unknown: return (.unknown, nil)
-        case .notRun: return (.notRun, nil)
-        }
-    }
-
-    struct Notice: Equatable {
-        /// Danger for a failed scope, warning for an unknown one.
-        let danger: Bool
-        let title: String
-        let message: String
-        /// The path "View Scope Violations" chooses.
-        var first: String?
-    }
-
-    /// The banner under the status strip: a failed or an unknown write scope.
-    var scopeNotice: Notice? {
-        switch loaded.scope {
-        case .fail:
-            let paths = violations.map(\.path)
-            let verdict = "The core's verdict on the write scope is Failed."
-            guard let first = paths.first else {
-                return Notice(danger: true, title: "The write scope check failed", message: "No listed path is marked. " + verdict)
+    /// The diff split by file, with both line numbers read from the hunk headers.
+    static func fileDiffs(_ diff: String, paths: [String]) -> [FileDiff] {
+        var out: [FileDiff] = []
+        var path: String?
+        var rows: [DiffRow] = []
+        var (old, new) = (0, 0)
+        func flush() { if let path { out.append(FileDiff(path: path, rows: rows)) } }
+        for line in diff.components(separatedBy: "\n") {
+            if line.hasPrefix("diff --git ") {
+                flush()
+                path = paths.first { line == "diff --git a/\($0) b/\($0)" } ?? line.components(separatedBy: " b/").last
+                rows = []
+                continue
             }
-            let named = paths.prefix(3).joined(separator: ", ") + (paths.count > 3 ? " and \(paths.count - 3) more" : "")
-            return Notice(danger: true,
-                          title: paths.count == 1 ? "1 change is outside the approved scope"
-                              : "\(paths.count) changes are outside the approved scope",
-                          message: "\(named). \(verdict) There is no command to revert a path.", first: first)
-        case .unknown where loaded.candidate?.candidate != nil:
-            let reason = loaded.scopeDetail.isEmpty ? "" : " (\(loaded.scopeDetail))"
-            return Notice(danger: false, title: "The write scope is unknown",
-                          message: "The core gave no verdict\(reason). Unknown is never shown as in scope.")
-        case .pass, .unknown, .notRun:
-            return nil
+            guard path != nil else { continue }
+            if line.hasPrefix("@@") {
+                let numbers = line.split(separator: " ").dropFirst().prefix(2).map { part in
+                    Int(part.dropFirst().split(separator: ",").first ?? "") ?? 0
+                }
+                (old, new) = (numbers.first ?? 0, numbers.dropFirst().first ?? 0)
+                rows.append(DiffRow(id: rows.count, kind: .hunk, old: nil, new: nil, text: line))
+            } else if line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("index ") || line.hasPrefix("new file")
+                        || line.hasPrefix("deleted file") || line.hasPrefix("similarity") || line.hasPrefix("rename") {
+                continue
+            } else if line.hasPrefix("+") {
+                rows.append(DiffRow(id: rows.count, kind: .added, old: nil, new: new, text: String(line.dropFirst())))
+                new += 1
+            } else if line.hasPrefix("-") {
+                rows.append(DiffRow(id: rows.count, kind: .removed, old: old, new: nil, text: String(line.dropFirst())))
+                old += 1
+            } else if line.hasPrefix(" ") {
+                rows.append(DiffRow(id: rows.count, kind: .context, old: old, new: new, text: String(line.dropFirst())))
+                old += 1
+                new += 1
+            }
         }
+        flush()
+        return out
     }
 
-    struct ScopeFact: Identifiable, Equatable {
-        let name: String
-        var note: String?
-        let state: EvidenceState
-        var label: String?
-        var id: String { name }
+    var diffs: [FileDiff] { Self.fileDiffs(diff, paths: files.map(\.path)) }
+
+    var chosen: FileDiff? {
+        let all = diffs
+        return all.first { $0.path == chosenFile } ?? all.first
     }
 
-    /// The lines of the "Scope validation" card.
-    var scopeFacts: [ScopeFact] {
-        let files = loaded.changedFiles
-        var facts = [ScopeFact(name: "Write scope", note: loaded.scopeDetail.isEmpty ? nil : loaded.scopeDetail,
-                               state: VerificationState.evidence(loaded.scope))]
-        guard !files.isEmpty else { return facts }
-        func count(_ scope: String) -> Int { files.filter { VerificationState.scope($0).label == scope }.count }
-        let (inside, outside, baseline, unknown) = (count("In scope"), count("Out of scope"), count("Protected baseline"), count("Unknown"))
-        facts.append(ScopeFact(name: "Paths inside scope", state: inside > 0 ? .passed : .notRun, label: "\(inside) of \(files.count)"))
-        facts.append(ScopeFact(name: "Outside the approved scope", state: outside > 0 ? .failed : .notRun,
-                               label: outside > 0 ? "\(outside)" : "None"))
-        if baseline > 0 { facts.append(ScopeFact(name: "Protected baseline", state: .failed, label: "\(baseline)")) }
-        if unknown > 0 { facts.append(ScopeFact(name: "Scope unknown", state: .unknown, label: "\(unknown)")) }
-        return facts
+    /// The loaded attempt's summary, when the core lists it.
+    var attempt: AttemptSummary? { candidates.first { $0.id == result?.attempt } }
+
+    /// "api · Attempt 1": where the candidate came from.
+    var from: String {
+        let key = detail?.key ?? attempt?.key ?? "Attempt"
+        let ordinal = detail?.ordinal ?? attempt?.ordinal
+        let running = attempt?.live == true ? " (running)" : ""
+        return "\(key) · Attempt \(ordinal ?? 1)\(running)"
     }
 
-    /// The two ends of the diff, shortened: "9c1e4b2a71f0 → c4c4c4c4c4c4".
-    var ends: String {
-        guard !base.isEmpty, let candidate = loaded.candidate?.candidate else { return "base → sealed candidate" }
-        return "\(Self.short(base)) → \(Self.short(candidate))"
+    /// The header's last part: the task the candidate belongs to.
+    static func placeTail(_ detail: AttemptDetail?) -> String? { detail?.key }
+
+    /// Local review, scope, push, pull request and location, as the board's Status card.
+    var status: [Definition] {
+        let violated = violations.count
+        let scope: (String, Tone) = switch verdict {
+        case .pass: ("In scope", .ok)
+        case .fail: (violated == 1 ? "1 violation" : "\(violated) violations", .danger)
+        case .unknown: ("Unknown", .neutral)
+        case .notRun: ("Not checked", .neutral)
+        }
+        let decision = result?.decision ?? "NONE"
+        let review: (String, Tone) = decision == "ACCEPTED" ? ("Accepted", .ok) : decision == "REJECTED" ? ("Rejected", .danger) : ("Not decided", .warn)
+        return [
+            Definition(key: "Decision", value: "", pill: review),
+            Definition(key: "Scope", value: "", pill: scope),
+            Definition(key: "Push", value: "Not available yet (M5)"),
+            Definition(key: "Pull request", value: "Not available yet (M5)"),
+            Definition(key: "Location", value: "Local candidate only"),
+        ]
     }
+
+    /// The patterns of the approved scope, from the step's validation plan (1.9).
+    var patterns: [String] { detail?.writeScope ?? [] }
+}
+
+struct SourceControlActions {
+    var open: (Screen) -> Void = { _ in }
+    var choose: (String) -> Void = { _ in }
+    var chooseFile: (String) -> Void = { _ in }
 }
 
 struct SourceControlScreen: View {
     @ObservedObject var model: AppModel
+    let visible: Bool
+    @Binding var layout: DiffLayout
     let open: (Screen) -> Void
+    @State private var chosenFile: String?
 
     var body: some View {
+        SourceControlView(state: state, actions: SourceControlActions(
+            open: open,
+            choose: { attempt in chosenFile = nil; model.workspace.loadCandidate(attempt) },
+            chooseFile: { chosenFile = $0 }))
+            .onAppear { if visible { read() } }
+            .onChange(of: visible) { if visible { read() } }
+            .onChange(of: model.workspace.snapshotSeq) { if visible { read() } }
+            .onChange(of: model.workspace.candidate?.attempt) { chosenFile = nil; if visible { read() } }
+    }
+
+    private var state: SourceControlState {
         let workspace = model.workspace
-        SourceControlView(
-            state: SourceControlState(
-                loaded: VerificationState(connection: model.client.connection, admission: workspace.admission,
-                                          candidate: workspace.candidate, changedFiles: workspace.changedFiles,
-                                          scope: workspace.scope, scopeDetail: workspace.scopeDetail, diff: workspace.diff,
-                                          log: workspace.agentLog, report: workspace.validationReport,
-                                          commandPending: workspace.commandPending),
-                base: workspace.candidateBase),
-            open: open)
+        let scope = FeatureScope(workspace: workspace)
+        let detail = workspace.attemptDetail?.id == workspace.candidate?.attempt ? workspace.attemptDetail : nil
+        return SourceControlState(
+            connection: model.client.connection, scope: scope,
+            candidates: (workspace.attempts?.attempts ?? []).filter { $0.validation != nil && scope.holds($0.feature) },
+            result: workspace.candidate, files: workspace.changedFiles, diff: workspace.diff, base: workspace.candidateBase,
+            verdict: workspace.scope, detail: detail, layout: layout, chosenFile: chosenFile,
+            reportsDetail: model.client.hello.map { $0.queries.contains("AttemptDetail") } ?? true)
+    }
+
+    /// The candidates; the newest is loaded when none is.
+    private func read() {
+        let workspace = model.workspace
+        workspace.loadFeatures()
+        workspace.loadAttempts()
+        if workspace.candidate == nil, let newest = state.candidates.first { workspace.loadCandidate(newest.id) }
+        if let attempt = workspace.candidate?.attempt { workspace.loadAttemptDetail(attempt) }
     }
 }
 
 struct SourceControlView: View {
     @Environment(\.theme) private var theme
     let state: SourceControlState
-    var open: (Screen) -> Void = { _ in }
-    /// The changed path whose section of the diff is shown; `nil` shows the whole diff.
-    @State private var selected: String?
-    @State private var expanded: Bool
-
-    init(state: SourceControlState, open: @escaping (Screen) -> Void = { _ in }, selected: String? = nil, expanded: Bool = false) {
-        self.state = state
-        self.open = open
-        _selected = State(initialValue: selected)
-        _expanded = State(initialValue: expanded)
-    }
+    var actions = SourceControlActions()
 
     var body: some View {
-        GeometryReader { geometry in
-            // The main column keeps at least 460 beside each panel.
-            let columns = geometry.size.width >= 1020 ? 3 : geometry.size.width >= 710 ? 2 : 1
-            let sections = state.sections
-            HStack(spacing: 0) {
-                if columns > 1, let c = state.loaded.candidate {
-                    panel(edge: .trailing, width: 250) { leading(c, sections) }
-                }
-                Scrolling {
-                    VStack(alignment: .leading, spacing: 12) {
-                        banners
-                        if let c = state.loaded.candidate {
-                            if columns == 1 { Card(.panelList) { leading(c, sections) } }
-                            strip(c)
-                            scopeBanner
-                            diff(sections)
-                            if columns < 3 { trailing(c).padding(.top, 6) }
-                        } else {
-                            placeholder.frame(minHeight: 260)
-                        }
-                    }
-                    .padding(EdgeInsets(top: 14, leading: 18, bottom: 18, trailing: 18))
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                if columns == 3, let c = state.loaded.candidate {
-                    panel(edge: .leading, width: 310) { trailing(c).padding(14) }
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
+                CoreBanners(connection: state.connection, missing: state.reportsDetail ? nil : ("AttemptDetail", "candidate heads"))
+                LifecycleCard(summary: state.scope.summary)
+            }
+            .padding(.horizontal, 10)
+            InspectorColumns(trailingWidth: 320, wide: 900) {
+                main
+            } trailing: {
+                inspector
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        // A choice belongs to the attempt it was made in.
-        .onChange(of: state.loaded.candidate?.attempt) { _, _ in
-            (selected, expanded) = (nil, false)
-        }
-    }
-
-    private func panel(edge: Alignment, width: CGFloat, @ViewBuilder _ content: @escaping () -> some View) -> some View {
-        Scrolling(content: content)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(theme.sidebar)
-            .overlay(alignment: edge) { Rectangle().fill(theme.sidebarEdge).frame(width: 1) }
-            .frame(width: width)
-    }
-
-    @ViewBuilder
-    private var banners: some View {
-        switch state.loaded.link {
-        case .lost:
-            Banner(.danger, title: "Jojo core isn't responding",
-                   message: "Showing the last known state, read-only. No actions can be requested.")
-        case .incompatible:
-            Banner(.danger, title: "Jojo core speaks another protocol version",
-                   message: "Read-only. No actions can be requested.")
-        case .connected, .starting:
-            EmptyView()
-        }
-        if state.loaded.admissionClosed {
-            Banner(.danger, title: "Execution admission is closed",
-                   message: "No new attempt starts until you review the inspection.") {
-                Button("Open Recovery Center") { open(.recoveryCenter) }.buttonStyle(.jojo(.secondary, compact: true))
-            }
-        }
-    }
-
-    private var placeholder: some View {
-        StateBlock(symbol: "arrow.triangle.branch", title: "No attempt loaded",
-                   message: "Source Control shows the changed paths, the write scope and the diff of the loaded attempt. Choose one in Agent Runs and use Load Result, or load it by its identity in Verification & Evidence.") {
-            Button("Open Agent Runs") { open(.agentRuns) }.buttonStyle(.jojo(.secondary, compact: true))
-            Button("Open Verification & Evidence") { open(.verification) }.buttonStyle(.jojo(.secondary, compact: true))
-        }
-    }
-
-    // MARK: Leading panel
-
-    private func leading(_ c: CandidateReview, _ sections: [SourceControlState.Section]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                LabeledField("Branch") { fact(nil, missing: "Not reported") }
-                HStack(alignment: .top, spacing: 14) {
-                    LabeledField("Base") { fact(state.base.isEmpty ? nil : state.base, missing: "Not loaded") }
-                    LabeledField("Candidate") { fact(c.candidate, missing: "None") }
-                }
-                LabeledField("From") {
-                    Button("Attempt \(SourceControlState.short(c.attempt))") { open(.agentRuns) }
-                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(theme.icon)
-                        .help("Attempt \(c.attempt). Opens Agent Runs.")
-                }
-                SectionHeading("Changed files · \(state.loaded.changedFiles.count)").padding(.top, 4)
-            }
-            .padding(EdgeInsets(top: 12, leading: 14, bottom: 8, trailing: 14))
-            files(sections)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// An identity shortened to twelve characters, or the words that say why there is none.
-    @ViewBuilder
-    private func fact(_ identity: String?, missing: String) -> some View {
-        if let identity {
-            Text(SourceControlState.short(identity)).textStyle(.mono).foregroundStyle(theme.text).help(identity)
-        } else {
-            Text(missing).textStyle(.meta).foregroundStyle(theme.text3)
-        }
-    }
-
-    @ViewBuilder
-    private func files(_ sections: [SourceControlState.Section]) -> some View {
-        if state.loaded.changedFiles.isEmpty {
-            Text(state.loaded.noFiles).textStyle(.secondary).foregroundStyle(theme.text3)
-                .padding(.horizontal, 14)
-                .padding(.bottom, 12)
-        } else {
-            VStack(spacing: 2) {
-                ForEach(state.loaded.changedFiles) { file in
-                    Button { selected = selected == file.path ? nil : file.path } label: {
-                        row(file, sections.first { $0.path == file.path })
-                    }
-                    .buttonStyle(.plain)
-                    .help(file.path)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 12)
-        }
-    }
-
-    private func row(_ file: ChangedFile, _ section: SourceControlState.Section?) -> some View {
-        let (name, directory) = SourceControlState.split(file.path)
-        let change = SourceControlState.change(file.kind)
-        let scope = VerificationState.scope(file)
-        return ChangedFileRow(name: name, directory: directory,
-                              badge: ChangeBadge(change.letter, tone: change.tone, name: change.name),
-                              counts: section?.counts, scope: scope.state == .passed ? nil : scope,
-                              flagged: scope.state == .failed, selected: selected == file.path)
+        .padding(.top, 6)
     }
 
     // MARK: Main column
 
-    private func strip(_ c: CandidateReview) -> some View {
-        let scope = state.scopePill
-        return Card(CardShape(radius: 10, vertical: 10, horizontal: 14)) {
-            HStack(alignment: .top, spacing: 26) {
-                WrappingRow(spacing: 26, lineSpacing: 10) {
-                    LabeledField("Decision") {
-                        Text(VerificationState.decision(c)).textStyle(.control).foregroundStyle(theme.text)
-                    }
-                    LabeledField("Write scope") { EvidencePill(scope.state, label: scope.label) }
-                    LabeledField("Host validation") { EvidencePill(VerificationState.evidence(c.validation)) }
+    @ViewBuilder
+    private var main: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                if !state.candidates.isEmpty {
+                    ChoiceCapsule(options: state.candidates.prefix(6).map { a in
+                        (a.id, "\(a.repositoryName ?? "repository") · \(a.key ?? "step") #\(a.ordinal ?? 1)")
+                    }, selection: state.result?.attempt, label: "Repository") { actions.choose($0) }
                 }
                 Spacer(minLength: 0)
-                LabeledField("Location") {
-                    HStack(spacing: 6) {
-                        Image(systemName: "internaldrive").font(.system(size: 11)).foregroundStyle(theme.text3)
-                        Text("Local candidate").textStyle(.control).foregroundStyle(theme.text)
+            }
+            if let result = state.result {
+                FactStrip(facts: [
+                    ("Branch", "Not reported", false),
+                    ("Base", state.detail?.base.map { String($0.prefix(7)) } ?? (state.base.isEmpty ? "Not reported" : String(state.base.prefix(7))), true),
+                    ("Candidate", state.detail?.candidateHead.map { String($0.prefix(7)) } ?? result.candidate.map { String($0.prefix(7)) } ?? "None", true),
+                    ("From", state.from, false),
+                ])
+                FlowRow(spacing: 14) {
+                    files.frame(minWidth: 300, maxWidth: .infinity)
+                    LabeledSection(title: "Status") { DefinitionCard(rows: state.status, keyWidth: 96) }
+                        .frame(minWidth: 240, maxWidth: 320)
+                }
+                if !state.violations.isEmpty {
+                    let first = state.violations[0]
+                    TintedNotice(tone: .warn,
+                                 title: state.violations.count == 1 ? "1 change is outside the approved scope"
+                                     : "\(state.violations.count) changes are outside the approved scope",
+                                 message: "\(first.path) was changed by \(state.from). Review it before accepting the candidate.") {
+                        Button("View Scope Violations") { actions.chooseFile(first.path) }.buttonStyle(.jojo(.secondary, compact: true))
+                        Button("Revert file") {}.buttonStyle(.jojo(.ghost, compact: true)).disabled(true)
+                            .help("Not available yet: the core has no command to revert a path.")
                     }
                 }
+                diffCard
+            } else {
+                Placeholder(symbol: "arrow.triangle.branch", tile: Palette.blue, title: "No candidate loaded",
+                            message: "A candidate appears here when an attempt of a plan step seals one.") {
+                    Button("Open Agent Runs") { actions.open(.agentRuns) }.buttonStyle(.jojo(.secondary, compact: true))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(24)
+                .cardElevation(radius: 18)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var files: some View {
+        LabeledSection(title: "Changed files · \(state.files.count)") {
+            VStack(spacing: 0) {
+                if state.files.isEmpty { NotReported("No changed paths.").padding(12) }
+                ForEach(Array(state.files.enumerated()), id: \.offset) { index, file in
+                    let change = SourceControlState.change(file.kind)
+                    let split = SourceControlState.split(file.path)
+                    let counts = state.diffs.first { $0.path == file.path }?.counts
+                    Button { actions.chooseFile(file.path) } label: {
+                        HStack(spacing: 10) {
+                            Text(change.letter).font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(change.color.color).frame(width: 18)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(split.name).textStyle(.bodyStrong).lineLimit(1)
+                                Text(split.directory).font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.text3).lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            if let counts { Text(counts).font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.text2) }
+                            if SourceControlState.scope(file).ok == false {
+                                OperationalPill(SourceControlState.scope(file).label, tone: .danger)
+                            }
+                        }
+                        .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                        .background(state.chosen?.path == file.path ? theme.accentTint : .clear)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .top) { if index > 0 { Rectangle().fill(theme.sep).frame(height: 0.5) } }
+                }
+            }
+            .cardElevation(radius: 14)
         }
     }
 
     @ViewBuilder
-    private var scopeBanner: some View {
-        if let notice = state.scopeNotice {
-            if let first = notice.first {
-                Banner(.danger, title: notice.title, message: notice.message) {
-                    Button("View Scope Violations") { selected = first }.buttonStyle(.jojo(.secondary, compact: true))
-                        .help("Shows the diff of the first path outside the scope.")
+    private var diffCard: some View {
+        if let file = state.chosen {
+            let head = state.detail?.candidateHead.map { String($0.prefix(7)) } ?? "candidate"
+            let base = String((state.detail?.base ?? state.base).prefix(7))
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    Text(file.path).font(.system(size: 12, weight: .semibold, design: .monospaced)).lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("\(base) → \(head)").textStyle(.mono).foregroundStyle(theme.text2)
                 }
-            } else {
-                Banner(notice.danger ? .danger : .warning, title: notice.title, message: notice.message)
+                .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                Rectangle().fill(theme.sep).frame(height: 0.5)
+                if state.layout == .unified { unified(file) } else { sideBySide(file) }
+            }
+            .cardElevation(radius: 14)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        } else if !state.files.isEmpty {
+            NotReported(state.diff.isEmpty ? "Reading the diff…" : "The diff names none of the changed paths.")
+        }
+    }
+
+    private static let lineLimit = 400
+
+    private func unified(_ file: FileDiff) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(file.rows.prefix(Self.lineLimit)) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    number(row.old).frame(width: 36, alignment: .trailing)
+                    number(row.new).frame(width: 36, alignment: .trailing)
+                    Text(row.kind == .added ? "+" : row.kind == .removed ? "-" : " ").frame(width: 12)
+                    Text(row.text).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(row.kind == .hunk ? theme.text3 : theme.text)
+                .padding(EdgeInsets(top: 1, leading: 10, bottom: 1, trailing: 10))
+                .background(tint(row.kind))
+            }
+            if file.rows.count > Self.lineLimit { NoteLine("\(file.rows.count - Self.lineLimit) more lines are not drawn.").padding(10) }
+        }
+        .padding(.vertical, 6)
+        .textSelection(.enabled)
+    }
+
+    private func sideBySide(_ file: FileDiff) -> some View {
+        let rows = Array(file.rows.prefix(Self.lineLimit))
+        return HStack(alignment: .top, spacing: 0) {
+            column(rows.filter { $0.kind != .added }, number: \.old)
+            Rectangle().fill(theme.sep).frame(width: 0.5)
+            column(rows.filter { $0.kind != .removed }, number: \.new)
+        }
+        .padding(.vertical, 6)
+        .textSelection(.enabled)
+    }
+
+    private func column(_ rows: [DiffRow], number path: KeyPath<DiffRow, Int?>) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(rows) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    number(row[keyPath: path]).frame(width: 30, alignment: .trailing)
+                    Text(row.text).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(row.kind == .hunk ? theme.text3 : theme.text)
+                .padding(EdgeInsets(top: 1, leading: 10, bottom: 1, trailing: 10))
+                .background(tint(row.kind))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func number(_ n: Int?) -> some View {
+        Text(n.map(String.init) ?? "").foregroundStyle(theme.text3)
+    }
+
+    private func tint(_ kind: DiffRow.Kind) -> Color {
+        switch kind {
+        case .added: return theme.greenBg
+        case .removed: return theme.redBg
+        default: return .clear
+        }
+    }
+
+    // MARK: Inspector
+
+    private var inspector: some View {
+        GlassInspector {
+            LabeledSection(title: "Scope validation") {
+                let inside = state.files.filter { SourceControlState.scope($0).ok == true }.count
+                DefinitionCard(rows: [
+                    Definition(key: "Approved scope", value: state.patterns.isEmpty ? "Not reported"
+                               : "\(state.patterns.count) \(state.patterns.count == 1 ? "path" : "paths")\n" + state.patterns.joined(separator: "\n"),
+                               mono: !state.patterns.isEmpty),
+                    Definition(key: "Inside scope", value: "\(inside) of \(state.files.count)"),
+                    Definition(key: "Unexpected", value: "\(state.violations.count)"),
+                ], keyWidth: 100)
+            }
+            LabeledSection(title: "External actions") {
+                actionCard(title: "Push \(state.detail?.key ?? "candidate") @ \(state.detail?.candidateHead.map { String($0.prefix(7)) } ?? "—")",
+                           button: "Authorize Push…", note: "Not available yet: push arrives with M5.")
+                actionCard(title: "Draft pull request", button: "Create Draft PR…",
+                           note: "Not available yet. A separate authorization from push; it requires a confirmed push.")
+                Text("Each external action is authorized on its own, for an exact ref and commit, and recorded with an idempotency key.")
+                    .font(.system(size: 11)).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
+            }
+            LabeledSection(title: "CI") {
+                DefinitionCard(rows: [Definition(key: "Candidate", value: "", pill: ("Not pushed", .neutral)),
+                                      Definition(key: "Pipelines", value: "Not reported")], keyWidth: 100)
             }
         }
     }
 
-    private func diff(_ sections: [SourceControlState.Section]) -> some View {
-        // A choice that is no longer among the changed paths shows the whole diff.
-        let path = selected.flatMap { choice in state.loaded.changedFiles.contains { $0.path == choice } ? choice : nil }
-        let lines = path.map { choice in sections.first { $0.path == choice }?.lines ?? [] } ?? sections.flatMap(\.lines)
-        let limit = VerificationState.lineLimit
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                if let path {
-                    Text(path).font(.system(size: 12, design: .monospaced)).foregroundStyle(theme.text)
-                        .lineLimit(1).truncationMode(.head).textSelection(.enabled)
-                } else {
-                    Text("All changed files").textStyle(.secondary).fontWeight(.semibold).foregroundStyle(theme.text2)
-                }
-                Spacer(minLength: 8)
-                Text(state.ends).textStyle(.mono).foregroundStyle(theme.text3).lineLimit(1)
-                    .help("From the base to the sealed candidate.")
-                if path != nil {
-                    Button("Show All Files") { selected = nil }.buttonStyle(.jojo(.ghost, compact: true))
-                }
-                if lines.count > limit, !expanded {
-                    Button("Show All \(lines.count) Lines") { expanded = true }.buttonStyle(.jojo(.ghost, compact: true))
-                        .help("The first \(limit) lines are drawn.")
-                }
+    private func actionCard(title: String, button: String, note: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(title).textStyle(.bodyStrong).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                OperationalPill("Not performed", tone: .neutral)
             }
-            .frame(minHeight: 22)
-            if lines.isEmpty {
-                Card(.panelList) {
-                    Text(path == nil ? "No diff loaded." : "The loaded diff has no section for this path.")
-                        .textStyle(.secondary).foregroundStyle(theme.text3)
-                        .padding(.vertical, 10)
-                        .padding(.horizontal, 14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } else {
-                DiffView(expanded ? lines : Array(lines.prefix(limit)))
-            }
+            Button(button) {}.buttonStyle(.jojo(.secondary, compact: true)).disabled(true).help(note)
+            Text(note).textStyle(.secondary).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    // MARK: Trailing panel
-
-    private func trailing(_ c: CandidateReview) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Scope validation")
-                Card(.panelList) {
-                    Rows(state.scopeFacts) { fact in
-                        EvidenceRow(fact.name, note: fact.note, state: fact.state, label: fact.label)
-                    }
-                }
-                Footnote("The patterns of the approved scope are not reported; the core gives one verdict for the candidate and a scope for each path. There is no command to revert a path or to widen the scope.")
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Review")
-                Card(.panel) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Validation, accept and reject are on Verification & Evidence.")
-                            .textStyle(.body).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
-                        FactGrid {
-                            Fact("Validation") { EvidencePill(VerificationState.evidence(c.validation)) }
-                            Fact("Decision", VerificationState.decision(c))
-                        }
-                        Button("Open Verification & Evidence") { open(.verification) }.buttonStyle(.jojo(.secondary))
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("External actions")
-                Card(.panel) {
-                    Text("Jojo has not pushed or published this candidate. The core has no push or pull request command yet.")
-                        .textStyle(.body).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                Footnote("Not reported: the branch and commit of the candidate, external actions and their outcomes, pull requests and CI results.")
-            }
-        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardElevation(radius: 12)
     }
 }

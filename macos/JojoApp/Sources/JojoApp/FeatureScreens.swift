@@ -406,3 +406,29 @@ struct CoreBanners: View {
         }
     }
 }
+
+/// The main column and the inspector beside it from `wide`, below it under that.
+struct InspectorColumns<Main: View, Trailing: View>: View {
+    var trailingWidth: CGFloat = 320
+    var wide: CGFloat = 900
+    @ViewBuilder var main: Main
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        GeometryReader { geometry in
+            Scrolling {
+                Group {
+                    if geometry.size.width >= wide {
+                        HStack(alignment: .top, spacing: 14) {
+                            main.frame(maxWidth: .infinity)
+                            trailing.frame(width: trailingWidth)
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 14) { main; trailing }
+                    }
+                }
+                .padding(EdgeInsets(top: 4, leading: 10, bottom: 14, trailing: 12))
+            }
+        }
+    }
+}

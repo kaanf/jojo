@@ -13,6 +13,7 @@ struct MainView: View {
     @State private var specificationMode = SpecificationMode.document
     @State private var chosenPlan: String?
     @State private var attemptTab = AttemptTab.timeline
+    @State private var diffLayout = DiffLayout.unified
 
     var body: some View {
         Themed {
@@ -47,7 +48,10 @@ struct MainView: View {
                         }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                         shown(.settings) { SettingsScreen(model: model, visible: screen == .settings) }
-                        shown(.sourceControl) { SourceControlScreen(model: model, open: { screen = $0 }) }
+                        shown(.sourceControl) {
+                            SourceControlScreen(model: model, visible: screen == .sourceControl, layout: $diffLayout,
+                                                open: { screen = $0 })
+                        }
                         shown(.specifications) {
                             SpecificationsScreen(model: model, visible: screen == .specifications, mode: $specificationMode,
                                                  open: { screen = $0 })
@@ -105,7 +109,7 @@ struct MainView: View {
         case .agentRuns:
             return (screen.title, scope.place("attempts"))
         case .sourceControl:
-            return (screen.title, scope.place(workspace.attemptDetail?.key))
+            return (screen.title, scope.place(SourceControlState.placeTail(workspace.attemptDetail)))
         default:
             return nil
         }
@@ -140,6 +144,15 @@ struct MainView: View {
                 HeaderButtons(buttons: [HeaderButton(title: "View Logs") { attemptTab = .logs },
                                         HeaderButton(title: "Inspect Attempt") { attemptTab = .timeline }])
                 Button("Inspect Recovery") { screen = .recoveryCenter }.buttonStyle(.jojo(.secondary))
+            })
+        }
+        if screen == .sourceControl {
+            return AnyView(HStack(spacing: 10) {
+                SegmentedCapsule(selection: $diffLayout, label: "Diff layout")
+                HeaderButtons(buttons: [
+                    HeaderButton(title: "Review Changes") { screen = .verification },
+                    HeaderButton(title: "Inspect CI", disabled: "Not available yet: CI is not reported."),
+                ])
             })
         }
         if screen == .approvalInbox {
