@@ -14,6 +14,7 @@ struct MainView: View {
     @State private var chosenPlan: String?
     @State private var attemptTab = AttemptTab.timeline
     @State private var diffLayout = DiffLayout.unified
+    @State private var exportingEvidence = false
 
     var body: some View {
         Themed {
@@ -56,7 +57,10 @@ struct MainView: View {
                             SpecificationsScreen(model: model, visible: screen == .specifications, mode: $specificationMode,
                                                  open: { screen = $0 })
                         }
-                        shown(.verification) { VerificationScreen(model: model, open: { screen = $0 }) }
+                        shown(.verification) {
+                            VerificationScreen(model: model, visible: screen == .verification, exporting: $exportingEvidence,
+                                               open: { screen = $0 })
+                        }
                         shown(.projects) { ProjectsScreen(model: model, visible: screen == .projects) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -154,6 +158,19 @@ struct MainView: View {
                     HeaderButton(title: "Inspect CI", disabled: "Not available yet: CI is not reported."),
                 ])
             })
+        }
+        if screen == .verification {
+            return AnyView(HeaderButtons(buttons: [
+                HeaderButton(title: "Inspect Failure", disabled: model.workspace.candidate?.validation == .fail ? nil : "No failed validation loaded.") {
+                    attemptTab = .logs
+                    model.workspace.focusAttempt = model.workspace.candidate?.attempt
+                    screen = .agentRuns
+                },
+                HeaderButton(title: "Compare Validation Runs", disabled: "Not available yet: the runs are listed under Verification history."),
+                HeaderButton(title: "Export Evidence Bundle", disabled: model.workspace.candidate == nil ? "No candidate loaded." : nil) {
+                    exportingEvidence = true
+                },
+            ]))
         }
         if screen == .approvalInbox {
             return AnyView(HeaderButtons(buttons: [HeaderButton(title: "Approval History") { screen = .activity }]))
