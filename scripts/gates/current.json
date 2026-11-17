@@ -1,9 +1,9 @@
 {
-  "artifact": "gate-s4c",
-  "scope": "Tree after the rest of step 4 of the Liquid Glass order: Specifications, Approval Inbox, Execution Plan, Agent Runs, Source Control and Verification & Evidence from their Mac boards; protocol 1.9 adds Document, Decisions, PlanDetail and AttemptDetail; no schema change.",
-  "boundary_tests_min": 107,
+  "artifact": "gate-m5",
+  "scope": "Tree after M5: a finished plan branch is pushed to origin and its draft pull request opened, each after its own human authorization on its exact payload, performed once and resolved only by an observation (schema 16, protocol 1.10: ExternalActions, RequestExternal, AuthorizeExternal, InspectExternal, ResolveExternal; Documents at 1.10 lists the requests that wait); the Approval Inbox, Source Control and the Recovery Center show them. Tested against a local bare repository and a fake gh; no network.",
+  "boundary_tests_min": 109,
   "rust": {
-    "passed_min": 486,
+    "passed_min": 495,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -92,7 +92,16 @@
       "features::tests::s4_an_assumption_a_newer_revision_drops_is_dropped_from_that_revision",
       "s4_a_chat_at_1_8_dates_its_turns_and_lists_the_drafts_assumptions",
       "s4c_documents_plans_and_attempts_report_their_details_at_1_9",
-      "process::conclusion_tests::an_absent_tree_waits_for_the_root_exit_status_until_the_drain_deadline"
+      "process::conclusion_tests::an_absent_tree_waits_for_the_root_exit_status_until_the_drain_deadline",
+      "m5_a_finished_plan_is_pushed_then_opened_as_a_draft_each_after_its_own_authorization",
+      "m5_a_push_the_remote_refuses_is_rejected_and_a_new_request_may_be_declined",
+      "m5_a_lost_outcome_is_held_across_a_restart_never_sent_again_and_resolved_by_the_human",
+      "m5_an_action_issued_by_a_helper_that_stopped_is_unknown_until_inspected",
+      "m5_a_pull_request_whose_answer_is_lost_is_found_by_inspection_and_not_opened_twice",
+      "m5_without_gh_sign_in_the_reason_is_shown_and_a_refused_pull_request_is_rejected",
+      "m5_an_ssh_or_missing_origin_is_refused_before_anything_is_recorded",
+      "external::tests::m5_only_https_without_credentials_or_a_local_path_is_pushed_to",
+      "remote::tests::m5_gh_gets_host_owner_and_name_and_a_pull_request_link_its_number"
     ],
     "ignored": [
       "child_fixture",
@@ -110,7 +119,7 @@
     ]
   },
   "swift": {
-    "tests_min": 122
+    "tests_min": 127
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,
