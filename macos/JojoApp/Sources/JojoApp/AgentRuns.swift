@@ -324,7 +324,7 @@ struct AgentRunsView: View {
                 SegmentedCapsule(selection: Binding(get: { state.tab }, set: { actions.tab($0) }), label: "Attempt view")
                 FactStrip(facts: [
                     ("Attempt", ApprovalInboxState.short(a.id), true),
-                    ("Process", state.process(a), false),
+                    ("process", state.process(a), false),
                     ("Started", boardTime(a.started, now: state.now) ?? "Not started", false),
                     ("Duration", elapsedText(from: a.started, to: a.ended ?? (a.live ? state.now : nil)) ?? "—", false),
                     ("Base commit", state.detail?.base.map { String($0.prefix(7)) } ?? "Not reported", true),
@@ -447,11 +447,11 @@ struct AgentRunsView: View {
                         Definition(key: "Executable", value: d?.executableVersion ?? "Not reported"),
                     ], keyWidth: 86)
                 }
-                LabeledSection(title: "Process supervision") {
+                LabeledSection(title: "process supervision") {
                     DefinitionCard(rows: [
                         Definition(key: "State", value: state.process(a)),
                         Definition(key: "PID", value: d?.pid.map(String.init) ?? "Not reported", mono: d?.pid != nil),
-                        Definition(key: "Process group", value: d?.pgid.map(String.init) ?? "Not reported", mono: d?.pgid != nil),
+                        Definition(key: "process group", value: d?.pgid.map(String.init) ?? "Not reported", mono: d?.pgid != nil),
                         Definition(key: "Liveness", value: d?.heartbeat.map { "Heartbeat \(boardTime($0, now: state.now) ?? "")" } ?? "Not reported"),
                     ], keyWidth: 86)
                 }
