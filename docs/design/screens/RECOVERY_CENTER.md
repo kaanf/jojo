@@ -108,6 +108,8 @@ Shown while admission is closed. One centered column, at most 980 wide, padding 
 
 Built in `macos/JojoApp/Sources/JojoApp/RecoveryCenter.swift` on the shared surfaces of COMPONENTS.md, section 14. The screen shows only what the helper reports: the admission value, the helper connection and epoch, the recovery rows (attempt identity, assessment text, findings text, blockers, whether every process is proven gone, offered choices) and the inspection digest. A part of the canvas without a source says so on screen; nothing is filled with an example.
 
+Since M5 (protocol 1.10, DESIGN_ROADMAP_DIFFERENCES.md, E16) the center column starts with "External actions · n with unknown outcome" while a push or draft pull request was issued and its outcome was not observed (a lost answer, a helper that stopped): its remote, reference, commit and what was last seen, "Check Remote" (`InspectExternal`: reads the remote and records what it shows, sends nothing) and "Mark Not Performed…" (`ResolveExternal`, confirmed, available after an inspection). Such an action is never sent again; it does not close admission. The screen reads `ExternalActions` only while it is shown (`visible`, a parameter since M5). Inspection counts still do not include external effects.
+
 ### 4.1 Mapping
 
 | Canvas | App today |
