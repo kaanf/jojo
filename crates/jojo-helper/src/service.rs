@@ -318,6 +318,26 @@ impl Discovered {
         }
     }
 
+    /// Asks for every discovered provider on a background thread until its version and
+    /// digest are known or refused, so that a first Start does not wait for them (the
+    /// login shell's PATH arrives first, and only then can the binary be probed).
+    pub fn warm(&self) {
+        let discovered = self.clone();
+        let _ = std::thread::Builder::new()
+            .name("jojo-executable-warm".into())
+            .spawn(move || {
+                for _ in 0..600 {
+                    let pending = [ProviderKind::ClaudeCode, ProviderKind::Codex]
+                        .into_iter()
+                        .any(|p| discovered.find(p) == Some(Lookup::Checking));
+                    if !pending {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            });
+    }
+
     /// Looks the provider's executable up now; never waits.
     pub fn find(&self, provider: ProviderKind) -> Option<Lookup> {
         let unpinned = self.provider(provider)?;
@@ -463,9 +483,7 @@ impl Service {
         }
         if let Some(discovered) = &self.discovered {
             discovered.discovery.begin();
-            for provider in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
-                let _ = discovered.find(provider);
-            }
+            discovered.warm();
         }
     }
     pub fn new(engine: Arc<Engine>) -> Result<Self, String> {

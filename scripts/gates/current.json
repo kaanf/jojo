@@ -3,7 +3,7 @@
   "scope": "Tree after D3: executables discovered through the login shell PATH, re-checked before each attempt and lead turn, version and digest recorded per run, a changed executable warned rather than refused.",
   "boundary_tests_min": 107,
   "rust": {
-    "passed_min": 461,
+    "passed_min": 462,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -67,7 +67,8 @@
       "d3_a_missing_cli_or_one_without_a_usable_version_is_refused",
       "d3_a_discovered_claude_code_executable_runs_a_start",
       "d3_a_provider_whose_executable_is_not_found_is_refused_with_the_reason",
-      "tests::d3_an_executable_is_discovered_given_by_path_or_pinned"
+      "tests::d3_an_executable_is_discovered_given_by_path_or_pinned",
+      "d3_a_serving_helper_learns_discovered_executables_before_the_first_start"
     ],
     "ignored": [
       "child_fixture",

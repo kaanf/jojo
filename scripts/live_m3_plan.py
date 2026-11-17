@@ -62,9 +62,17 @@ def fixture_options(fixture):
 
 
 def turn(helper, repository, kind, message, seconds=60):
-    sent = helper.ok('ChatTurn', {'feature': FEATURE, 'kind': kind, 'repository': repository, 'provider': 'Codex',
-                                  'message': message})
     deadline = time.monotonic() + seconds
+    while True:
+        try:
+            sent = helper.ok('ChatTurn', {'feature': FEATURE, 'kind': kind, 'repository': repository,
+                                          'provider': 'Codex', 'message': message})
+            break
+        except RuntimeError as refused:
+            # D3: the helper is still learning the executable's digest; nothing was accepted.
+            if 'ExecutableChecking' not in str(refused) or time.monotonic() > deadline:
+                raise
+            time.sleep(0.5)
     while time.monotonic() < deadline:
         chat = helper.ok('FeatureChat', {'feature': FEATURE, 'after': 0})
         row = next(r for r in chat['turns'] if r['turn'] == sent['turn'])

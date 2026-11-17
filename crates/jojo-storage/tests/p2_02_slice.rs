@@ -1261,6 +1261,55 @@ fn d3_a_discovered_claude_code_executable_runs_a_start() {
     assert_eq!(string(get(&rows[1], "source").unwrap()).unwrap(), "pinned");
 }
 
+// D3: a serving helper learns a discovered executable's version and digest before any
+// Start asks for it (found live: the probe used to wait for the first Start).
+#[test]
+fn d3_a_serving_helper_learns_discovered_executables_before_the_first_start() {
+    let mut h = H::with_claude();
+    h.s().claude = None;
+    let path = h.base.join("warm-path");
+    let real = h.base.join("warm-install/claude");
+    fs::create_dir_all(real.parent().unwrap()).unwrap();
+    fs::create_dir(&path).unwrap();
+    fs::copy(&h.fixture, &real).unwrap();
+    chmod(&real, 0o755);
+    std::os::unix::fs::symlink(&real, path.join("claude")).unwrap();
+    h.s().discovered = Some(Discovered {
+        discovery: Discovery::with_search_path(path.display().to_string()),
+        codex: None,
+        claude: Some(Unpinned {
+            executable: None,
+            home: h.base.join("claude-home"),
+            user: "tester".into(),
+        }),
+    });
+    h.s().begin_executable_checks();
+    // Nothing asks for Claude Code here; its digest still becomes known.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while begin_check(&real) != ExecutableCheck::Known {
+        assert!(std::time::Instant::now() < deadline, "never warmed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // The probe records its answer right after the digest.
+    let found = loop {
+        let found = h
+            .s()
+            .discovered
+            .as_ref()
+            .unwrap()
+            .find(ProviderKind::ClaudeCode);
+        if found != Some(Lookup::Checking) {
+            break found;
+        }
+        assert!(std::time::Instant::now() < deadline, "never found");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert!(
+        matches!(found, Some(Lookup::Found(ref f)) if f.path == real),
+        "{found:?}"
+    );
+}
+
 #[test]
 fn d3_a_provider_whose_executable_is_not_found_is_refused_with_the_reason() {
     let mut h = H::with_claude();
