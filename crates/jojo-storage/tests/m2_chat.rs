@@ -2427,7 +2427,9 @@ fn m5_a_finished_plan_is_pushed_then_opened_as_a_draft_each_after_its_own_author
     assert_eq!(waiting.len(), 1);
     assert_eq!(str_of(&waiting[0], &["action"]), key);
     assert_eq!(str_of(&waiting[0], &["kind"]), "Push");
-    let older = h.ok("Documents", object([("before", Json::Null)]));
+    let older = h
+        .at(9, "Documents", object([("before", Json::Null)]))
+        .payload;
     assert!(
         get(&older, "external").is_err(),
         "a 1.9 answer is unchanged"
@@ -2547,11 +2549,21 @@ fn m5_a_push_the_remote_refuses_is_rejected_and_a_new_request_may_be_declined() 
     let bare = h.origin();
     let plan = h.finished_plan();
     let branch = str_of(&h.plan_run(&plan), &["branch"]).to_owned();
-    // Someone else's branch of that name on the remote: never forced.
-    let main = H::remote_head(&bare, "main");
+    // Someone else's branch of that name on the remote, not under the plan branch: never
+    // forced, so the push is refused.
+    let tree = git(&h.repository, &["rev-parse", "main^{tree}"])
+        .trim()
+        .to_owned();
+    let main = git(
+        &h.repository,
+        &["commit-tree", &tree, "-p", "main", "-m", "someone else"],
+    )
+    .trim()
+    .to_owned();
+    let url = format!("file://{}", bare.display());
     git(
-        &bare,
-        &["update-ref", &format!("refs/heads/{branch}"), &main],
+        &h.repository,
+        &["push", &url, &format!("{main}:refs/heads/{branch}")],
     );
     let refused = h.perform(&plan, "Push");
     assert_eq!(str_of(&refused, &["state"]), "Rejected");

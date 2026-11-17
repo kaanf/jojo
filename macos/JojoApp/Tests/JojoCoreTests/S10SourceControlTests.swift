@@ -95,7 +95,7 @@ final class S10SourceControlTests: XCTestCase {
         XCTAssertEqual(SourceControlState.placeTail(CandidateRows.detail), "api")
         XCTAssertEqual(state.chosen?.path, "cli.py", "without a choice, the first file")
         XCTAssertEqual(self.state(file: "setup.cfg").chosen?.path, "setup.cfg")
-        XCTAssertEqual(state.status.first { $0.key == "Push" }?.value, "Not available yet (M5)")
+        XCTAssertEqual(state.status.first { $0.key == "Push" }?.pill?.0, "Not performed", "M5: no push recorded")
     }
 
     /// Review aid: with JOJO_SNAPSHOT_DIR set, writes Source Control in its states.

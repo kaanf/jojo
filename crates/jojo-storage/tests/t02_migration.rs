@@ -222,7 +222,7 @@ fn migration_plans_must_be_contiguous_from_version_one() {
     ));
     let mut steps = MigrationPlan::production().steps().to_vec();
     steps.push(Migration {
-        version: 17,
+        version: 18,
         name: "gap",
         sql: "",
     });
