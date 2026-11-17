@@ -1465,7 +1465,7 @@ impl ReadView<'_> {
 }
 
 /// The private directory of one turn's raw streams, beside the database.
-fn turn_directory(engine: &Engine, id: OpaqueId) -> Result<PathBuf, String> {
+pub(crate) fn turn_directory(engine: &Engine, id: OpaqueId) -> Result<PathBuf, String> {
     let data = engine
         .db_path()
         .parent()
@@ -1549,7 +1549,12 @@ pub struct TurnRun {
     pub reply: Option<String>,
 }
 
-fn command<F>(ctx: &LaunchContext<'_>, kind: &str, id: OpaqueId, f: F) -> Result<String, String>
+pub(crate) fn command<F>(
+    ctx: &LaunchContext<'_>,
+    kind: &str,
+    id: OpaqueId,
+    f: F,
+) -> Result<String, String>
 where
     F: FnOnce(&mut Tx<'_>) -> Result<String, TxError> + Send + 'static,
 {
@@ -1581,6 +1586,7 @@ pub fn run_turn(
     hooks: LaunchHooks,
 ) -> TurnRun {
     let id = spec.turn;
+    let kind = spec.kind;
     let mut run = TurnRun {
         conclusion: TurnConclusion::NotSpawned(String::new()),
         stop: None,
@@ -1604,7 +1610,11 @@ pub fn run_turn(
         let Some(r) = reader.as_mut() else {
             return Err(());
         };
-        let stopped = r.read(|v| Ok(v.turn(id)?.is_none_or(|t| t.stop_requested)));
+        // M4: a review turn is stopped through its own record.
+        let stopped = r.read(|v| match kind {
+            TurnKind::Review => Ok(v.review(id)?.is_none_or(|t| t.stop_requested)),
+            _ => Ok(v.turn(id)?.is_none_or(|t| t.stop_requested)),
+        });
         if stopped.is_err() {
             *reader = None;
         }

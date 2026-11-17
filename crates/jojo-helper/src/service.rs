@@ -77,6 +77,8 @@ pub enum Work {
     Attempt,
     Turn,
     Validation,
+    /// M4: the review of a settled plan step.
+    Review,
 }
 
 pub struct Workers {
@@ -160,6 +162,35 @@ impl Workers {
             })
             .map_err(|e| e.to_string())?;
         self.handles.push((Work::Turn, handle));
+        Ok(())
+    }
+    /// M4: one review turn: the supervised read-only run of a lead turn, sealed as a
+    /// review. `stop` ends it early.
+    pub fn review(
+        &mut self,
+        runtime: WorkerRuntime,
+        spec: TurnSpec,
+        launch: ProcessLaunch,
+        plan: StopPlan,
+        mut hooks: LaunchHooks,
+        stop: Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        hooks.emergency_stop = Some(stop);
+        let WorkerRuntime { engine, ids, clock } = runtime;
+        let handle = std::thread::Builder::new()
+            .name("jojo-review".into())
+            .spawn(move || {
+                let ctx = LaunchContext {
+                    engine: &engine,
+                    ids: ids.as_ref(),
+                    clock: clock.as_ref(),
+                    poll: Duration::from_millis(10),
+                };
+                let run = run_turn(&ctx, &spec, &launch, &plan, hooks);
+                settle_review(&ctx, &spec, &run).map(drop)
+            })
+            .map_err(|e| e.to_string())?;
+        self.handles.push((Work::Review, handle));
         Ok(())
     }
     /// P2-03: a host validation run. It is not a provider attempt, but it is work this
@@ -396,6 +427,7 @@ pub struct Service {
     validation_stop: Arc<AtomicBool>,
     /// M2: stop flag of the latest lead agent turn, set on close, emergency and drop.
     turn_stop: Arc<AtomicBool>,
+    review_stop: Arc<AtomicBool>,
 }
 
 /// The launcher's pinned flags as the adapter's configuration; `None` unless pinned.
@@ -516,6 +548,7 @@ impl Service {
             discovered: None,
             validation_stop: Arc::new(AtomicBool::new(false)),
             turn_stop: Arc::new(AtomicBool::new(false)),
+            review_stop: Arc::new(AtomicBool::new(false)),
         })
         .and_then(|service| {
             // M2: a turn an earlier helper left unfinished held no worktree, claim or
@@ -528,6 +561,18 @@ impl Service {
             if let Some(turn) = stale {
                 service.command("CloseInterruptedTurns", turn, |tx| {
                     tx.close_interrupted_turns().map(|n| format!("closed {n}"))
+                })?;
+            }
+            // M4: so is a review; its step is reviewed again only if the human says so.
+            let stale = service
+                .engine
+                .reader()
+                .and_then(|mut r| r.read(|v| v.unfinished_review()))
+                .map_err(|e| e.to_string())?;
+            if let Some(review) = stale {
+                service.command("CloseInterruptedReviews", review, |tx| {
+                    tx.close_interrupted_reviews()
+                        .map(|n| format!("closed {n}"))
                 })?;
             }
             // M3: a run an earlier helper was running comes back paused; the human
@@ -603,6 +648,7 @@ impl Service {
     pub fn emergency(&mut self) -> Result<(), String> {
         self.validation_stop.store(true, Ordering::SeqCst);
         self.turn_stop.store(true, Ordering::SeqCst);
+        self.review_stop.store(true, Ordering::SeqCst);
         self.finalized = false;
         let result = emergency_stop(&self.ctx()).map(|_| ());
         if result.is_err() {
@@ -702,9 +748,10 @@ impl Service {
     }
     pub fn finish(&mut self, disconnected: bool) -> Result<Option<ShutdownReceipt>, String> {
         // Closing: an active validator is stopped; it records no verdict. A running lead
-        // turn is stopped too and sealed as failed.
+        // turn and a running review are stopped too and sealed as failed.
         self.validation_stop.store(true, Ordering::SeqCst);
         self.turn_stop.store(true, Ordering::SeqCst);
+        self.review_stop.store(true, Ordering::SeqCst);
         if !self.workers.reap() {
             return Ok(None);
         }

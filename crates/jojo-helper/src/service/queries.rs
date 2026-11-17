@@ -138,6 +138,13 @@ impl Service {
                 }
                 self.executables(reader)
             }
+            // Protocol 1.5 (M4): repairs, holds and reviews of plan steps.
+            RequestKind::Repairs => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                reader.read(|v| v.ipc_repairs()).map_err(|e| e.to_string())
+            }
             _ => unreachable!("not a snapshot query: {kind:?}"),
         }
     }

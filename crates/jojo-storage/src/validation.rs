@@ -349,7 +349,7 @@ fn rejected(c: &Connection, id: &str) -> Result<bool, StorageError> {
     .is_some())
 }
 
-fn state(c: &Connection, id: &str) -> Result<ValidationState, StorageError> {
+pub(crate) fn state(c: &Connection, id: &str) -> Result<ValidationState, StorageError> {
     let receipt = c.query_optional(
         "SELECT event,status FROM validation_receipts WHERE attempt=?1 ORDER BY event DESC LIMIT 1",
         &[Value::Text(id)],

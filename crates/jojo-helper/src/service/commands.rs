@@ -521,7 +521,11 @@ impl Service {
     /// The two production adapters. A provider the launcher did not configure cannot be
     /// launched by Start or by a turn. A pinned executable must be the profiled release
     /// with the pinned digest; a discovered one is found and checked again here (D3).
-    fn adapter(&self, provider: ProviderKind, slice: &SliceConfig) -> Result<Adapter, String> {
+    pub(super) fn adapter(
+        &self,
+        provider: ProviderKind,
+        slice: &SliceConfig,
+    ) -> Result<Adapter, String> {
         let pinned = |version: &str| {
             if version == profiled_version(provider) {
                 Ok(())

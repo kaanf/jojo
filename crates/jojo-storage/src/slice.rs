@@ -532,16 +532,19 @@ impl Tx<'_> {
             ));
         }
         let revision = Value::Int(crate::model::to_db(request.step.revision.0)?);
-        if self
-            .conn
-            .query_optional(
-                "SELECT 1 FROM scheduler_attempts WHERE step=?1 AND step_revision=?2 LIMIT 1",
-                &[Value::Text(&step_id), revision],
-                |r| r.int(0),
-            )?
-            .is_some()
-        {
-            return Err(deny("DuplicateStart: this step was already started"));
+        // M4: a step that already ran starts again only as the repair recorded for its
+        // newest, sealed attempt, under exactly the identity recorded with it.
+        let newest = self.conn.query_optional(
+            "SELECT attempt,sealed FROM scheduler_attempts WHERE step=?1 AND step_revision=?2
+             ORDER BY rowid DESC LIMIT 1",
+            &[Value::Text(&step_id), revision],
+            |r| Ok((r.text(0)?, r.int(1)? == 1)),
+        )?;
+        if let Some((newest, sealed)) = newest {
+            let repair = crate::repairs::repair_of(self.conn, request.attempt)?;
+            if !sealed || repair.is_none_or(|r| id_to_text(r.failed) != newest) {
+                return Err(deny("DuplicateStart: this step was already started"));
+            }
         }
         let revision = Value::Int(crate::model::to_db(request.step.revision.0)?);
         if self
@@ -664,7 +667,9 @@ pub fn slice_launch_spec(
                 &[Value::Text(&id_to_text(request.step.id))],
                 |r| Ok((r.text(0)?, r.text(1)?)),
             )?;
-            Ok((record, vector, decisions, plan, prd, body(s.adr)?, body(s.validation)?, step))
+            // M4: a repair attempt is told what failed, as recorded with the repair.
+            let repair = v.repair_of(request.attempt)?.map(|r| r.section);
+            Ok((record, vector, decisions, plan, prd, body(s.adr)?, body(s.validation)?, (step, repair)))
         })
         .map_err(|e| e.to_string())?;
     let (
@@ -675,7 +680,7 @@ pub fn slice_launch_spec(
         Some(prd),
         Some(adr),
         Some(validation),
-        step,
+        (step, repair),
     ) = found
     else {
         return Err("reserved attempt state is incomplete".into());
@@ -711,6 +716,10 @@ pub fn slice_launch_spec(
         list(&scope.baseline),
     )
     .into_bytes();
+    let mut prompt = prompt;
+    if let Some(section) = repair {
+        prompt.extend_from_slice(section.as_bytes());
+    }
     if prompt.len() > MAX_PROMPT_BYTES {
         return Err("approved documents exceed the prompt limit".into());
     }

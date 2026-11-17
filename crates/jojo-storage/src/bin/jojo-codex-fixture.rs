@@ -16,8 +16,22 @@
 //! that the tests pass, which nothing may believe; `-stray` and `-edit-tests` additionally
 //! write outside the approved scope; `work-then-hang <seconds>` writes the implementation
 //! and then stays alive without output, for at most that long, so that it can be stopped.
+//!
+//! M4: `develop-repaired <path>` writes `written by fixture` unless the prompt is a repair
+//! (it carries a `# Repair` section), then `repaired by fixture`; `develop-never <path>`
+//! always writes the first. A review turn (its prompt names the review schema) approves,
+//! unless the prompt says `fixture-review: reject-unless-repaired` and the diff holds no
+//! repaired line, or `fixture-review: prose`, which is no verdict.
 use std::io::{Read, Write};
+use std::sync::OnceLock;
 use std::time::Duration;
+
+/// M4: what `develop` writes; set once from the scenario and the prompt.
+static WRITTEN: OnceLock<&'static [u8]> = OnceLock::new();
+
+fn written() -> &'static [u8] {
+    WRITTEN.get().copied().unwrap_or(b"written by fixture\n")
+}
 
 const THREAD: &str = r#"{"type":"thread.started","thread_id":"fixture-thread"}"#;
 const TURN: &str = r#"{"type":"turn.started"}"#;
@@ -136,7 +150,7 @@ fn claude_main(args: &[String], scenario: &str) {
             eprintln!("fixture writes only inside its working directory");
             std::process::exit(65);
         }
-        if std::fs::write(path, b"written by fixture\n").is_err() {
+        if std::fs::write(path, written()).is_err() {
             claude_result(true, "api_error");
             std::process::exit(1);
         }
@@ -229,7 +243,38 @@ const LEAD_PLAN_KINDS: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"Two i
 /// M3 live run: a plan a real agent can do on the generated sample repository. Only the
 /// lead is the fixture; each step goes to the provider its kind names.
 const LEAD_PLAN_LIVE: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"An entry point and its usage text in parallel, then a test of the entry point.","adr":"# Decision\nA thin command-line entry point beside slugify.py, a usage text, then a unittest of the entry point. No new dependency; slugify.py and its tests stay as they are.","steps":[{"key":"cli","title":"Add cli.py: a command-line entry point that prints slugify of its arguments joined by spaces","kind":"backend","provider":null,"depends_on":[],"write_scope":["cli.py"],"baseline":["slugify.py","test_slugify.py"],"tests":["cli"],"command":["/usr/bin/python3","-c","import ast; ast.parse(open('cli.py').read())"]},{"key":"usage","title":"Write USAGE.md: how to run cli.py, with one example","kind":"docs","provider":null,"depends_on":[],"write_scope":["USAGE.md"],"baseline":["slugify.py"],"tests":["usage"],"command":["/bin/test","-s","USAGE.md"]},{"key":"clitest","title":"Add test_cli.py: a unittest that runs cli.py with two words and checks the output","kind":null,"provider":null,"depends_on":["cli","usage"],"write_scope":["test_cli.py"],"baseline":["cli.py","slugify.py"],"tests":["clitest"],"command":["/usr/bin/python3","-c","import ast; ast.parse(open('test_cli.py').read())"]}],"questions":[]}"##;
+/// M4: one step whose check passes only for a repaired file.
+const LEAD_PLAN_REPAIR: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"One step that passes only after a repair.","adr":"# Decision\nOne file.","steps":[{"key":"fix","title":"fixture: develop-repaired src/fix.txt","kind":null,"provider":"Codex","depends_on":[],"write_scope":["src/fix.txt"],"baseline":[],"tests":["fix"],"command":["/usr/bin/grep","-q","repaired","src/fix.txt"]}],"questions":[]}"##;
+/// M4: one step that never passes its check.
+const LEAD_PLAN_NEVER: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"One step that never passes.","adr":"# Decision\nOne file.","steps":[{"key":"never","title":"fixture: develop-never src/never.txt","kind":null,"provider":"Codex","depends_on":[],"write_scope":["src/never.txt"],"baseline":[],"tests":["never"],"command":["/usr/bin/grep","-q","repaired","src/never.txt"]}],"questions":[]}"##;
+/// M4: one step whose check always passes and whose reviewer rejects the first candidate.
+const LEAD_PLAN_REVIEW: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"One step the reviewer rejects once.","adr":"# Decision\nOne file.\nfixture-review: reject-unless-repaired","steps":[{"key":"rev","title":"fixture: develop-repaired src/rev.txt","kind":null,"provider":"ClaudeCode","depends_on":[],"write_scope":["src/rev.txt"],"baseline":[],"tests":["rev"],"command":["/usr/bin/true"]}],"questions":[]}"##;
+/// M4 live run: one step a real agent can do, so that its review by the other provider is
+/// the second and last provider run.
+const LEAD_PLAN_LIVE_REVIEW: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"One usage text, reviewed by the other provider.","adr":"# Decision\nA usage text beside slugify.py. No code changes; slugify.py and its tests stay as they are.","steps":[{"key":"usage","title":"Write USAGE.md: how to call slugify() from Python, with one example and its output","kind":"docs","provider":null,"depends_on":[],"write_scope":["USAGE.md"],"baseline":["slugify.py","test_slugify.py"],"tests":["usage"],"command":["/bin/test","-s","USAGE.md"]}],"questions":[]}"##;
 const LEAD_PLAN_UNKNOWN_KIND: &str = r##"{"schema":"jojo-lead-plan-v1","summary":"One step of a kind the project does not have.","adr":"# Decision\nOne file.","steps":[{"key":"ui","title":"Paint it","kind":"frontend","provider":"Codex","depends_on":[],"write_scope":["src/ui.txt"],"baseline":[],"tests":["ui"],"command":["/usr/bin/true"]}],"questions":[]}"##;
+
+/// M4: the stand-in reviewer's reply.
+fn review(prompt: &str) -> Lead {
+    let schema = jojo_domain::review::REVIEW_SCHEMA;
+    let reply = |verdict: &str, notes: &str| {
+        Lead::Reply(format!(
+            r#"{{"schema":"{schema}","verdict":"{verdict}","notes":"{notes}","objection":null}}"#
+        ))
+    };
+    if prompt.contains("fixture-review: prose") {
+        return Lead::Reply("The change looks fine to me.".into());
+    }
+    if prompt.contains("fixture-review: reject-unless-repaired")
+        && !prompt.contains("+repaired by fixture")
+    {
+        return reply(
+            "reject",
+            "The file says written, not repaired; write repaired by fixture.",
+        );
+    }
+    reply("approve", "Read the diff; it does what the step asks.")
+}
 
 /// What the stand-in lead agent does in a turn (M2).
 enum Lead {
@@ -254,6 +299,10 @@ fn lead(scenario: &str, prompt: &str, args: &[String]) -> Lead {
         "lead-kinds" if planning => Lead::Reply(LEAD_PLAN_KINDS.into()),
         "lead-live" if planning => Lead::Reply(LEAD_PLAN_LIVE.into()),
         "lead-kinds-unknown" if planning => Lead::Reply(LEAD_PLAN_UNKNOWN_KIND.into()),
+        "lead-live-review" if planning => Lead::Reply(LEAD_PLAN_LIVE_REVIEW.into()),
+        "lead-repair" if planning => Lead::Reply(LEAD_PLAN_REPAIR.into()),
+        "lead-never" if planning => Lead::Reply(LEAD_PLAN_NEVER.into()),
+        "lead-review" if planning => Lead::Reply(LEAD_PLAN_REVIEW.into()),
         "lead" if prompt.contains("# Questions and answers so far\nNone.") => {
             Lead::Reply(LEAD_QUESTIONS.into())
         }
@@ -351,6 +400,25 @@ fn main() {
         .filter_map(|l| l.trim().strip_prefix("fixture: "))
         .next_back()
         .unwrap_or(prompt.trim());
+    // M4: a repair writes a different line, so that a check can tell the two apart.
+    let repaired;
+    let scenario = match (
+        scenario.strip_prefix("develop-repaired "),
+        scenario.strip_prefix("develop-never "),
+    ) {
+        (Some(path), _) => {
+            if prompt.contains("\n# Repair ") {
+                let _ = WRITTEN.set(b"repaired by fixture\n");
+            }
+            repaired = format!("develop {path}");
+            repaired.as_str()
+        }
+        (_, Some(path)) => {
+            repaired = format!("develop {path}");
+            repaired.as_str()
+        }
+        _ => scenario,
+    };
     // M3: `develop-after <seconds> <path>` waits first (bounded), so that two steps of a
     // plan are seen running at the same time, then develops like `develop <path>`.
     let delayed;
@@ -371,6 +439,9 @@ fn main() {
     if args.first().map(String::as_str) == Some("-p") {
         // M2: the read-only vector of a lead agent turn names the three read tools.
         if args.iter().any(|a| a == "Read,Glob,Grep") {
+            if prompt.contains(jojo_domain::review::REVIEW_SCHEMA) {
+                return claude_lead(review(&prompt));
+            }
             return claude_lead(lead(latest, &prompt, &args));
         }
         return claude_main(&args, scenario);
@@ -380,6 +451,9 @@ fn main() {
         std::process::exit(64);
     }
     if args.iter().any(|a| a == "read-only") {
+        if prompt.contains(jojo_domain::review::REVIEW_SCHEMA) {
+            return codex_lead(review(&prompt));
+        }
         return codex_lead(lead(latest, &prompt, &args));
     }
     if let Some(path) = scenario.strip_prefix("develop ") {
@@ -389,7 +463,7 @@ fn main() {
             eprintln!("fixture writes only inside its working directory");
             std::process::exit(65);
         }
-        if std::fs::write(path, b"written by fixture\n").is_err() {
+        if std::fs::write(path, written()).is_err() {
             line(r#"{"type":"turn.failed","error":{"message":"fixture could not write"}}"#);
             std::process::exit(1);
         }

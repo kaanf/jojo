@@ -488,7 +488,7 @@ fn m2_a_running_turn_holds_capacity_and_is_stopped_by_cancel_or_close() {
     ]);
     assert_eq!(
         h.refused("Start", start),
-        "CapacityFull: 0 attempts and 1 lead turn use all 1 units; a Start waits"
+        "CapacityFull: 0 attempts and 1 turns use all 1 units; a Start waits"
     );
     until(|| h.spawned() == 1);
     h.ok("CancelTurn", object([("turn", identity(OpaqueId(2001)))]));
@@ -795,6 +795,8 @@ impl H {
             ),
             ("default_provider", text("ClaudeCode")),
             ("capacity", number(2)),
+            ("repair_limit", number(2)),
+            ("review", Json::Bool(true)),
         ])
     }
 
@@ -963,7 +965,7 @@ fn m3_two_steps_run_at_once_and_a_lead_turn_takes_one_unit_of_capacity() {
     assert_eq!(r.kind, "Response", "{:?}", r.payload);
     assert_eq!(
         h.refused("Start", start(steps[1])),
-        "CapacityFull: 1 attempts and 1 lead turn use all 2 units; a Start waits"
+        "CapacityFull: 1 attempts and 1 turns use all 2 units; a Start waits"
     );
     h.ok("CancelTurn", object([("turn", identity(OpaqueId(2101)))]));
     until(|| h.s().workers.running(Work::Turn) == 0);
@@ -1023,10 +1025,10 @@ impl H {
             if want(&states) {
                 return states;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "run stuck at {states:?}"
-            );
+            if std::time::Instant::now() >= deadline {
+                let run = self.plan_run(plan);
+                panic!("run stuck at {states:?}: {run:?}");
+            }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
@@ -1202,13 +1204,17 @@ fn m3_a_rejected_step_stops_only_what_depends_on_it_and_a_restart_pauses_the_run
         );
         assert_eq!(r.kind, "Response", "{:?}", r.payload);
     };
-    // D2 until M4: no retry. The rejected step waits for the human; the other goes on.
+    // M4 (D2): the human's rejection is never repaired. The runner holds the step for the
+    // human, with the reason; the other goes on.
     decide(&mut h, 0);
     assert_eq!(h.step_states(&plan), ["Failed", "Review", "Waiting"]);
+    h.s().tick().unwrap();
+    assert_eq!(h.step_states(&plan), ["NeedsHuman", "Review", "Waiting"]);
     assert_eq!(
         h.step_field(&plan, 0, "detail"),
         text("the human rejected the candidate")
     );
+    assert_eq!(h.step_field(&plan, 0, "repairs"), number(0));
     assert_eq!(str_of(&h.plan_run(&plan), &["state"]), "RUNNING");
     // A helper that starts again pauses the run.
     h.open();
@@ -1218,6 +1224,7 @@ fn m3_a_rejected_step_stops_only_what_depends_on_it_and_a_restart_pauses_the_run
     assert_eq!(h.control(&plan, "Resume"), "plan run RUNNING");
     // With both independent steps stopped, nothing more can happen without the human.
     decide(&mut h, 1);
+    h.s().tick().unwrap();
     assert_eq!(str_of(&h.plan_run(&plan), &["state"]), "HALTED");
     h.s().tick().unwrap();
     assert_eq!(h.s().workers.running(Work::Attempt), 0);
@@ -1339,4 +1346,214 @@ fn m3_a_plan_branch_moved_by_someone_else_is_a_conflict_and_nothing_is_merged() 
         h.git_out(&["rev-parse", &format!("refs/heads/{branch}")]),
         foreign
     );
+}
+
+// ---- M4: repair and review ----
+
+impl H {
+    /// A one-step plan the fixture lead drafts for `scenario`, every document approved,
+    /// under a project whose repair limit and reviewer are given.
+    fn approved_one_step(
+        &mut self,
+        repository: &str,
+        scenario: &str,
+        limit: u64,
+        review: bool,
+    ) -> Json {
+        let Json::Object(mut fields) = self.project_payload(3001, 0, repository) else {
+            unreachable!()
+        };
+        fields.truncate(fields.len() - 2);
+        fields.push(("repair_limit".into(), number(limit)));
+        fields.push(("review".into(), Json::Bool(review)));
+        self.ok3("SaveProject", Json::Object(fields));
+        self.approved_requirements(repository);
+        let row = self.drafted_plan(repository, 4003, &format!("fixture: {scenario}"));
+        let plan = field(&row, &["plan"]).clone();
+        for part in ["adr", "validation", "plan"] {
+            let subject = field(&plan, &[part]).clone();
+            self.approve(&subject);
+        }
+        field(&plan, &["plan"]).clone()
+    }
+
+    fn step_attempt(&mut self, plan: &Json) -> OpaqueId {
+        id(&self.step_field(plan, 0, "attempt")).unwrap()
+    }
+}
+
+#[test]
+fn m4_a_failed_validation_is_repaired_with_its_output_then_reviewed_by_the_other_provider() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let plan = h.approved_one_step(&repository, "lead-repair", 2, true);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    // The first attempt's check fails; a repair is decided, then started.
+    h.run_until(&plan, |s| s[0] == "Repairing");
+    let states = h.run_until(&plan, |s| s[0] == "Review");
+    assert_eq!(states, ["Review"]);
+    assert_eq!(h.step_field(&plan, 0, "repairs"), number(1));
+    let repair = h.step_field(&plan, 0, "repair");
+    assert_eq!(field(&repair, &["ordinal"]), &number(1));
+    assert_eq!(field(&repair, &["limit"]), &number(2));
+    // The repair attempt was told what failed, from the host's own records.
+    let attempt = h.step_attempt(&plan);
+    let record = h.read(|v| v.repair_of(attempt)).expect("a repair record");
+    assert!(
+        record.section.starts_with("\n# Repair 1 of 2\n"),
+        "{}",
+        record.section
+    );
+    assert!(
+        record.section.contains("## Host validation failed\n"),
+        "{}",
+        record.section
+    );
+    assert!(record.section.contains("src/fix.txt"), "{}", record.section);
+    assert!(
+        record.failure.starts_with("host validation failed"),
+        "{}",
+        record.failure
+    );
+    assert!(matches!(
+        h.read(|v| v.validation_state(record.failed)),
+        ValidationState::Failed(_)
+    ));
+    // The step was Codex's; Claude Code reviewed it and approved. Acceptance stays human.
+    let review = h.step_field(&plan, 0, "review");
+    assert_eq!(str_of(&review, &["provider"]), "ClaudeCode");
+    assert_eq!(str_of(&review, &["state"]), "APPROVED");
+    assert_eq!(
+        h.step_field(&plan, 0, "detail"),
+        text("approved by ClaudeCode")
+    );
+    assert!(h.read(|v| v.candidate_acceptance(attempt)).is_none());
+    let reviewer = id(field(&review, &["review"])).unwrap();
+    let ran = h
+        .read(|v| v.run_executable(reviewer))
+        .expect("the review's executable");
+    assert_eq!(ran.provider, ProviderKind::ClaudeCode);
+    // Protocol 1.5: the repairs query lists both attempts, newest first.
+    assert_eq!(h.refused3("Repairs", object([])), "UnknownType");
+    let r = h.at(5, "Repairs", object([]));
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    let rows = items(field(&r.payload, &["attempts"])).to_vec();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(field(&rows[0], &["attempt"]), &identity(attempt));
+    assert_eq!(str_of(&rows[0], &["state"]), "Review");
+    assert_eq!(field(&rows[0], &["repair", "ordinal"]), &number(1));
+    assert_eq!(str_of(&rows[0], &["review", "state"]), "APPROVED");
+    assert_eq!(field(&rows[1], &["attempt"]), &identity(record.failed));
+    assert_eq!(field(&rows[1], &["state"]), &Json::Null);
+    assert_eq!(field(&rows[1], &["repair"]), &Json::Null);
+    assert_eq!(field(&r.payload, &["complete"]), &Json::Bool(true));
+    h.accept_step(&plan, 0);
+    h.run_until(&plan, |s| s[0] == "Integrated");
+    let run = h.plan_run(&plan);
+    assert_eq!(str_of(&run, &["state"]), "DONE");
+    let head = str_of(&run, &["head"]).to_owned();
+    assert_eq!(
+        h.git_out(&["show", &format!("{head}:src/fix.txt")]),
+        "repaired by fixture"
+    );
+}
+
+#[test]
+fn m4_a_step_that_keeps_failing_is_held_for_the_human_after_two_repairs() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let plan = h.approved_one_step(&repository, "lead-never", 2, true);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    let states = h.run_until(&plan, |s| s[0] == "NeedsHuman");
+    assert_eq!(states, ["NeedsHuman"]);
+    assert_eq!(
+        h.step_field(&plan, 0, "detail"),
+        text("host validation failed; 2 of 2 repairs used")
+    );
+    assert_eq!(h.step_field(&plan, 0, "repairs"), number(2));
+    assert_eq!(str_of(&h.plan_run(&plan), &["state"]), "HALTED");
+    // Three attempts in all: the first and two repairs; nothing starts again.
+    let last = h.step_attempt(&plan);
+    let second = h.read(|v| v.repair_of(last)).unwrap();
+    assert_eq!((second.ordinal, second.limit), (2, 2));
+    let first = h.read(|v| v.repair_of(second.failed)).unwrap();
+    assert_eq!(first.ordinal, 1);
+    assert!(h.read(|v| v.repair_of(first.failed)).is_none());
+    h.s().tick().unwrap();
+    assert_eq!(h.s().workers.running(Work::Attempt), 0);
+    assert_eq!(h.step_states(&plan), ["NeedsHuman"]);
+}
+
+#[test]
+fn m4_a_rejecting_review_sends_its_notes_to_the_repair() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let plan = h.approved_one_step(&repository, "lead-review", 2, true);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.run_until(&plan, |s| s[0] == "Review");
+    // Claude Code did the step; Codex rejected the first candidate and approved the repair.
+    assert_eq!(h.step_field(&plan, 0, "repairs"), number(1));
+    let attempt = h.step_attempt(&plan);
+    let record = h.read(|v| v.repair_of(attempt)).unwrap();
+    assert!(
+        record
+            .section
+            .contains("The reviewer rejected it; the notes are your fix list"),
+        "{}",
+        record.section
+    );
+    assert!(
+        record.section.contains("write repaired by fixture"),
+        "{}",
+        record.section
+    );
+    let review = h.step_field(&plan, 0, "review");
+    assert_eq!(str_of(&review, &["provider"]), "Codex");
+    assert_eq!(str_of(&review, &["state"]), "APPROVED");
+}
+
+#[test]
+fn m4_with_repair_and_review_switched_off_a_failure_is_held_at_once_and_nothing_reviews() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let plan = h.approved_one_step(&repository, "lead-never", 0, false);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.run_until(&plan, |s| s[0] == "NeedsHuman");
+    assert_eq!(
+        h.step_field(&plan, 0, "detail"),
+        text("host validation failed; automatic repair is off for this project")
+    );
+    assert_eq!(h.step_field(&plan, 0, "repairs"), number(0));
+    let run = h.plan_run(&plan);
+    assert_eq!(field(&run, &["repair_limit"]), &number(0));
+    assert_eq!(field(&run, &["review_enabled"]), &Json::Bool(false));
+}
+
+#[test]
+fn m4_without_the_reviewer_a_passed_step_goes_straight_to_the_human() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let plan = h.approved_one_step(&repository, "lead-review", 2, false);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    assert_eq!(h.run_until(&plan, |s| s[0] == "Review"), ["Review"]);
+    assert_eq!(h.step_field(&plan, 0, "review"), Json::Null);
+    assert_eq!(h.step_field(&plan, 0, "repairs"), number(0));
+}
+
+#[test]
+fn m4_a_review_that_cannot_start_holds_the_step_for_the_human() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let plan = h.approved_one_step(&repository, "lead-repair", 2, true);
+    // The step is Codex's, so Claude Code would review it; it is not configured now.
+    h.s().claude = None;
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.run_until(&plan, |s| s[0] == "NeedsHuman");
+    let detail = h.step_field(&plan, 0, "detail");
+    assert!(
+        str_of(&detail, &[]).starts_with("the review could not start: NoProductionAdapter"),
+        "{detail:?}"
+    );
+    assert_eq!(h.step_field(&plan, 0, "review"), Json::Null);
+    assert!(h.read(|v| v.unfinished_review()).is_none());
 }

@@ -165,7 +165,7 @@ fn record(h: &mut H) {
     h.at("hello 1.0", 0, "Hello", object([]));
     // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2, 1.5
     // since D3).
-    h.at("hello 1.5", 5, "Hello", object([("junk", n(1))]));
+    h.at("hello 1.6", 6, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1065,6 +1065,9 @@ fn record(h: &mut H) {
             ("kinds", Json::List(vec![])),
             ("default_provider", text("Codex")),
             ("capacity", n(capacity)),
+            // M4 (1.5): every SaveProject carries the repair limit and the reviewer.
+            ("repair_limit", n(2)),
+            ("review", Json::Bool(true)),
         ])
     };
     at2(h, "save project at 1.2", "SaveProject", project(hex(7), 2));
@@ -1104,6 +1107,26 @@ fn record(h: &mut H) {
         "Executables",
         object([("provider", text("Codex"))]),
     );
+    // M4 (1.5): the repairs query, unknown before 1.5, takes no field; a SaveProject
+    // without the repair limit and the reviewer is refused.
+    h.at("repairs at 1.4", 4, "Repairs", object([]));
+    h.at("repairs none", 5, "Repairs", object([]));
+    h.at(
+        "repairs with a field",
+        5,
+        "Repairs",
+        object([("plan", hex(7))]),
+    );
+    let Json::Object(mut old) = project(hex(7), 2) else {
+        unreachable!()
+    };
+    old.truncate(old.len() - 2);
+    h.at(
+        "save project without repair settings",
+        5,
+        "SaveProject",
+        Json::Object(old),
+    );
 }
 
 #[test]
@@ -1120,7 +1143,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.5 => 1.4 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables","slice":true}
+hello 1.6 => 1.5 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1322,4 +1345,8 @@ plan run none => 1.3 Response null
 executables at 1.3 => 1.3 Error {"code":"UnknownType"}
 executables none configured => 1.4 Response {"providers":[{"change":null,"detail":"","entry":null,"last_run":null,"path":null,"profiled":null,"provider":"ClaudeCode","sha256":null,"source":"none","state":"unconfigured","version":null},{"change":null,"detail":"","entry":null,"last_run":null,"path":null,"profiled":null,"provider":"Codex","sha256":null,"source":"none","state":"unconfigured","version":null}]}
 executables with a field => 1.4 Error {"code":"InvalidPayload: unexpected or missing fields"}
+repairs at 1.4 => 1.4 Error {"code":"UnknownType"}
+repairs none => 1.5 Response {"attempts":[],"complete":true}
+repairs with a field => 1.5 Error {"code":"InvalidPayload: unexpected or missing fields"}
+save project without repair settings => 1.5 Error {"code":"InvalidPayload: unexpected or missing fields"}
 "#;

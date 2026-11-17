@@ -669,7 +669,7 @@ fn p2_02_duplicate_replayed_and_lost_start_never_launch_twice_and_capacity_stays
     assert_eq!(get(&replay.payload, "replayed").unwrap(), &Json::Bool(true));
     assert_eq!(
         code(&h.start(901)),
-        "CapacityFull: 1 attempts and 0 lead turn use all 1 units; a Start waits"
+        "CapacityFull: 1 attempts and 0 turns use all 1 units; a Start waits"
     );
     // The same identity with another payload is a conflict, not a second command.
     let other = object([

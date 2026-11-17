@@ -162,6 +162,22 @@ impl Tx<'_> {
         )?;
         Ok(())
     }
+
+    /// M4: the executable a review turn runs, like a lead turn's.
+    pub fn record_review_executable(
+        &mut self,
+        review: OpaqueId,
+        fingerprint: &ProviderFingerprint,
+    ) -> Result<(), TxError> {
+        let identity = self
+            .record_executable(fingerprint)?
+            .ok_or_else(|| deny("ReviewRefused: not a production fingerprint"))?;
+        self.conn.execute(
+            "INSERT INTO review_executables VALUES (?1,?2)",
+            &[Value::Text(&id_to_text(review)), Value::Text(&identity)],
+        )?;
+        Ok(())
+    }
 }
 
 fn provider_of(text: &str) -> Result<ProviderKind, StorageError> {
@@ -233,12 +249,14 @@ impl ReadView<'_> {
         Ok((last, change))
     }
 
-    /// The executable a launched attempt or an accepted lead turn used, if recorded.
+    /// The executable a launched attempt, an accepted lead turn or a review used, if
+    /// recorded.
     pub fn run_executable(&self, run: OpaqueId) -> Result<Option<ExecutableRecord>, StorageError> {
         let id = id_to_text(run);
         let identity = self.conn.query_optional(
             "SELECT identity FROM attempt_executables WHERE attempt=?1
-             UNION ALL SELECT identity FROM turn_executables WHERE turn=?1",
+             UNION ALL SELECT identity FROM turn_executables WHERE turn=?1
+             UNION ALL SELECT identity FROM review_executables WHERE review=?1",
             &[Value::Text(&id)],
             |r| r.text(0),
         )?;

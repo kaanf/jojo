@@ -59,6 +59,7 @@ pub enum RequestKind {
     ControlPlan,
     PlanRun,
     Executables,
+    Repairs,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,7 +122,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 40] = [
+pub const SPECS: [Spec; 41] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -156,12 +157,13 @@ pub const SPECS: [Spec; 40] = [
     spec(K::FeatureChat, "FeatureChat", Query, 2, false, Exact, &["feature", "after"]),
     spec(K::ChatText, "ChatText", Query, 2, false, Exact, &["subject", "part", "offset"]),
     spec(K::ChatIndex, "ChatIndex", Query, 2, false, Exact, &[]),
-    spec(K::SaveProject, "SaveProject", Mutation, 3, false, Exact, &["project", "revision", "name", "repositories", "instructions", "test_command", "ci_command", "kinds", "default_provider", "capacity"]),
+    spec(K::SaveProject, "SaveProject", Mutation, 3, false, Exact, &["project", "revision", "name", "repositories", "instructions", "test_command", "ci_command", "kinds", "default_provider", "capacity", "repair_limit", "review"]),
     spec(K::Projects, "Projects", Query, 3, false, Exact, &[]),
     spec(K::RunPlan, "RunPlan", Mutation, 3, false, Exact, &["plan"]),
     spec(K::ControlPlan, "ControlPlan", Mutation, 3, true, Exact, &["plan", "action"]),
     spec(K::PlanRun, "PlanRun", Query, 3, false, Exact, &["plan"]),
     spec(K::Executables, "Executables", Query, 4, false, Exact, &[]),
+    spec(K::Repairs, "Repairs", Query, 5, false, Exact, &[]),
 ];
 
 impl RequestKind {
@@ -938,18 +940,21 @@ mod tests {
         assert_eq!(names(Query, 2), v12_queries);
         // M3 (1.3): project records and the plan runner, after everything 1.2 knows.
         // D3 (1.4): the executables query, after everything 1.3 knows.
-        for minor in [3, 4, 9] {
+        // M4 (1.5): the repairs query, after everything 1.4 knows.
+        for minor in [3, 4, 5, 9] {
             assert_eq!(
                 names(Mutation, minor),
                 format!("{v12_commands} SaveProject RunPlan ControlPlan")
             );
             let v14 = if minor >= 4 { " Executables" } else { "" };
+            let v15 = if minor >= 5 { " Repairs" } else { "" };
             assert_eq!(
                 names(Query, minor),
-                format!("{v12_queries} Projects PlanRun{v14}")
+                format!("{v12_queries} Projects PlanRun{v14}{v15}")
             );
         }
         assert_eq!(RequestKind::of_frame("Executables", 3), None);
+        assert_eq!(RequestKind::of_frame("Repairs", 4), None);
         assert_eq!(RequestKind::of_frame("SaveProject", 2), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 1), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 2), Some(K::ChatTurn));

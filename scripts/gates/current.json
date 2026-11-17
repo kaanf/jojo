@@ -76,7 +76,13 @@
       "m4_repair_section_carries_the_end_of_the_failure_output_and_the_paths",
       "m4_review_prompt_has_the_developer_inputs_and_fits_the_diff",
       "m4_review_reply_is_one_strict_verdict",
-      "m4_review_is_not_a_chat_turn_kind"
+      "m4_review_is_not_a_chat_turn_kind",
+      "m4_a_failed_validation_is_repaired_with_its_output_then_reviewed_by_the_other_provider",
+      "m4_a_step_that_keeps_failing_is_held_for_the_human_after_two_repairs",
+      "m4_a_rejecting_review_sends_its_notes_to_the_repair",
+      "m4_with_repair_and_review_switched_off_a_failure_is_held_at_once_and_nothing_reviews",
+      "m4_without_the_reviewer_a_passed_step_goes_straight_to_the_human",
+      "m4_a_review_that_cannot_start_holds_the_step_for_the_human"
     ],
     "ignored": [
       "child_fixture",
@@ -99,7 +105,8 @@
   "gui": {
     "scripts/gui_p1_14.py": 9,
     "scripts/gui_p2_02.py": 3,
-    "scripts/gui_p2_03.py": 5
+    "scripts/gui_p2_03.py": 5,
+    "scripts/gui_m4.py": 1
   },
   "not_covered": [
     "The twelve P2-04 rehearsal scenarios (scripts/gui_p2_04.py) are not run by this gate yet.",

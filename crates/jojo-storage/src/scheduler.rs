@@ -65,11 +65,13 @@ fn capacity_left(c: &Connection, what: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    let turns = active_turns(c).map_err(|e| e.to_string())?;
+    // M4: a running review takes one unit too.
+    let turns = active_turns(c).map_err(|e| e.to_string())?
+        + crate::repairs::active_reviews(c).map_err(|e| e.to_string())?;
     let capacity = config(c).map_err(|e| e.to_string())?.capacity("global");
     if attempts + turns >= capacity {
         return Err(format!(
-            "CapacityFull: {attempts} attempts and {turns} lead turn use all {capacity} units; \
+            "CapacityFull: {attempts} attempts and {turns} turns use all {capacity} units; \
              {what} waits"
         ));
     }

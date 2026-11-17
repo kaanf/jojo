@@ -3,9 +3,11 @@
 //!
 //! A run is an approved lead plan revision that the human started. Approving a plan does
 //! not run it. The runner starts each ready step through the same path as a human Start,
-//! so every check of a Start applies; it never retries a step: an attempt that fails, a
-//! validation that fails, a rejected candidate or an integration conflict leaves the step
-//! for the human (D2: repair is M4), and only the steps that need it stop.
+//! so every check of a Start applies. M4 (D2): a step whose own work failed is repaired
+//! at most twice, each time as a new attempt decided and recorded before it starts; a
+//! step whose host validation passed is reviewed by the other provider; anything else,
+//! and a failure past the limit, is a hold that waits for the human. Only the steps that
+//! need it stop.
 use crate::model::{from_db, id_from_text, id_to_text, to_db};
 use crate::sqlite::{Connection, Value};
 use crate::*;
@@ -15,6 +17,7 @@ use jojo_domain::ipc::{identity, number, object, text};
 use jojo_domain::json::Json;
 use jojo_domain::planner::{self, LeadReply, TurnKind};
 use jojo_domain::provider::ProviderKind;
+use jojo_domain::repair::{Failure, MAX_REPAIRS};
 use jojo_domain::validation::ValidationPlan;
 
 fn deny(s: impl Into<String>) -> TxError {
@@ -51,17 +54,24 @@ pub enum StepState {
     /// Everything it needs is there; it starts when capacity allows.
     Ready,
     Running,
+    /// M4: a repair attempt is decided or running.
+    Repairing,
     /// Host validation is queued or running.
     Validating,
-    /// Validation passed; the human accepts or rejects the candidate.
+    /// M4: validation passed; the other provider's review is queued or running.
+    Reviewing,
+    /// Validation (and the review, when it is on) passed; the human accepts or rejects.
     Review,
     /// Accepted and not yet on the plan branch.
     Accepted,
     Integrated,
     /// The accepted candidate does not apply to the plan branch.
     Conflict,
-    /// The attempt, its validation or the candidate failed.
+    /// The attempt, its validation, its review or the candidate failed; the runner has
+    /// not decided yet between a repair and a hold.
     Failed,
+    /// M4: the step waits for the human; the detail says why.
+    NeedsHuman,
     /// The runner could not start it.
     Refused,
     Cancelled,
@@ -73,20 +83,36 @@ impl StepState {
             Self::Blocked => "Blocked",
             Self::Ready => "Ready",
             Self::Running => "Running",
+            Self::Repairing => "Repairing",
             Self::Validating => "Validating",
+            Self::Reviewing => "Reviewing",
             Self::Review => "Review",
             Self::Accepted => "Accepted",
             Self::Integrated => "Integrated",
             Self::Conflict => "Conflict",
             Self::Failed => "Failed",
+            Self::NeedsHuman => "NeedsHuman",
             Self::Refused => "Refused",
             Self::Cancelled => "Cancelled",
         }
     }
     /// The step needs the human and holds back everything that depends on it.
     pub fn stopped(self) -> bool {
-        matches!(self, Self::Conflict | Self::Failed | Self::Refused)
+        matches!(self, Self::Conflict | Self::NeedsHuman | Self::Refused)
     }
+}
+
+/// M4: the review of a step's newest candidate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StepReview {
+    pub review: OpaqueId,
+    pub provider: ProviderKind,
+    /// `RUNNING` until it ends, then `APPROVED`, `REJECTED`, `FAILED`, `CANCELLED` or
+    /// `INTERRUPTED`.
+    pub state: String,
+    pub notes: String,
+    pub objection: Option<String>,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,6 +132,16 @@ pub struct RunStep {
     pub commit: Option<String>,
     /// The event of the human's acceptance; integration follows this order.
     pub accepted: Option<u64>,
+    /// M4: repairs recorded for the step so far.
+    pub repairs: u8,
+    /// M4: the repair the newest attempt is, as "ordinal of limit".
+    pub repair: Option<(u8, u8)>,
+    /// M4: a repair that was decided and has not started: the attempt it starts as.
+    pub pending_repair: Option<OpaqueId>,
+    /// M4: why the newest attempt failed, while the step is `Failed`.
+    pub failure: Option<Failure>,
+    /// M4: the review of the newest attempt's candidate, once one was started.
+    pub review: Option<StepReview>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -123,6 +159,9 @@ pub struct PlanRunView {
     pub state: String,
     /// The plan branch's newest commit: the base, or the last integration.
     pub head: String,
+    /// M4 (D2): the project's newest settings: repairs per step and the reviewer.
+    pub repair_limit: u8,
+    pub review_enabled: bool,
     pub steps: Vec<RunStep>,
 }
 
@@ -131,6 +170,9 @@ pub struct PlanRunView {
 pub fn plan_branch(plan: ArtifactId) -> String {
     format!("jojo/plan/{}", id_to_text(plan.0))
 }
+
+/// M4: attempts the `Repairs` answer lists at most.
+const MAX_REPAIR_ROWS: usize = 64;
 
 fn scopes_overlap(a: &str, b: &str) -> bool {
     let inside = |x: &str, y: &str| x == y || x.starts_with(&format!("{y}/"));
@@ -151,9 +193,12 @@ impl PlanRunView {
                 matches!(
                     s.state,
                     StepState::Running
+                        | StepState::Repairing
                         | StepState::Validating
+                        | StepState::Reviewing
                         | StepState::Review
                         | StepState::Accepted
+                        | StepState::Failed
                 )
             })
             .collect();
@@ -188,6 +233,8 @@ impl PlanRunView {
             ("base", text(self.base.clone())),
             ("branch", text(self.branch.clone())),
             ("head", text(self.head.clone())),
+            ("repair_limit", number(self.repair_limit.into())),
+            ("review_enabled", Json::Bool(self.review_enabled)),
             (
                 "steps",
                 Json::List(
@@ -218,6 +265,17 @@ impl PlanRunView {
                                 ("candidate", opt(&s.candidate)),
                                 ("receipt", s.receipt.map_or(Json::Null, number)),
                                 ("commit", opt(&s.commit)),
+                                ("repairs", number(s.repairs.into())),
+                                (
+                                    "repair",
+                                    s.repair.map_or(Json::Null, |(n, of)| {
+                                        object([
+                                            ("ordinal", number(n.into())),
+                                            ("limit", number(of.into())),
+                                        ])
+                                    }),
+                                ),
+                                ("review", s.review.as_ref().map_or(Json::Null, review_json)),
                             ])
                         })
                         .collect(),
@@ -225,6 +283,36 @@ impl PlanRunView {
             ),
         ])
     }
+}
+
+fn review_json(r: &StepReview) -> Json {
+    let cut = |s: &str, n: usize| text(s.chars().take(n).collect::<String>());
+    object([
+        ("review", identity(r.review)),
+        (
+            "provider",
+            text(jojo_domain::project::provider_name(r.provider)),
+        ),
+        ("state", text(r.state.clone())),
+        ("notes", cut(&r.notes, 2048)),
+        (
+            "objection",
+            r.objection.as_deref().map_or(Json::Null, |o| cut(o, 512)),
+        ),
+        ("detail", cut(&r.detail, 512)),
+    ])
+}
+
+/// M4 (D2): the repair limit and whether the reviewer is on, from the newest revision of
+/// the project the repository belongs to; two repairs and the reviewer without one.
+pub(crate) fn repair_policy(
+    c: &Connection,
+    repository: RepositoryId,
+) -> Result<(u8, bool), StorageError> {
+    Ok(crate::projects::of_repository(c, repository)?
+        .map_or((MAX_REPAIRS, true), |(_, _, record)| {
+            (record.repair_limit, record.review)
+        }))
 }
 
 /// The lead plan a plan identity was drafted as: its turn, subjects, repository and base.
@@ -296,23 +384,81 @@ fn runs(c: &Connection, running: bool) -> Result<Vec<(String, i64)>, StorageErro
     Ok(out)
 }
 
-/// A step's state, its detail, attempt, candidate, validation receipt and plan commit.
-type StepFacts = (
-    StepState,
-    String,
-    Option<OpaqueId>,
-    Option<String>,
-    Option<u64>,
-    Option<String>,
-);
+/// What is known about one step, from durable records only.
+struct Facts {
+    state: StepState,
+    detail: String,
+    attempt: Option<OpaqueId>,
+    candidate: Option<String>,
+    receipt: Option<u64>,
+    commit: Option<String>,
+    repairs: u8,
+    repair: Option<(u8, u8)>,
+    pending_repair: Option<OpaqueId>,
+    failure: Option<Failure>,
+    review: Option<StepReview>,
+}
 
+impl Facts {
+    fn new(state: StepState, detail: impl Into<String>) -> Self {
+        Self {
+            state,
+            detail: detail.into(),
+            attempt: None,
+            candidate: None,
+            receipt: None,
+            commit: None,
+            repairs: 0,
+            repair: None,
+            pending_repair: None,
+            failure: None,
+            review: None,
+        }
+    }
+}
+
+/// M4: the review of one attempt's candidate, if one was started.
+fn attempt_review(c: &Connection, attempt: &str) -> Result<Option<StepReview>, StorageError> {
+    let row = c.query_optional(
+        "SELECT r.review,r.provider,x.outcome,x.notes,x.objection,x.detail
+         FROM step_reviews r LEFT JOIN step_review_results x ON x.review=r.review
+         WHERE r.attempt=?1",
+        &[Value::Text(attempt)],
+        |r| {
+            Ok((
+                r.text(0)?,
+                r.text(1)?,
+                r.optional_text(2)?,
+                r.optional_text(3)?,
+                r.optional_text(4)?,
+                r.optional_text(5)?,
+            ))
+        },
+    )?;
+    row.map(|(review, provider, outcome, notes, objection, detail)| {
+        Ok(StepReview {
+            review: id_from_text(&review)?,
+            provider: jojo_domain::project::provider_named(&provider)
+                .ok_or_else(|| StorageError::corrupt("review provider"))?,
+            state: outcome.unwrap_or_else(|| "RUNNING".into()),
+            notes: notes.unwrap_or_default(),
+            objection,
+            detail: detail.unwrap_or_default(),
+        })
+    })
+    .transpose()
+}
+
+/// A step's state with its attempt, candidate, validation receipt, plan commit, repairs
+/// and review.
 fn step_state(
     v: &ReadView<'_>,
     plan: &str,
     revision: i64,
     step: NodeRef,
     cancelled: bool,
-) -> Result<StepFacts, StorageError> {
+    review_on: bool,
+) -> Result<Facts, StorageError> {
     let c = v.conn;
     let id = id_to_text(step.id);
     let refusal = c.query_optional(
@@ -320,6 +466,16 @@ fn step_state(
         &[Value::Text(plan), Value::Int(revision), Value::Text(&id)],
         |r| r.text(0),
     )?;
+    // M4: the repairs of the step, oldest first: ordinal, limit and the attempt it is.
+    let repairs = c.query(
+        "SELECT ordinal,repair_limit,attempt,
+                EXISTS(SELECT 1 FROM scheduler_attempts s WHERE s.attempt=p.attempt)
+         FROM plan_step_repairs p WHERE plan=?1 AND revision=?2 AND step=?3 ORDER BY ordinal",
+        &[Value::Text(plan), Value::Int(revision), Value::Text(&id)],
+        |r| Ok((r.int(0)?, r.int(1)?, r.text(2)?, r.int(3)? == 1)),
+    )?;
+    let count = u8::try_from(repairs.len()).map_err(|_| StorageError::corrupt("repairs"))?;
+    let small = |n: i64| u8::try_from(n).map_err(|_| StorageError::corrupt("repair ordinal"));
     let attempt = c
         .query_optional(
             "SELECT attempt FROM scheduler_attempts WHERE step=?1 AND step_revision=?2
@@ -329,12 +485,33 @@ fn step_state(
         )?
         .map(|a| id_from_text(&a))
         .transpose()?;
+    let with = |mut f: Facts| {
+        f.repairs = count;
+        f.attempt = f.attempt.or(attempt);
+        f
+    };
+    if let Some((ordinal, limit, pending, false)) = repairs.last() {
+        let mut f = match (&refusal, cancelled) {
+            (Some(detail), _) => Facts::new(StepState::Refused, detail.clone()),
+            (None, true) => Facts::new(StepState::Cancelled, ""),
+            (None, false) => {
+                let mut f = Facts::new(
+                    StepState::Repairing,
+                    format!("repair {ordinal} of {limit}: waiting to start"),
+                );
+                f.pending_repair = Some(id_from_text(pending)?);
+                f
+            }
+        };
+        f.repair = Some((small(*ordinal)?, small(*limit)?));
+        return Ok(with(f));
+    }
     let Some(attempt) = attempt else {
         if let Some(detail) = refusal {
-            return Ok((StepState::Refused, detail, None, None, None, None));
+            return Ok(with(Facts::new(StepState::Refused, detail)));
         }
         if cancelled {
-            return Ok((StepState::Cancelled, String::new(), None, None, None, None));
+            return Ok(with(Facts::new(StepState::Cancelled, "")));
         }
         let question = c.query_optional(
             "SELECT q.prompt FROM step_questions q
@@ -345,94 +522,169 @@ fn step_state(
             &[Value::Text(&id)],
             |r| r.text(0),
         )?;
-        return Ok(match question {
-            Some(q) => (StepState::Blocked, q, None, None, None, None),
-            None => (StepState::Ready, String::new(), None, None, None, None),
-        });
+        return Ok(with(match question {
+            Some(q) => Facts::new(StepState::Blocked, q),
+            None => Facts::new(StepState::Ready, ""),
+        }));
     };
-    let some = Some(attempt);
+    let text_id = id_to_text(attempt);
+    let repair = repairs
+        .iter()
+        .find(|(_, _, a, _)| *a == text_id)
+        .map(|(n, of, _, _)| Ok::<_, StorageError>((small(*n)?, small(*of)?)))
+        .transpose()?;
+    let hold = c.query_optional(
+        "SELECT reason FROM plan_step_holds WHERE attempt=?1",
+        &[Value::Text(&text_id)],
+        |r| r.text(0),
+    )?;
+    let base = |state: StepState, detail: String| {
+        let mut f = Facts::new(state, detail);
+        f.repair = repair;
+        with(f)
+    };
+    // A failure is a hold once the runner recorded one, and pending until it decides.
+    let failed = |failure: Failure, detail: String| match &hold {
+        Some(reason) => base(StepState::NeedsHuman, reason.clone()),
+        None if cancelled && failure == Failure::Cancelled => base(StepState::Cancelled, detail),
+        None => {
+            let mut f = base(StepState::Failed, detail);
+            f.failure = Some(failure);
+            f
+        }
+    };
     let Some(result) = v.attempt_result(attempt)? else {
         // A Start that was committed but could not launch is refused, not running.
-        return Ok(match refusal {
-            Some(detail) => (StepState::Refused, detail, some, None, None, None),
-            None => (StepState::Running, String::new(), some, None, None, None),
+        return Ok(match (refusal, repair) {
+            (Some(detail), _) => base(StepState::Refused, detail),
+            (None, Some((n, of))) => {
+                base(StepState::Repairing, format!("repair {n} of {of}: running"))
+            }
+            (None, None) => base(StepState::Running, String::new()),
         });
     };
-    if result.outcome != jojo_domain::attempt::AttemptOutcome::Succeeded {
+    use jojo_domain::attempt::AttemptOutcome;
+    if result.outcome != AttemptOutcome::Succeeded {
         let detail = format!("attempt {:?}: {}", result.outcome, result.reason);
-        return Ok((StepState::Failed, detail, some, None, None, None));
+        let failure = match result.outcome {
+            AttemptOutcome::Cancelled => Failure::Cancelled,
+            AttemptOutcome::Interrupted => Failure::Interrupted,
+            _ => Failure::AttemptFailed {
+                reason: result.reason.clone(),
+            },
+        };
+        return Ok(failed(failure, detail));
     }
     let Some(candidate) = result.candidate.clone() else {
-        let detail = "the attempt changed nothing".to_owned();
-        return Ok((StepState::Failed, detail, some, None, None, None));
+        return Ok(failed(
+            Failure::NoChange,
+            "the attempt changed nothing".into(),
+        ));
     };
-    let cand = Some(candidate.clone());
-    let integration = c.query_optional(
-        "SELECT outcome,commit_id,detail FROM plan_integrations WHERE attempt=?1",
-        &[Value::Text(&id_to_text(attempt))],
-        |r| Ok((r.text(0)?, r.optional_text(1)?, r.text(2)?)),
-    )?;
-    let receipt = match v.validation_state(attempt)? {
+    let validation = v.validation_state(attempt)?;
+    let receipt = match &validation {
         ValidationState::Passed(e) | ValidationState::Failed(e) => Some(e.0),
         _ => None,
     };
+    let complete = |mut f: Facts| {
+        f.candidate = Some(candidate.clone());
+        f.receipt = f.receipt.or(receipt);
+        f
+    };
+    let integration = c.query_optional(
+        "SELECT outcome,commit_id,detail FROM plan_integrations WHERE attempt=?1",
+        &[Value::Text(&text_id)],
+        |r| Ok((r.text(0)?, r.optional_text(1)?, r.text(2)?)),
+    )?;
+    let review = attempt_review(c, &text_id)?;
+    let reviewed = |mut f: Facts| {
+        f.review = review.clone();
+        complete(f)
+    };
     match integration {
         Some((outcome, commit, _)) if outcome == "INTEGRATED" => {
-            return Ok((
-                StepState::Integrated,
-                String::new(),
-                some,
-                cand,
-                receipt,
-                commit,
-            ));
+            let mut f = base(StepState::Integrated, String::new());
+            f.commit = commit;
+            return Ok(reviewed(f));
         }
-        Some((_, _, detail)) => {
-            return Ok((StepState::Conflict, detail, some, cand, receipt, None));
-        }
+        Some((_, _, detail)) => return Ok(reviewed(base(StepState::Conflict, detail))),
         None => {}
     }
     if v.candidate_rejected(attempt)? {
-        let detail = "the human rejected the candidate".to_owned();
-        return Ok((StepState::Failed, detail, some, cand, receipt, None));
+        let f = failed(
+            Failure::HumanRejected,
+            "the human rejected the candidate".into(),
+        );
+        return Ok(reviewed(f));
     }
     if v.candidate_acceptance(attempt)?.is_some() {
-        return Ok((
-            StepState::Accepted,
-            String::new(),
-            some,
-            cand,
-            receipt,
-            None,
-        ));
+        return Ok(reviewed(base(StepState::Accepted, String::new())));
     }
-    Ok(match v.validation_state(attempt)? {
-        ValidationState::NotRun => (
-            StepState::Validating,
-            "queued".into(),
-            some,
-            cand,
-            None,
-            None,
-        ),
+    Ok(reviewed(match validation {
+        ValidationState::NotRun => base(StepState::Validating, "queued".into()),
         ValidationState::Unknown(why) => {
             let running = v
                 .validation_runs(attempt)?
                 .last()
                 .is_some_and(|r| r.ended.is_none());
             if running {
-                (StepState::Validating, why, some, cand, None, None)
+                base(StepState::Validating, why)
             } else {
                 let detail = format!("validation ended without a verdict: {why}");
-                (StepState::Failed, detail, some, cand, None, None)
+                failed(Failure::ValidationUnknown { detail: why }, detail)
             }
         }
-        ValidationState::Passed(_) => (StepState::Review, String::new(), some, cand, receipt, None),
-        ValidationState::Failed(_) => {
-            let detail = "host validation failed".to_owned();
-            (StepState::Failed, detail, some, cand, receipt, None)
+        ValidationState::Failed(e) => {
+            let reasons = v
+                .validation_receipts(attempt)?
+                .into_iter()
+                .find(|r| r.event == e)
+                .map(|r| r.reasons)
+                .unwrap_or_default();
+            failed(
+                Failure::ValidationFailed {
+                    reasons,
+                    output: String::new(),
+                },
+                "host validation failed".into(),
+            )
         }
-    })
+        ValidationState::Passed(_) => {
+            let name = |p: ProviderKind| jojo_domain::project::provider_name(p);
+            match &review {
+                // A review that could not start holds the step.
+                None if hold.is_some() => {
+                    base(StepState::NeedsHuman, hold.clone().unwrap_or_default())
+                }
+                // A review that started still decides, even if the reviewer was switched
+                // off since.
+                None if !review_on => base(StepState::Review, String::new()),
+                None => base(StepState::Reviewing, "queued".into()),
+                Some(r) => match r.state.as_str() {
+                    "RUNNING" => base(
+                        StepState::Reviewing,
+                        format!("{} reviews", name(r.provider)),
+                    ),
+                    "APPROVED" => base(
+                        StepState::Review,
+                        format!("approved by {}", name(r.provider)),
+                    ),
+                    "REJECTED" => failed(
+                        Failure::ReviewRejected {
+                            notes: r.notes.clone(),
+                        },
+                        format!("rejected by {}", name(r.provider)),
+                    ),
+                    other => failed(
+                        Failure::ReviewUnknown {
+                            detail: format!("{other}: {}", r.detail),
+                        },
+                        format!("the review ended without a verdict ({other})"),
+                    ),
+                },
+            }
+        }
+    }))
 }
 
 fn view(v: &ReadView<'_>, plan: &str, revision: i64) -> Result<PlanRunView, StorageError> {
@@ -470,6 +722,8 @@ fn view(v: &ReadView<'_>, plan: &str, revision: i64) -> Result<PlanRunView, Stor
     let checks = ValidationPlan::import(document.as_bytes()).map_err(StorageError::corrupt)?;
     let control = control(c, plan, revision)?;
     let cancelled = control == "CANCELLED";
+    let repository_id = RepositoryId(id_from_text(&repository)?);
+    let (repair_limit, review_enabled) = repair_policy(c, repository_id)?;
     let mut steps = Vec::new();
     for (ordinal, (step, key, title)) in names.into_iter().enumerate() {
         let node = NodeRef {
@@ -500,9 +754,8 @@ fn view(v: &ReadView<'_>, plan: &str, revision: i64) -> Result<PlanRunView, Stor
                     .collect()
             })
             .unwrap_or_default();
-        let (state, detail, attempt, candidate, receipt, commit) =
-            step_state(v, plan, revision, node, cancelled)?;
-        let accepted = match attempt {
+        let f = step_state(v, plan, revision, node, cancelled, review_enabled)?;
+        let accepted = match f.attempt {
             Some(a) => c
                 .query_optional(
                     "SELECT event FROM candidate_acceptances WHERE attempt=?1",
@@ -521,13 +774,18 @@ fn view(v: &ReadView<'_>, plan: &str, revision: i64) -> Result<PlanRunView, Stor
             provider,
             depends_on,
             write_scope,
-            state,
-            detail,
-            attempt,
-            candidate,
-            receipt,
-            commit,
+            state: f.state,
+            detail: f.detail,
+            attempt: f.attempt,
+            candidate: f.candidate,
+            receipt: f.receipt,
+            commit: f.commit,
             accepted,
+            repairs: f.repairs,
+            repair: f.repair,
+            pending_repair: f.pending_repair,
+            failure: f.failure,
+            review: f.review,
         });
     }
     // A step is ready only when every prerequisite is on the plan branch; a step behind a
@@ -566,12 +824,14 @@ fn view(v: &ReadView<'_>, plan: &str, revision: i64) -> Result<PlanRunView, Stor
             plan: subject,
             validation: ArtifactId(id_from_text(&validation)?),
         },
-        repository: RepositoryId(id_from_text(&repository)?),
+        repository: repository_id,
         base,
         branch,
         control,
         state,
         head,
+        repair_limit,
+        review_enabled,
         steps,
     })
 }
@@ -713,6 +973,8 @@ impl Tx<'_> {
         };
         self.plan_control_row(&plan_text, revision, next, "by the human")?;
         if next == "CANCELLED" {
+            // M4: a running review of the run is asked to stop as well.
+            self.stop_plan_reviews(&plan_text, revision)?;
             // Queued steps are cancelled; their unsealed attempts are asked to stop.
             let queued = self.conn.query(
                 "SELECT q.step,q.step_revision,q.control_revision FROM scheduler_queue q
@@ -800,6 +1062,81 @@ impl ReadView<'_> {
     /// M3 (protocol 1.3): the newest run of one plan, or `null`.
     pub fn ipc_plan_run(&self, plan: ArtifactId) -> Result<Json, StorageError> {
         Ok(self.plan_run(plan)?.map_or(Json::Null, |v| v.json()))
+    }
+    /// M4 (protocol 1.5): every attempt of a plan run with its repair, hold and review,
+    /// newest run first; the newest attempt of a step also carries the step's state.
+    pub fn ipc_repairs(&self) -> Result<Json, StorageError> {
+        let c = self.conn;
+        let mut rows = Vec::new();
+        for (plan, revision) in runs(c, false)? {
+            let run = view(self, &plan, revision)?;
+            for step in &run.steps {
+                let attempts = c.query(
+                    "SELECT attempt FROM scheduler_attempts WHERE step=?1 ORDER BY rowid DESC",
+                    &[Value::Text(&id_to_text(step.step.id))],
+                    |r| r.text(0),
+                )?;
+                for (index, attempt) in attempts.iter().enumerate() {
+                    let id = id_from_text(attempt)?;
+                    let repair = crate::repairs::repair_of(c, id)?;
+                    let hold = c.query_optional(
+                        "SELECT reason FROM plan_step_holds WHERE attempt=?1",
+                        &[Value::Text(attempt)],
+                        |r| r.text(0),
+                    )?;
+                    let review = attempt_review(c, attempt)?;
+                    let newest = index == 0 && step.pending_repair.is_none();
+                    rows.push(object([
+                        ("attempt", identity(id)),
+                        ("plan", identity(run.plan.0)),
+                        ("step", identity(step.step.id)),
+                        ("key", text(step.key.clone())),
+                        (
+                            "provider",
+                            text(jojo_domain::project::provider_name(step.provider)),
+                        ),
+                        (
+                            "state",
+                            if newest {
+                                text(step.state.name())
+                            } else {
+                                Json::Null
+                            },
+                        ),
+                        (
+                            "repair",
+                            repair.as_ref().map_or(Json::Null, |r| {
+                                object([
+                                    ("ordinal", number(r.ordinal.into())),
+                                    ("limit", number(r.limit.into())),
+                                    (
+                                        "failure",
+                                        text(r.failure.chars().take(512).collect::<String>()),
+                                    ),
+                                ])
+                            }),
+                        ),
+                        (
+                            "hold",
+                            hold.map_or(Json::Null, |h| {
+                                text(h.chars().take(512).collect::<String>())
+                            }),
+                        ),
+                        ("review", review.as_ref().map_or(Json::Null, review_json)),
+                    ]));
+                    if rows.len() >= MAX_REPAIR_ROWS {
+                        return Ok(object([
+                            ("attempts", Json::List(rows)),
+                            ("complete", Json::Bool(false)),
+                        ]));
+                    }
+                }
+            }
+        }
+        Ok(object([
+            ("attempts", Json::List(rows)),
+            ("complete", Json::Bool(true)),
+        ]))
     }
     pub fn plans_running(&self) -> Result<bool, StorageError> {
         Ok(!runs(self.conn, true)?.is_empty())

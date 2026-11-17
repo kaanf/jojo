@@ -99,6 +99,11 @@ impl MigrationPlan {
                 name: "executable identities per run",
                 sql: SCHEMA_V14,
             },
+            Migration {
+                version: 15,
+                name: "repairs, holds and reviews of plan steps",
+                sql: SCHEMA_V15,
+            },
         ])
     }
 
@@ -1188,6 +1193,64 @@ CREATE TABLE turn_executables (
  identity TEXT NOT NULL REFERENCES executable_identities(identity));
 "#;
 
+/// M4: a repair is a new attempt of a failed plan step, decided before it starts and
+/// carrying the failure in its prompt; at most two per step (D2). A hold is the step
+/// waiting for the human, with the reason. A review is one read-only turn of the other
+/// provider on a step whose host validation passed, and its verdict.
+const SCHEMA_V15: &str = r#"
+CREATE TABLE plan_step_repairs (
+ plan TEXT NOT NULL, revision INTEGER NOT NULL, step TEXT NOT NULL CHECK(length(step)=32),
+ ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 1 AND 2),
+ repair_limit INTEGER NOT NULL CHECK(repair_limit BETWEEN ordinal AND 2),
+ failed TEXT NOT NULL UNIQUE REFERENCES scheduler_attempts(attempt),
+ attempt TEXT NOT NULL UNIQUE CHECK(length(attempt)=32),
+ failure TEXT NOT NULL CHECK(length(failure) BETWEEN 1 AND 1024),
+ section TEXT NOT NULL CHECK(length(section)>0),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ PRIMARY KEY(plan, revision, step, ordinal),
+ FOREIGN KEY(plan, revision) REFERENCES plan_runs(plan, revision));
+CREATE TABLE plan_step_holds (
+ plan TEXT NOT NULL, revision INTEGER NOT NULL, step TEXT NOT NULL CHECK(length(step)=32),
+ attempt TEXT NOT NULL UNIQUE REFERENCES scheduler_attempts(attempt),
+ reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 1024),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ FOREIGN KEY(plan, revision) REFERENCES plan_runs(plan, revision));
+CREATE TABLE step_reviews (
+ review TEXT PRIMARY KEY CHECK(length(review)=32),
+ plan TEXT NOT NULL, revision INTEGER NOT NULL, step TEXT NOT NULL CHECK(length(step)=32),
+ attempt TEXT NOT NULL UNIQUE REFERENCES attempt_results(attempt),
+ provider TEXT NOT NULL CHECK(provider IN ('Codex','ClaudeCode')),
+ repository TEXT NOT NULL REFERENCES local_repositories(id),
+ base TEXT NOT NULL CHECK(length(base) IN (40,64)),
+ prompt TEXT NOT NULL CHECK(length(prompt)>0),
+ prompt_digest TEXT NOT NULL CHECK(length(prompt_digest)=64),
+ epoch INTEGER NOT NULL REFERENCES engine_sessions(epoch),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ FOREIGN KEY(plan, revision) REFERENCES plan_runs(plan, revision));
+CREATE TABLE step_review_results (
+ review TEXT PRIMARY KEY REFERENCES step_reviews(review),
+ outcome TEXT NOT NULL CHECK(outcome IN ('APPROVED','REJECTED','FAILED','CANCELLED','INTERRUPTED')),
+ notes TEXT NOT NULL, objection TEXT, detail TEXT NOT NULL,
+ reply TEXT,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ CHECK((outcome IN ('APPROVED','REJECTED'))=(length(notes)>0 AND reply IS NOT NULL)));
+CREATE TABLE step_review_stops (
+ review TEXT PRIMARY KEY REFERENCES step_reviews(review),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq));
+CREATE TABLE review_executables (
+ review TEXT PRIMARY KEY REFERENCES step_reviews(review),
+ identity TEXT NOT NULL REFERENCES executable_identities(identity));
+CREATE TRIGGER plan_step_repairs_immutable BEFORE UPDATE ON plan_step_repairs BEGIN SELECT RAISE(ABORT,'immutable repair'); END;
+CREATE TRIGGER plan_step_repairs_keep BEFORE DELETE ON plan_step_repairs BEGIN SELECT RAISE(ABORT,'immutable repair'); END;
+CREATE TRIGGER plan_step_holds_immutable BEFORE UPDATE ON plan_step_holds BEGIN SELECT RAISE(ABORT,'immutable hold'); END;
+CREATE TRIGGER plan_step_holds_keep BEFORE DELETE ON plan_step_holds BEGIN SELECT RAISE(ABORT,'immutable hold'); END;
+CREATE TRIGGER step_reviews_immutable BEFORE UPDATE ON step_reviews BEGIN SELECT RAISE(ABORT,'immutable review'); END;
+CREATE TRIGGER step_reviews_keep BEFORE DELETE ON step_reviews BEGIN SELECT RAISE(ABORT,'immutable review'); END;
+CREATE TRIGGER step_review_results_immutable BEFORE UPDATE ON step_review_results BEGIN SELECT RAISE(ABORT,'immutable review'); END;
+CREATE TRIGGER step_review_results_keep BEFORE DELETE ON step_review_results BEGIN SELECT RAISE(ABORT,'immutable review'); END;
+CREATE TRIGGER step_review_stops_keep BEFORE DELETE ON step_review_stops BEGIN SELECT RAISE(ABORT,'immutable review'); END;
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -1199,7 +1262,7 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 14));
+        assert_eq!((report.from_version, report.to_version), (0, 15));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);
