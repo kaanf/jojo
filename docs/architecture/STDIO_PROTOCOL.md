@@ -199,3 +199,31 @@ The lead's last message must be exactly one JSON object of the turn's schema (`j
 ### Other changes
 
 A blocking question about one plan step that no human answered refuses that step's `Start` with `StepQuestionOpen: …`. When a helper closes or loses its client, a running turn is stopped and sealed `Failed` with the detail `the helper is closing`; a turn an earlier helper left without a result is sealed `Interrupted` when the next helper starts. Neither is a recovery subject.
+
+## Protocol 1.3: project records and the plan runner (M3)
+
+Protocol minor 3 adds three commands and two queries. The helper's `MINOR` is 3; Hello for a frame of minor ≥ 3 lists `SaveProject RunPlan ControlPlan` after the 1.2 commands and `Projects PlanRun` after the 1.2 queries. A frame of minor ≤ 2 naming any of them is answered `UnknownType`. The macOS client sends these five at minor 3 and only while Projects or Execution Plan is shown (`Request.minor`). Every payload is checked for its exact field set. `ControlPlan` is read from the control queue.
+
+Changed in 1.3 for every client: capacity is no longer one. `Start` and `ChatTurn` are refused with `CapacityFull: <n> attempts and <m> lead turn use all <c> units; … waits` when the unfinished attempts (held ones included) and the running lead turn fill the global capacity, which a project record sets (D4: two in all by default for a new record, not split by provider, no limit per repository; without any project record the Phase 1 configuration of one stays). A second turn is refused `TurnRefused: another lead turn is running`; a second host validation `ValidationBusy: another host validation is running`. The old code `CapacityOne` is no longer sent.
+
+### Commands
+
+| Request | Fields | What it does |
+|---|---|---|
+| `SaveProject` | `project` (identity), `revision` (the revision edited; `0` for a new project), `name`, `repositories` (1 to 4 registered repository identities), `instructions` (at most 2048 bytes), `test_command`, `ci_command` (argument vectors, an absolute program first, or empty), `kinds` (at most 8 of `{kind, provider}`; a kind is lower case letters, digits and `-`), `default_provider` (`Codex` or `ClaudeCode`), `capacity` (1 to 8) | Saves the whole record as the next revision (revisions are immutable) and sets the scheduler's capacity: `global`, `provider:claude`, `provider:codex` and the per-repository default all become `capacity`. Response `project revision=<n>`. Refusals: `InvalidProject: …` (a field out of bounds, an unregistered repository, a repository of another project, more than eight projects), `StaleProject: …`, `UnknownProvider` |
+| `RunPlan` | `plan` | Starts the approved revision of a plan a lead drafted; approving a plan does not run it. Response `plan run revision=<n>`. Refusals: `RunRefused: not a plan a lead drafted`, `RunRefused: missing or stale approval: <document>`, `RunRefused: this plan revision was already started; resume it instead` |
+| `ControlPlan` | `plan`, `action` (`Pause`, `Resume` or `Cancel`) | Pause: no new step starts, running attempts continue. Resume. Cancel (final): queued steps are cancelled and their unsealed attempts are asked to stop. Response `plan run <STATE>` or `plan run already <STATE>`. Refusals: `UnknownPlanRun: …`, `PlanRunCancelled: …`, `UnknownAction` |
+
+### Queries
+
+`Projects` (no field) returns `projects` (per project, newest revision: `project`, `revision` and the fields of `SaveProject` other than `project` and `revision`), `capacity` (the scheduler's global capacity now) and `configuration` (its revision).
+
+`PlanRun` with `plan` returns the newest run of that plan, or `null` when it was never started: `plan`, `revision`, `state` (`RUNNING`, `PAUSED`, `CANCELLED`, `HALTED` when every step left needs the human, `DONE` when every step is integrated), `control` (the newest control), `repository`, `base`, `branch` (`jojo/plan/<plan identity>`), `head` (the newest integration commit, or the base), and `steps` in plan order: `step`, `key`, `title`, `kind` (or `null`), `provider`, `depends_on` (keys), `state` (`Waiting`, `Blocked`, `Ready`, `Running`, `Validating`, `Review`, `Accepted`, `Integrated`, `Conflict`, `Failed`, `Refused`, `Cancelled`), `detail` (at most 512 characters), `attempt`, `candidate`, `receipt` (the validation receipt), `commit` (the integration commit), each `null` when absent. One plan has at most six steps, so one answer holds it.
+
+### The runner
+
+The helper's serve loop runs one runner pass every 250 ms. A pass does nothing unless a run is `RUNNING`, admission is open and the last inspection holds no recovery subject. In order: each accepted step is integrated, one at a time in the order the human accepted them; each settled step that succeeded gets its host validation (one at a time); each ready step is started through the `Start` path under a runtime command identity (`PlanStepStart`), so every check of a Start applies. A step is ready when every prerequisite is integrated, no blocking question about it is open, it was never started and its write scope does not overlap a step that is running or not yet integrated. A refusal that means "not now" (`CapacityFull`, `AdmissionClosed`, `RecoveryHold`) ends the pass; any other refusal is recorded once (`plan_step_refusals`) and the step is `Refused`. Nothing is retried. A helper that starts finds every run `PAUSED` (reason "the helper started again").
+
+### Integration
+
+An accepted step's sealed candidate is applied onto the plan branch in the registered repository, in a new detached worktree under `<data root>/integration/`: `git apply` of the packet (no three-way merge) onto the branch's head, `git add --all`, `write-tree`, `commit-tree` as `Jojo <jojo@localhost>` with the step's key and title, then `update-ref refs/heads/jojo/plan/<plan>` from the expected head (or from nothing for the first). A hunk or new file that does not apply, or a branch that someone else moved, records a `CONFLICT` and moves nothing. An integration records the `ValidationPassed` observation the step's dependents wait for. A step of a running plan starts from the plan branch's head (E8 in `docs/roadmap/DESIGN_ROADMAP_DIFFERENCES.md`). The developer's checkout is never touched and nothing is pushed.

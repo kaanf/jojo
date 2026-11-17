@@ -423,3 +423,7 @@ Added to `Surfaces.swift` for Feature Chat and New Feature ([screens/FEATURE_CHA
 |---|---|
 | `TextArea` | A multi-line text field: 13 pt, padding 8 by 10, `fill`, radius 8; it grows from `lines` (default 3) to 8 lines. Off screen its text or prompt is drawn in place, as `InputField` does |
 | `ChatMessage` | One message of a transcript: a 22 pt round avatar with the author's initial (`accent` with `onAccent` for the lead, `fill` with `text2` for the human), the author at 13 semibold `textStrong` and a meta line at 11.5 `text3` beside it, then the content with a gap of 6. Padding 10 by 12, radius 10; the human's message stands on `fill2`, the lead's has no fill |
+
+## 24. Implementation notes: project and run surfaces (design wave 3, M3)
+
+No new component. Projects (`docs/design/screens/PROJECTS.md`) is built from the list row, fact line, input field, filter chip (as a toggle for a repository and the default provider), setting line and state block. The plan run on Execution Plan (`docs/design/screens/EXECUTION_PLAN.md`, section 8) uses the fact line, list row and kind tag; a step's state is a kind tag whose tone follows the status model (Integrated `ok`; Running, Validating, Accepted `info`; Review, Blocked `warn`; Conflict, Failed, Refused `danger`; the rest `neutral`). A task node of a running plan shows the step's key, title, provider and state instead of its identity. Off-screen renders: `execution-plan-run-…`, `execution-plan-run-narrow-…`, `projects-empty-…`, `-listed-…`, `-editing-…`, `-unreadable-…`, `-disconnected-…`.
