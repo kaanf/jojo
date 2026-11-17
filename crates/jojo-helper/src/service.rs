@@ -33,8 +33,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 mod commands;
+mod external;
 mod queries;
 mod runner;
+pub use external::{ExternalFault, RemoteConfig};
 
 /// Epoch-scoped internal identities occupy the high half; client IDs use the low half.
 /// Unique counter, not wall time, supplies all runtime IDs within the singleton epoch.
@@ -79,6 +81,8 @@ pub enum Work {
     Validation,
     /// M4: the review of a settled plan step.
     Review,
+    /// M5: one push, pull request or inspection of the remote.
+    External,
 }
 
 pub struct Workers {
@@ -195,6 +199,18 @@ impl Workers {
     }
     /// P2-03: a host validation run. It is not a provider attempt, but it is work this
     /// helper owns: capacity, close and drop wait for it exactly as for a launch.
+    /// M5: one external action or inspection, on its own thread.
+    pub fn external(
+        &mut self,
+        work: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Result<(), String> {
+        let handle = std::thread::Builder::new()
+            .name("jojo-external".into())
+            .spawn(work)
+            .map_err(|e| e.to_string())?;
+        self.handles.push((Work::External, handle));
+        Ok(())
+    }
     pub fn validate(
         &mut self,
         work: impl FnOnce() -> Result<(), String> + Send + 'static,
@@ -428,6 +444,13 @@ pub struct Service {
     /// M2: stop flag of the latest lead agent turn, set on close, emergency and drop.
     turn_stop: Arc<AtomicBool>,
     review_stop: Arc<AtomicBool>,
+    /// M5: how the remote is reached (the user's HOME, `gh` on the login shell's PATH).
+    /// `None`: no push or pull request can be requested.
+    pub remote: Option<RemoteConfig>,
+    /// M5 test injection of a fault after an action is issued. Production: `None`.
+    pub external_fault: Option<ExternalFault>,
+    /// M5: the actions this process issued and whose outcome is not recorded yet.
+    in_flight: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 /// The launcher's pinned flags as the adapter's configuration; `None` unless pinned.
@@ -549,6 +572,9 @@ impl Service {
             validation_stop: Arc::new(AtomicBool::new(false)),
             turn_stop: Arc::new(AtomicBool::new(false)),
             review_stop: Arc::new(AtomicBool::new(false)),
+            remote: None,
+            external_fault: None,
+            in_flight: Arc::default(),
         })
         .and_then(|service| {
             // M2: a turn an earlier helper left unfinished held no worktree, claim or
@@ -732,9 +758,17 @@ impl Service {
             | RequestKind::CancelTurn
             | RequestKind::SaveProject
             | RequestKind::RunPlan
-            | RequestKind::ControlPlan => {
+            | RequestKind::ControlPlan
+            | RequestKind::RequestExternal
+            | RequestKind::AuthorizeExternal
+            | RequestKind::InspectExternal
+            | RequestKind::ResolveExternal => {
                 drop(reader);
                 self.slice_command(kind, e)
+            }
+            RequestKind::ExternalActions => {
+                drop(reader);
+                self.external_actions(e)
             }
             RequestKind::Candidate
             | RequestKind::CandidateChanges

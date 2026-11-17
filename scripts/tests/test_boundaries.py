@@ -184,6 +184,23 @@ class BoundaryRegressionTests(unittest.TestCase):
         p.write_text(source)
         self.mutate("crates/jojo-storage/src/discovery.rs", '\nfn forbidden(c: &mut Command) { c.arg("-x"); }\n')
 
+    def test_remote_surface_launches_only_git_and_gh_cleared_and_never_forced(self):
+        remote = "crates/jojo-storage/src/remote.rs"
+        p = self.root / remote
+        original = p.read_text()
+        p.write_text(original.replace(".env_clear()", "", 1))
+        self.assertTrue(CHECK.boundary_errors(self.root))
+        p.write_text(original.replace('"--porcelain",', '"--porcelain", "--force",', 1))
+        self.assertTrue(CHECK.boundary_errors(self.root))
+        p.write_text(original.replace("let refspec = format!(\"{commit}", "let refspec = format!(\"+{commit}", 1))
+        self.assertTrue(CHECK.boundary_errors(self.root))
+        p.write_text(original)
+        self.assertEqual(CHECK.boundary_errors(self.root), [])
+        self.mutate(remote, '\nfn forbidden() { Command::new("/bin/sh"); }\n')
+
+    def test_remote_launch_does_not_extend_other_storage_modules(self):
+        self.mutate("crates/jojo-storage/src/external.rs", '\nfn forbidden(gh: &str) { Command::new(gh); }\n')
+
     def test_install_layout_may_be_named_only_by_discovery(self):
         self.mutate("crates/jojo-storage/src/codex.rs", '\nconst FORBIDDEN: &str = "node_modules/@openai";\n')
 

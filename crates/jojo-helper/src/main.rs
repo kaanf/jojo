@@ -30,7 +30,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(invocation @ (Invocation::Serve(_) | Invocation::ServeSlice(..))) => {
-            let (roots, config, claude, discovered) = match invocation {
+            let (roots, config, claude, discovered, remote) = match invocation {
                 Invocation::ServeSlice(roots, options) => {
                     let claude = options.claude.clone();
                     // D3: the login shell gets the helper's own HOME and nothing else.
@@ -43,15 +43,35 @@ fn main() -> ExitCode {
                             return ExitCode::from(2);
                         }
                     };
+                    // M5: gh is found on the same login shell's PATH; git and gh use their
+                    // own sign-in in this HOME. Without HOME nothing reaches a remote.
+                    let remote = home.as_deref().and_then(|home| {
+                        let discovery = match &discovered {
+                            Some(d) => Ok(d.discovery.clone()),
+                            None => jojo_storage::Discovery::login_shell(
+                                options
+                                    .login_shell
+                                    .as_deref()
+                                    .unwrap_or(std::path::Path::new(
+                                        jojo_helper::service::Discovered::DEFAULT_SHELL,
+                                    )),
+                                home,
+                            ),
+                        };
+                        discovery
+                            .map(|d| jojo_helper::service::RemoteConfig::new(d, home.to_owned()))
+                            .ok()
+                    });
                     let slice = jojo_helper::service::SliceConfig::new(&roots, options);
                     (
                         roots,
                         jojo_helper::service::ServiceConfig::slice(slice),
                         claude,
                         discovered,
+                        remote,
                     )
                 }
-                Invocation::Serve(roots) => (roots, Default::default(), None, None),
+                Invocation::Serve(roots) => (roots, Default::default(), None, None, None),
                 _ => unreachable!("matched serve invocations only"),
             };
             // P2-04.1: every process group this helper starts is guarded by a second
@@ -76,6 +96,7 @@ fn main() -> ExitCode {
                         service.claude =
                             claude.and_then(|c| jojo_helper::service::claude_config(*c));
                         service.discovered = discovered;
+                        service.remote = remote;
                         service.begin_executable_checks();
                         ExitCode::from(jojo_helper::service::serve(
                             service,

@@ -22,6 +22,12 @@
 //! always writes the first. A review turn (its prompt names the review schema) approves,
 //! unless the prompt says `fixture-review: reject-unless-repaired` and the diff holds no
 //! repaired line, or `fixture-review: prose`, which is no verdict.
+//!
+//! M5: a copy named `gh…` plays the GitHub CLI for `pr create --draft`, `pr list` and
+//! `auth status`, keeping its pull requests in `$HOME/fake-gh/` (the HOME the helper
+//! gives it). `$HOME/fake-gh/mode` holds `reject` (create refused before reaching the
+//! remote), `lost` (created, then a failure that says nothing) or `signed-out`; each
+//! `pr create` is appended to `$HOME/fake-gh/calls`, so a test can count them.
 use std::io::{Read, Write};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -368,8 +374,100 @@ fn codex_lead(act: Lead) {
     line(DONE);
 }
 
+/// M5: the fake GitHub CLI. Returns the exit code.
+fn fake_gh(args: &[String]) -> i32 {
+    let home = std::env::vars().find(|(k, _)| k == "HOME").map(|(_, v)| v);
+    let Some(dir) = home.map(|h| std::path::Path::new(&h).join("fake-gh")) else {
+        eprintln!("fake gh: no HOME");
+        return 2;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let mode = std::fs::read_to_string(dir.join("mode")).unwrap_or_default();
+    let mode = mode.trim();
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let prs = std::fs::read_to_string(dir.join("prs")).unwrap_or_default();
+    match args
+        .first()
+        .map(String::as_str)
+        .zip(args.get(1).map(String::as_str))
+    {
+        Some(("auth", "status")) if mode == "signed-out" => {
+            eprintln!("You are not logged into any GitHub hosts. To log in, run: gh auth login");
+            1
+        }
+        Some(("auth", "status")) => {
+            println!("github.example\n  ✓ Logged in to github.example account tester (keyring)");
+            0
+        }
+        Some(("pr", "create")) if args.get(2).map(String::as_str) == Some("--draft") => {
+            let mut body = String::new();
+            let _ = std::io::stdin().read_to_string(&mut body);
+            let head = value("--head");
+            let mut calls = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("calls"))
+                .expect("calls");
+            let _ = writeln!(calls, "{head}");
+            if mode == "reject" || mode == "signed-out" {
+                eprintln!("To get started with GitHub CLI, please run:  gh auth login");
+                return 4;
+            }
+            let number = prs.lines().count() + 1;
+            let line = format!(
+                "{number}\t{head}\t{}\t{}\n",
+                value("--base"),
+                value("--title").replace('\t', " ")
+            );
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("prs"))
+                .expect("prs");
+            let _ = file.write_all(line.as_bytes());
+            let _ = std::fs::write(dir.join(format!("body-{number}")), body);
+            if mode == "lost" {
+                eprintln!("connection reset by peer");
+                return 1;
+            }
+            println!("https://github.example/fake/repo/pull/{number}");
+            0
+        }
+        Some(("pr", "list")) => {
+            let head = value("--head");
+            let found: Vec<String> = prs
+                .lines()
+                .rev()
+                .filter(|l| l.split('\t').nth(1) == Some(head.as_str()))
+                .map(|l| {
+                    let n = l.split('\t').next().unwrap_or("0");
+                    format!(
+                        r#"{{"isDraft":true,"number":{n},"url":"https://github.example/fake/repo/pull/{n}"}}"#
+                    )
+                })
+                .collect();
+            println!("[{}]", found.join(","));
+            0
+        }
+        _ => {
+            eprintln!("fake gh: unsupported {args:?}");
+            2
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let me = std::env::args().next().unwrap_or_default();
+    if me.rsplit('/').next().unwrap_or_default().starts_with("gh") {
+        std::process::exit(fake_gh(&args));
+    }
     // D3: the version probe of executable discovery. A copy named `claude…` answers like
     // Claude Code, any other like Codex; a name ending in `-next` answers a release no
     // profile was written against, and one ending in `-mute` answers nothing.

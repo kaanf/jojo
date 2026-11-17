@@ -54,6 +54,13 @@ and no launch surface. Its provider variables are HOME and USER, passed as value
 helper's launcher configured; it names no credential store, install location or other
 provider variable. The Codex fixture also speaks the Claude Code stream dialect; it gains no
 file or process operation. The helper still builds no OS request and no argument vector.
+M5 adds one launch surface, storage remote.rs: `/usr/bin/git` (push of one commit to one
+branch, never forced; ls-remote; config --get) and the `gh` discovery found (pr create
+--draft, pr list, auth status), each launched once, with a cleared environment, no
+CommandExt and no force, mirror, delete or tag argument. It reads no token: git and gh use
+their own sign-in in the HOME the helper was given. The Codex fixture's `gh…` copy may also
+create, read and append files under that HOME (`$HOME/fake-gh`), and finds HOME through
+`std::env::vars()`.
 Effect boundaries remain unchanged: no network/live-provider/auth integration,
 no build scripts, no ambient clock in the domain (and now none in storage either).
 
@@ -106,6 +113,10 @@ DISCOVERY_LAUNCHES = [
 ]
 # The one install layout discovery may name: Codex's npm launcher and its platform binary.
 DISCOVERY_LAYOUT = '"node_modules/@openai"'
+# M5: the one surface that reaches a remote, in two reviewed launch shapes.
+REMOTE_SURFACE = "crates/jojo-storage/src/remote.rs"
+REMOTE_LAUNCHES = [r'Command::new\("/usr/bin/git"\);', r'Command::new\(gh\);']
+REMOTE_FORBIDDEN = r'"(?:--force[^"]*|-f|--mirror|--delete|-d|--tags|--all|--prune)"|"\+'
 PROCESS_FIXTURE = "crates/jojo-storage/src/bin/jojo-process-fixture.rs"
 CODEX_FIXTURE = "crates/jojo-storage/src/bin/jojo-codex-fixture.rs"
 FIXTURES = {PROCESS_FIXTURE, CODEX_FIXTURE}
@@ -148,6 +159,20 @@ def discovery_surface_errors(relative: str, code: str) -> list[str]:
     return []
 
 
+def remote_surface_errors(relative: str, code: str) -> list[str]:
+    """The remote surface launches git and gh once each, cleared, never forced."""
+    remainder = code
+    for shape in REMOTE_LAUNCHES:
+        if len(re.findall(shape, remainder)) != 1:
+            return [f"{relative}: remote surface may launch only /usr/bin/git and the found gh"]
+        remainder = re.sub(shape, "", remainder)
+    if ("Command::new" in remainder or "CommandExt" in code or code.count(".env_clear()") != 2
+            or re.search(REMOTE_FORBIDDEN, code)
+            or re.search(r"\.(?:exec|pre_exec|uid|gid|arg0|process_group)\s*\(", code)):
+        return [f"{relative}: remote surface may launch only /usr/bin/git and the found gh"]
+    return []
+
+
 def fixture_errors(relative: str, code: str) -> list[str]:
     errors = []
     remainder = re.sub(r'Command::new\(\s*(?:me\(\)|"/bin/sh")\s*\)', "", code)
@@ -161,7 +186,9 @@ def fixture_errors(relative: str, code: str) -> list[str]:
 def codex_fixture_errors(relative: str, code: str) -> list[str]:
     errors = []
     # P2-02: the one permitted file operation is writing the developed file in its cwd.
-    if re.search(PROCESS, code) or re.search(FILESYSTEM, re.sub(r"std::fs::write\(", "", code)):
+    # M5: the fake gh keeps its pull requests under its HOME.
+    files = re.sub(r"std::fs::(?:write|read_to_string|create_dir_all)\(|std::fs::OpenOptions::new\(\)", "", code)
+    if re.search(PROCESS, code) or re.search(FILESYSTEM, files):
         errors.append(f"{relative}: Codex fixture may not launch a program or touch a file")
     if re.sub(r"std::env::(?:args|vars)\(\)", "", code).count("env"):
         errors.append(f"{relative}: Codex fixture may read only its arguments and given environment")
@@ -195,6 +222,8 @@ def source_errors(root: Path, name: str, path: Path) -> list[str]:
         pass
     elif relative == DISCOVERY_SURFACE:
         errors.extend(discovery_surface_errors(relative, code))
+    elif relative == REMOTE_SURFACE:
+        errors.extend(remote_surface_errors(relative, code))
     elif re.search(PROCESS, code) and relative == REAL_HELPER_TEST:
         remainder = re.sub(r"Command::new\(&helper\)", "", code)
         if ("Command::new" in remainder or "CommandExt" in code or len(re.findall(REAL_HELPER, code)) != 1

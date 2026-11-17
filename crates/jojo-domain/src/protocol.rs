@@ -67,6 +67,11 @@ pub enum RequestKind {
     Decisions,
     PlanDetail,
     AttemptDetail,
+    ExternalActions,
+    RequestExternal,
+    AuthorizeExternal,
+    InspectExternal,
+    ResolveExternal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,7 +134,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 48] = [
+pub const SPECS: [Spec; 53] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -178,6 +183,11 @@ pub const SPECS: [Spec; 48] = [
     spec(K::Decisions, "Decisions", Query, 9, false, Exact, &["before"]),
     spec(K::PlanDetail, "PlanDetail", Query, 9, false, Exact, &["plan"]),
     spec(K::AttemptDetail, "AttemptDetail", Query, 9, false, Exact, &["attempt"]),
+    spec(K::ExternalActions, "ExternalActions", Query, 10, false, Exact, &["plan"]),
+    spec(K::RequestExternal, "RequestExternal", Mutation, 10, false, Exact, &["plan", "kind"]),
+    spec(K::AuthorizeExternal, "AuthorizeExternal", Mutation, 10, false, Exact, &["action", "digest", "decision"]),
+    spec(K::InspectExternal, "InspectExternal", Mutation, 10, false, Exact, &["action"]),
+    spec(K::ResolveExternal, "ResolveExternal", Mutation, 10, false, Exact, &["action"]),
 ];
 
 impl RequestKind {
@@ -453,6 +463,99 @@ impl AttemptDetailQuery {
     pub fn parse(p: &Json) -> Result<Self, String> {
         Ok(Self {
             attempt: id(get(p, "attempt")?)?,
+        })
+    }
+}
+
+/// Protocol 1.10 (M5): the external actions of one plan (`None`: of every plan).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExternalActionsQuery {
+    pub plan: Option<ArtifactId>,
+}
+impl ExternalActionsQuery {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            plan: match get(p, "plan")? {
+                Json::Null => None,
+                v => Some(ArtifactId(id(v)?)),
+            },
+        })
+    }
+}
+
+/// What an external action does: push the plan branch, or open its draft pull request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExternalKindName {
+    Push,
+    PullRequest,
+}
+
+/// Protocol 1.10 (M5): the human asks for a push or a draft pull request of a finished
+/// plan. Asking performs nothing; the request waits for its own decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RequestExternalCommand {
+    pub plan: ArtifactId,
+    pub kind: ExternalKindName,
+}
+impl RequestExternalCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        let plan = ArtifactId(id(get(p, "plan")?)?);
+        let kind = match string(get(p, "kind")?)? {
+            "Push" => ExternalKindName::Push,
+            "PullRequest" => ExternalKindName::PullRequest,
+            _ => return Err("UnknownKind".into()),
+        };
+        Ok(Self { plan, kind })
+    }
+}
+
+/// The operation key of an external action as protocol text.
+pub fn external_action(value: &Json) -> Result<String, String> {
+    let s = string(value)?;
+    if !s.starts_with("external:")
+        || s.len() > 200
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() || b == b':')
+    {
+        return Err("expected an external action".into());
+    }
+    Ok(s.to_owned())
+}
+
+/// Protocol 1.10 (M5): the human's decision on the exact payload of one request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizeExternalCommand {
+    pub action: String,
+    pub digest: String,
+    pub authorize: bool,
+}
+impl AuthorizeExternalCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        let action = external_action(get(p, "action")?)?;
+        let digest = digest(get(p, "digest")?)?;
+        let authorize = match string(get(p, "decision")?)? {
+            "Authorize" => true,
+            "Decline" => false,
+            _ => return Err("UnknownAction".into()),
+        };
+        Ok(Self {
+            action,
+            digest,
+            authorize,
+        })
+    }
+}
+
+/// Protocol 1.10 (M5): `InspectExternal` and `ResolveExternal` name one action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalCommand {
+    pub action: String,
+}
+impl ExternalCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            action: external_action(get(p, "action")?)?,
         })
     }
 }
@@ -1017,10 +1120,16 @@ mod tests {
         // 1.6: the attempts and documents queries, after everything 1.5 knows.
         // 1.7: the features query, after everything 1.6 knows.
         // 1.9: the document, decision, plan and attempt detail queries (1.8 added none).
-        for minor in [3, 4, 5, 6, 7, 8, 9, 10] {
+        // 1.10 (M5): the external actions query and its four commands.
+        for minor in [3, 4, 5, 6, 7, 8, 9, 10, 11] {
+            let v110 = if minor >= 10 {
+                " RequestExternal AuthorizeExternal InspectExternal ResolveExternal"
+            } else {
+                ""
+            };
             assert_eq!(
                 names(Mutation, minor),
-                format!("{v12_commands} SaveProject RunPlan ControlPlan")
+                format!("{v12_commands} SaveProject RunPlan ControlPlan{v110}")
             );
             let v14 = if minor >= 4 { " Executables" } else { "" };
             let v15 = if minor >= 5 { " Repairs" } else { "" };
@@ -1035,9 +1144,10 @@ mod tests {
             } else {
                 ""
             };
+            let v110q = if minor >= 10 { " ExternalActions" } else { "" };
             assert_eq!(
                 names(Query, minor),
-                format!("{v12_queries} Projects PlanRun{v14}{v15}{v16}{v17}{v19}")
+                format!("{v12_queries} Projects PlanRun{v14}{v15}{v16}{v17}{v19}{v110q}")
             );
         }
         assert_eq!(RequestKind::of_frame("Executables", 3), None);
@@ -1050,6 +1160,11 @@ mod tests {
         assert_eq!(
             RequestKind::of_frame("AttemptDetail", 9),
             Some(K::AttemptDetail)
+        );
+        assert_eq!(RequestKind::of_frame("ExternalActions", 9), None);
+        assert_eq!(
+            RequestKind::of_frame("AuthorizeExternal", 10),
+            Some(K::AuthorizeExternal)
         );
         assert_eq!(RequestKind::of_frame("SaveProject", 2), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 1), None);

@@ -104,6 +104,11 @@ impl MigrationPlan {
                 name: "repairs, holds and reviews of plan steps",
                 sql: SCHEMA_V15,
             },
+            Migration {
+                version: 16,
+                name: "push and draft pull request of a plan branch",
+                sql: SCHEMA_V16,
+            },
         ])
     }
 
@@ -1251,6 +1256,51 @@ CREATE TRIGGER step_review_results_keep BEFORE DELETE ON step_review_results BEG
 CREATE TRIGGER step_review_stops_keep BEFORE DELETE ON step_review_stops BEGIN SELECT RAISE(ABORT,'immutable review'); END;
 "#;
 
+/// M5: an external action is a push of a finished plan branch or the draft pull request
+/// of a pushed one. Each is an outbox effect: requested (NOT_ISSUED), decided by the human
+/// on its exact payload, issued once (ISSUED_UNKNOWN) and resolved only by an observation.
+/// Nothing here is ever sent again; a lost outcome waits for the human (D2).
+const SCHEMA_V16: &str = r#"
+CREATE TABLE external_actions (
+ operation_key TEXT PRIMARY KEY REFERENCES outbox(operation_key) CHECK(operation_key LIKE 'external:_%'),
+ kind TEXT NOT NULL CHECK(kind IN ('PUSH','PULL_REQUEST')),
+ plan TEXT NOT NULL, revision INTEGER NOT NULL,
+ sequence INTEGER NOT NULL CHECK(sequence>0),
+ repository TEXT NOT NULL REFERENCES local_repositories(id),
+ remote TEXT NOT NULL CHECK(length(remote)>0),
+ url TEXT NOT NULL CHECK(length(url)>0),
+ branch TEXT NOT NULL CHECK(branch LIKE 'jojo/plan/_%'),
+ commit_id TEXT NOT NULL CHECK(length(commit_id) IN (40,64)),
+ base TEXT, title TEXT, body TEXT,
+ push TEXT REFERENCES external_actions(operation_key),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ UNIQUE(kind, plan, revision, commit_id, sequence),
+ CHECK((kind='PUSH')=(push IS NULL AND base IS NULL AND title IS NULL AND body IS NULL)),
+ CHECK(kind='PUSH' OR (push IS NOT NULL AND length(base)>0 AND length(title)>0 AND body IS NOT NULL)),
+ FOREIGN KEY(plan, revision) REFERENCES plan_runs(plan, revision));
+CREATE TABLE external_action_decisions (
+ operation_key TEXT PRIMARY KEY REFERENCES external_actions(operation_key),
+ decision TEXT NOT NULL CHECK(decision IN ('AUTHORIZED','DECLINED')),
+ payload_digest TEXT NOT NULL CHECK(length(payload_digest)=64),
+ actor TEXT NOT NULL CHECK(length(actor)>0),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq));
+CREATE TABLE external_action_observations (
+ event INTEGER PRIMARY KEY REFERENCES events(seq),
+ operation_key TEXT NOT NULL REFERENCES external_actions(operation_key),
+ observer TEXT NOT NULL CHECK(observer LIKE 'git:_%' OR observer LIKE 'gh:_%'
+                              OR observer LIKE 'fake-remote:_%' OR observer LIKE 'human:_%'),
+ status TEXT NOT NULL CHECK(status IN ('COMMITTED','REJECTED','UNKNOWN')),
+ payload_digest TEXT NOT NULL CHECK(length(payload_digest)=64),
+ detail TEXT NOT NULL,
+ number INTEGER CHECK(number IS NULL OR number>0), url TEXT);
+CREATE TRIGGER external_actions_immutable BEFORE UPDATE ON external_actions BEGIN SELECT RAISE(ABORT,'immutable external action'); END;
+CREATE TRIGGER external_actions_keep BEFORE DELETE ON external_actions BEGIN SELECT RAISE(ABORT,'immutable external action'); END;
+CREATE TRIGGER external_action_decisions_immutable BEFORE UPDATE ON external_action_decisions BEGIN SELECT RAISE(ABORT,'immutable external action'); END;
+CREATE TRIGGER external_action_decisions_keep BEFORE DELETE ON external_action_decisions BEGIN SELECT RAISE(ABORT,'immutable external action'); END;
+CREATE TRIGGER external_action_observations_immutable BEFORE UPDATE ON external_action_observations BEGIN SELECT RAISE(ABORT,'immutable external action'); END;
+CREATE TRIGGER external_action_observations_keep BEFORE DELETE ON external_action_observations BEGIN SELECT RAISE(ABORT,'immutable external action'); END;
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -1262,7 +1312,7 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 15));
+        assert_eq!((report.from_version, report.to_version), (0, 16));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);

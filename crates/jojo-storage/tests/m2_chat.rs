@@ -55,6 +55,9 @@ impl H {
         fs::create_dir(base.join("bin")).unwrap();
         fs::copy(FIXTURE, base.join("bin/agent")).unwrap();
         chmod(&base.join("bin/agent"), 0o755);
+        // M5: the fake GitHub CLI, found on the PATH the remote's discovery is given.
+        fs::copy(FIXTURE, base.join("bin/gh")).unwrap();
+        chmod(&base.join("bin/gh"), 0o755);
         let mut h = Self {
             _serial: serial,
             dir,
@@ -99,6 +102,10 @@ impl H {
             user: "tester".into(),
             auth: AuthMode::NativeSubscription,
         });
+        service.remote = Some(RemoteConfig::new(
+            Discovery::with_search_path(self.base.join("bin").display().to_string()),
+            self.base.join("home"),
+        ));
         self.service = Some(service);
         let hello = self.at(2, "Hello", object([]));
         assert_eq!(
@@ -2223,4 +2230,563 @@ fn s4c_documents_plans_and_attempts_report_their_details_at_1_9() {
         object([("attempt", text("00000000000000000000000000000099"))]),
     );
     assert_eq!(r.payload, Json::Null);
+}
+
+// ---- M5: push and draft pull request of a finished plan ----
+
+impl H {
+    /// A bare repository as `origin`, holding `main`.
+    fn origin(&mut self) -> PathBuf {
+        let bare = self.base.join("remote.git");
+        git(
+            &self.base,
+            &[
+                "init",
+                "--bare",
+                "--template=",
+                "--initial-branch=main",
+                "remote.git",
+            ],
+        );
+        let url = format!("file://{}", bare.display());
+        git(&self.repository, &["remote", "add", "origin", &url]);
+        git(&self.repository, &["push", &url, "main:refs/heads/main"]);
+        bare
+    }
+
+    /// A one-step plan, run, accepted and on its plan branch.
+    fn finished_plan(&mut self) -> Json {
+        let repository = self.ready();
+        let plan = self.approved_one_step(&repository, "lead-review", 2, false);
+        self.ok3("RunPlan", object([("plan", plan.clone())]));
+        self.run_until(&plan, |s| s[0] == "Review");
+        self.accept_step(&plan, 0);
+        self.run_until(&plan, |s| s[0] == "Integrated");
+        assert_eq!(str_of(&self.plan_run(&plan), &["state"]), "DONE");
+        plan
+    }
+
+    fn at10(&mut self, kind: &str, payload: Json) -> Envelope {
+        self.at(10, kind, payload)
+    }
+
+    fn ok10(&mut self, kind: &str, payload: Json) -> Json {
+        let r = self.at10(kind, payload);
+        assert_eq!(r.kind, "Response", "{kind}: {:?}", r.payload);
+        r.payload
+    }
+
+    fn refused10(&mut self, kind: &str, payload: Json) -> String {
+        let r = self.at10(kind, payload);
+        assert_eq!(r.kind, "Error", "{kind}: {:?}", r.payload);
+        str_of(&r.payload, &["code"]).to_owned()
+    }
+
+    fn external(&mut self, plan: &Json) -> Json {
+        self.ok10("ExternalActions", object([("plan", plan.clone())]))
+    }
+
+    /// The newest action of the plan.
+    fn newest_action(&mut self, plan: &Json) -> Json {
+        items(field(&self.external(plan), &["actions"]))[0].clone()
+    }
+
+    fn request_external(&mut self, plan: &Json, kind: &str) -> Envelope {
+        self.at10(
+            "RequestExternal",
+            object([("plan", plan.clone()), ("kind", text(kind))]),
+        )
+    }
+
+    fn decision(action: &Json, decision: &str) -> Json {
+        object([
+            ("action", field(action, &["action"]).clone()),
+            ("digest", field(action, &["digest"]).clone()),
+            ("decision", text(decision)),
+        ])
+    }
+
+    /// Requests and authorizes the next action of `kind`, and waits for its worker.
+    fn perform(&mut self, plan: &Json, kind: &str) -> Json {
+        let r = self.request_external(plan, kind);
+        assert_eq!(r.kind, "Response", "{:?}", r.payload);
+        let action = self.newest_action(plan);
+        assert_eq!(str_of(&action, &["state"]), "Requested");
+        let r = self.ok10("AuthorizeExternal", Self::decision(&action, "Authorize"));
+        assert_eq!(str_of(&r, &["dispatch"]), "started", "{r:?}");
+        self.settle();
+        self.newest_action(plan)
+    }
+
+    fn settle(&mut self) {
+        until(|| self.s().workers.running(Work::External) == 0);
+        assert!(!self.s().workers.failed(), "external worker failed");
+    }
+
+    /// The commit a branch of the bare remote names, or "" when it has no such branch.
+    fn remote_head(bare: &std::path::Path, branch: &str) -> String {
+        git(
+            bare,
+            &[
+                "for-each-ref",
+                "--format=%(objectname)",
+                &format!("refs/heads/{branch}"),
+            ],
+        )
+        .trim()
+        .to_owned()
+    }
+
+    fn fake_gh(&self) -> PathBuf {
+        let dir = self.base.join("home/fake-gh");
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn gh_calls(&self) -> usize {
+        fs::read_to_string(self.fake_gh().join("calls")).map_or(0, |c| c.lines().count())
+    }
+
+    fn events_of(&mut self, kind: &str) -> usize {
+        let mut reader = self.s().engine.reader().unwrap();
+        reader
+            .events_after(EventSeq(0), 10_000)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == kind)
+            .count()
+    }
+
+    fn auth(&mut self, plan: &Json, tool: &str) -> (String, String) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let answer = self.external(plan);
+            let state = str_of(&answer, &["auth", tool, "state"]).to_owned();
+            if state != "Checking" || std::time::Instant::now() >= deadline {
+                return (state, str_of(&answer, &["auth", tool, "detail"]).to_owned());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
+#[test]
+fn m5_a_finished_plan_is_pushed_then_opened_as_a_draft_each_after_its_own_authorization() {
+    let mut h = H::new();
+    let bare = h.origin();
+    let plan = h.finished_plan();
+    let run = h.plan_run(&plan);
+    let (branch, head) = (
+        str_of(&run, &["branch"]).to_owned(),
+        str_of(&run, &["head"]).to_owned(),
+    );
+    // Protocol 1.10 only.
+    assert_eq!(
+        h.at(9, "ExternalActions", object([("plan", plan.clone())]))
+            .payload,
+        object([("code", text("UnknownType"))])
+    );
+    let answer = h.external(&plan);
+    let runs = items(field(&answer, &["runs"])).to_vec();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(field(&runs[0], &["can_push"]), &Json::Bool(true));
+    assert_eq!(
+        field(&runs[0], &["can_open_pull_request"]),
+        &Json::Bool(false)
+    );
+    assert_eq!(
+        str_of(&runs[0], &["pull_request_refusal"]),
+        "the plan branch is not pushed yet"
+    );
+    assert!(items(field(&answer, &["actions"])).is_empty());
+    assert_eq!(h.auth(&plan, "gh").0, "Ready");
+    // A request performs nothing and waits in the Approval Inbox.
+    let r = h.request_external(&plan, "Push");
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    let key = str_of(&r.payload, &["response"]).to_owned();
+    assert_eq!(
+        key,
+        format!("external:push:{}:{head}:1", str_of(&plan, &[]))
+    );
+    assert!(
+        h.refused10(
+            "RequestExternal",
+            object([("plan", plan.clone()), ("kind", text("Push"))])
+        )
+        .starts_with("ExternalRefused: a push of this plan waits")
+    );
+    assert_eq!(
+        h.refused10(
+            "RequestExternal",
+            object([("plan", plan.clone()), ("kind", text("PullRequest"))])
+        ),
+        "ExternalRefused: the plan branch is not pushed yet"
+    );
+    let documents = h.ok10("Documents", object([("before", Json::Null)]));
+    let waiting = items(field(&documents, &["external"])).to_vec();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(str_of(&waiting[0], &["action"]), key);
+    assert_eq!(str_of(&waiting[0], &["kind"]), "Push");
+    let older = h.ok("Documents", object([("before", Json::Null)]));
+    assert!(
+        get(&older, "external").is_err(),
+        "a 1.9 answer is unchanged"
+    );
+    assert_eq!(
+        uint(field(&documents, &["pending"])).unwrap(),
+        uint(field(&older, &["pending"])).unwrap() + 1
+    );
+    let action = h.newest_action(&plan);
+    assert_eq!(
+        str_of(&action, &["url"]),
+        format!("file://{}", bare.display())
+    );
+    assert_eq!(str_of(&action, &["branch"]), branch);
+    assert_eq!(str_of(&action, &["commit"]), head);
+    assert_eq!(
+        H::remote_head(&bare, &branch),
+        "",
+        "requesting pushed nothing"
+    );
+    // The decision binds the exact payload.
+    let mut stale = H::decision(&action, "Authorize");
+    if let Json::Object(fields) = &mut stale {
+        fields[1].1 = text("0".repeat(64));
+    }
+    assert!(
+        h.refused10("AuthorizeExternal", stale)
+            .starts_with("StaleExternal: ")
+    );
+    let decision = H::decision(&action, "Authorize");
+    let frame = h.next + 1;
+    let r = h.ok10("AuthorizeExternal", decision.clone());
+    assert_eq!(str_of(&r, &["response"]), "Push authorized; issued once");
+    assert_eq!(str_of(&r, &["dispatch"]), "started");
+    h.settle();
+    let pushed = h.newest_action(&plan);
+    assert_eq!(str_of(&pushed, &["state"]), "Committed");
+    assert_eq!(str_of(&pushed, &["outcome"]), "Committed");
+    assert_eq!(str_of(&pushed, &["decision"]), "Authorized");
+    let observations = items(field(&pushed, &["observations"])).to_vec();
+    assert_eq!(observations.len(), 1);
+    assert_eq!(str_of(&observations[0], &["observer"]), "git:push");
+    assert_eq!(H::remote_head(&bare, &branch), head);
+    // The same frame again answers from its receipt and sends nothing.
+    let again = h.frame(frame, 10, "AuthorizeExternal", decision);
+    assert_eq!(str_of(&again.payload, &["dispatch"]), "not repeated");
+    h.settle();
+    assert_eq!(
+        items(field(&h.newest_action(&plan), &["observations"])).len(),
+        1
+    );
+    assert_eq!(
+        h.refused10(
+            "RequestExternal",
+            object([("plan", plan.clone()), ("kind", text("Push"))])
+        ),
+        "ExternalRefused: the plan branch is pushed"
+    );
+    // The draft pull request is its own request and its own authorization.
+    let r = h.request_external(&plan, "PullRequest");
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    let request = h.newest_action(&plan);
+    assert_eq!(str_of(&request, &["kind"]), "PullRequest");
+    assert_eq!(str_of(&request, &["base"]), "main");
+    assert_eq!(str_of(&request, &["push"]), key);
+    assert!(!str_of(&request, &["title"]).is_empty());
+    let body = str_of(&request, &["body"]).to_owned();
+    assert!(body.contains("## Steps"), "{body}");
+    assert!(body.contains(&head[..12]), "{body}");
+    assert!(
+        body.contains("after a separate human authorization"),
+        "{body}"
+    );
+    assert_eq!(h.gh_calls(), 0);
+    let r = h.ok10("AuthorizeExternal", H::decision(&request, "Authorize"));
+    assert_eq!(str_of(&r, &["dispatch"]), "started");
+    h.settle();
+    let opened = h.newest_action(&plan);
+    assert_eq!(str_of(&opened, &["state"]), "Committed");
+    assert_eq!(field(&opened, &["number"]), &number(1));
+    assert_eq!(
+        str_of(&opened, &["pull_request_url"]),
+        "https://github.example/fake/repo/pull/1"
+    );
+    assert_eq!(
+        field(&opened, &["body"]),
+        &Json::Null,
+        "only a request lists its body"
+    );
+    assert_eq!(h.gh_calls(), 1);
+    assert_eq!(
+        fs::read_to_string(h.fake_gh().join("body-1")).unwrap(),
+        body
+    );
+    let runs = items(field(&h.external(&plan), &["runs"])).to_vec();
+    assert_eq!(
+        field(&runs[0], &["can_open_pull_request"]),
+        &Json::Bool(false)
+    );
+    assert_eq!(
+        str_of(&runs[0], &["pull_request_refusal"]),
+        "the draft pull request is open"
+    );
+    for (kind, n) in [
+        ("ExternalActionRequested", 2),
+        ("ExternalActionAuthorized", 2),
+        ("ExternalActionIssued", 2),
+        ("ExternalActionObserved", 2),
+    ] {
+        assert_eq!(h.events_of(kind), n, "{kind}");
+    }
+}
+
+#[test]
+fn m5_a_push_the_remote_refuses_is_rejected_and_a_new_request_may_be_declined() {
+    let mut h = H::new();
+    let bare = h.origin();
+    let plan = h.finished_plan();
+    let branch = str_of(&h.plan_run(&plan), &["branch"]).to_owned();
+    // Someone else's branch of that name on the remote: never forced.
+    let main = H::remote_head(&bare, "main");
+    git(
+        &bare,
+        &["update-ref", &format!("refs/heads/{branch}"), &main],
+    );
+    let refused = h.perform(&plan, "Push");
+    assert_eq!(str_of(&refused, &["state"]), "Rejected");
+    assert!(
+        str_of(&refused, &["detail"]).starts_with("the remote refused the push"),
+        "{refused:?}"
+    );
+    assert_eq!(H::remote_head(&bare, &branch), main);
+    assert_eq!(
+        h.refused10(
+            "InspectExternal",
+            object([("action", field(&refused, &["action"]).clone())])
+        ),
+        "ExternalSettled: the outcome is known"
+    );
+    // A new request is a new decision; declining it sends nothing.
+    let r = h.request_external(&plan, "Push");
+    assert!(
+        str_of(&r.payload, &["response"]).ends_with(":2"),
+        "{:?}",
+        r.payload
+    );
+    let request = h.newest_action(&plan);
+    let r = h.ok10("AuthorizeExternal", H::decision(&request, "Decline"));
+    assert_eq!(str_of(&r, &["response"]), "Push declined");
+    assert_eq!(get(&r, "dispatch").ok(), None);
+    assert_eq!(str_of(&h.newest_action(&plan), &["state"]), "Declined");
+    assert!(
+        h.refused10("AuthorizeExternal", H::decision(&request, "Authorize"))
+            .starts_with("ExternalDecided: ")
+    );
+    let documents = h.ok10("Documents", object([("before", Json::Null)]));
+    assert!(items(field(&documents, &["external"])).is_empty());
+    assert_eq!(H::remote_head(&bare, &branch), main);
+}
+
+#[test]
+fn m5_a_lost_outcome_is_held_across_a_restart_never_sent_again_and_resolved_by_the_human() {
+    let mut h = H::new();
+    let bare = h.origin();
+    let plan = h.finished_plan();
+    let (branch, head) = {
+        let run = h.plan_run(&plan);
+        (
+            str_of(&run, &["branch"]).to_owned(),
+            str_of(&run, &["head"]).to_owned(),
+        )
+    };
+    h.s().external_fault = Some(ExternalFault::LoseOutcome);
+    let lost = h.perform(&plan, "Push");
+    assert_eq!(str_of(&lost, &["state"]), "Unknown");
+    let observations = items(field(&lost, &["observations"])).to_vec();
+    assert_eq!(
+        str_of(&observations[0], &["observer"]),
+        "fake-remote:lost-outcome"
+    );
+    assert_eq!(str_of(&observations[0], &["status"]), "Unknown");
+    // The push did reach the remote. Remove it, so that any second push would show.
+    assert_eq!(H::remote_head(&bare, &branch), head);
+    git(
+        &bare,
+        &["update-ref", "-d", &format!("refs/heads/{branch}")],
+    );
+    // A helper that starts again keeps the outcome unknown and sends nothing.
+    h.open();
+    h.ready_again();
+    for _ in 0..5 {
+        h.s().tick().unwrap();
+    }
+    h.settle();
+    assert_eq!(str_of(&h.newest_action(&plan), &["state"]), "Unknown");
+    assert_eq!(
+        H::remote_head(&bare, &branch),
+        "",
+        "an issued push is never sent again"
+    );
+    assert!(
+        h.refused10(
+            "RequestExternal",
+            object([("plan", plan.clone()), ("kind", text("Push"))])
+        )
+        .starts_with("ExternalRefused: a push of this plan waits")
+    );
+    let key = field(&lost, &["action"]).clone();
+    assert_eq!(
+        h.read(|v| v.unresolved_external()),
+        vec![str_of(&key, &[]).to_owned()]
+    );
+    // The human inspects first, then decides.
+    assert!(
+        h.refused10("ResolveExternal", object([("action", key.clone())]))
+            .starts_with("InspectFirst: ")
+    );
+    let r = h.ok10("InspectExternal", object([("action", key.clone())]));
+    assert_eq!(str_of(&r, &["inspection"]), "started");
+    h.settle();
+    let inspected = h.newest_action(&plan);
+    assert_eq!(str_of(&inspected, &["state"]), "Unknown");
+    assert_eq!(
+        str_of(&inspected, &["detail"]),
+        format!("the remote has no branch {branch}")
+    );
+    h.ok10("ResolveExternal", object([("action", key.clone())]));
+    let resolved = h.newest_action(&plan);
+    assert_eq!(str_of(&resolved, &["state"]), "Rejected");
+    let last = items(field(&resolved, &["observations"]))
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(str_of(&last, &["observer"]), "human:not-performed");
+    assert!(h.read(|v| v.unresolved_external()).is_empty());
+    // Only now may it be asked for again, as a new action.
+    h.s().external_fault = None;
+    let pushed = h.perform(&plan, "Push");
+    assert!(str_of(&pushed, &["action"]).ends_with(":2"));
+    assert_eq!(str_of(&pushed, &["state"]), "Committed");
+    assert_eq!(H::remote_head(&bare, &branch), head);
+}
+
+#[test]
+fn m5_an_action_issued_by_a_helper_that_stopped_is_unknown_until_inspected() {
+    let mut h = H::new();
+    let bare = h.origin();
+    let plan = h.finished_plan();
+    let branch = str_of(&h.plan_run(&plan), &["branch"]).to_owned();
+    h.s().external_fault = Some(ExternalFault::StopBeforeDispatch);
+    let issued = h.perform(&plan, "Push");
+    assert_eq!(str_of(&issued, &["state"]), "Unknown");
+    assert!(items(field(&issued, &["observations"])).is_empty());
+    assert_eq!(H::remote_head(&bare, &branch), "");
+    h.open();
+    h.ready_again();
+    h.s().tick().unwrap();
+    h.settle();
+    let key = field(&issued, &["action"]).clone();
+    assert_eq!(str_of(&h.newest_action(&plan), &["state"]), "Unknown");
+    assert_eq!(H::remote_head(&bare, &branch), "");
+    h.ok10("InspectExternal", object([("action", key.clone())]));
+    h.settle();
+    h.ok10("ResolveExternal", object([("action", key)]));
+    assert_eq!(str_of(&h.newest_action(&plan), &["state"]), "Rejected");
+    assert_eq!(H::remote_head(&bare, &branch), "");
+}
+
+#[test]
+fn m5_a_pull_request_whose_answer_is_lost_is_found_by_inspection_and_not_opened_twice() {
+    let mut h = H::new();
+    h.origin();
+    let plan = h.finished_plan();
+    assert_eq!(str_of(&h.perform(&plan, "Push"), &["state"]), "Committed");
+    fs::write(h.fake_gh().join("mode"), "lost").unwrap();
+    let lost = h.perform(&plan, "PullRequest");
+    assert_eq!(str_of(&lost, &["state"]), "Unknown");
+    assert_eq!(
+        str_of(&items(field(&lost, &["observations"]))[0], &["observer"]),
+        "gh:pr-create"
+    );
+    assert_eq!(h.gh_calls(), 1);
+    fs::write(h.fake_gh().join("mode"), "").unwrap();
+    h.ok10(
+        "InspectExternal",
+        object([("action", field(&lost, &["action"]).clone())]),
+    );
+    h.settle();
+    let found = h.newest_action(&plan);
+    assert_eq!(str_of(&found, &["state"]), "Committed");
+    assert_eq!(field(&found, &["number"]), &number(1));
+    assert_eq!(str_of(&found, &["detail"]), "pull request #1 found (draft)");
+    assert_eq!(h.gh_calls(), 1, "gh pr create ran once");
+}
+
+#[test]
+fn m5_without_gh_sign_in_the_reason_is_shown_and_a_refused_pull_request_is_rejected() {
+    let mut h = H::new();
+    h.origin();
+    let plan = h.finished_plan();
+    fs::write(h.fake_gh().join("mode"), "signed-out").unwrap();
+    let (state, detail) = h.auth(&plan, "gh");
+    assert_eq!(state, "Missing");
+    assert!(detail.contains("gh auth login"), "{detail}");
+    assert_eq!(str_of(&h.perform(&plan, "Push"), &["state"]), "Committed");
+    let refused = h.perform(&plan, "PullRequest");
+    assert_eq!(str_of(&refused, &["state"]), "Rejected");
+    assert!(
+        str_of(&refused, &["detail"]).contains("gh auth login"),
+        "{refused:?}"
+    );
+    // A helper whose PATH has no gh says so, and requests nothing.
+    let home = h.base.join("home");
+    h.s().remote = Some(RemoteConfig::new(
+        Discovery::with_search_path(h.base.join("disposable").display().to_string()),
+        home,
+    ));
+    let (state, detail) = h.auth(&plan, "gh");
+    assert_eq!(state, "Missing");
+    assert!(
+        detail.contains("`gh` is not on the login shell's PATH"),
+        "{detail}"
+    );
+    assert!(
+        h.refused10(
+            "RequestExternal",
+            object([("plan", plan.clone()), ("kind", text("PullRequest"))])
+        )
+        .starts_with("GhMissing: ")
+    );
+}
+
+#[test]
+fn m5_an_ssh_or_missing_origin_is_refused_before_anything_is_recorded() {
+    let mut h = H::new();
+    let plan = h.finished_plan();
+    assert_eq!(
+        h.refused10(
+            "RequestExternal",
+            object([("plan", plan.clone()), ("kind", text("Push"))])
+        ),
+        "ExternalRefused: the repository has no remote named origin"
+    );
+    git(
+        &h.repository,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:someone/sample.git",
+        ],
+    );
+    assert!(
+        h.refused10(
+            "RequestExternal",
+            object([("plan", plan.clone()), ("kind", text("Push"))])
+        )
+        .starts_with("ExternalRefused: origin is git@github.com:someone/sample.git")
+    );
+    assert!(items(field(&h.external(&plan), &["actions"])).is_empty());
+    assert_eq!(h.events_of("ExternalActionRequested"), 0);
 }

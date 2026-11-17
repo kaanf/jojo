@@ -656,7 +656,7 @@ fn schema_three_upgrades_with_original_history_and_receipts_intact() {
     e.shutdown().unwrap();
     let e = common::start(&dir.db());
     let report = &e.startup_report().migration;
-    assert_eq!((report.from_version, report.to_version), (3, 15));
+    assert_eq!((report.from_version, report.to_version), (3, 16));
     assert!(report.backup.as_ref().unwrap().exists());
     assert!(common::create(&e, 1, &common::key("counter", 1)).replayed);
 }

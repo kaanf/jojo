@@ -155,7 +155,7 @@ impl Service {
                     .read(|v| match kind {
                         RequestKind::Attempts => v.ipc_attempts(q.before, e.minor >= 7),
                         RequestKind::Features => v.ipc_features(q.before),
-                        _ => v.ipc_documents(q.before),
+                        _ => v.ipc_documents(q.before, e.minor >= 10),
                     })
                     .map_err(|e| e.to_string())
             }

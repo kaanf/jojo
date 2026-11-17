@@ -3,7 +3,7 @@
 //! (R-02, helper part); the order of every check is unchanged.
 use super::*;
 
-fn rejected(e: CommandError) -> String {
+pub(super) fn rejected(e: CommandError) -> String {
     match e {
         CommandError::Rejected(TxError::Rejected(why)) => why,
         other => format!("{other:?}"),
@@ -189,6 +189,10 @@ impl Service {
                     .map(receipt)
                     .map_err(rejected)
             }
+            RequestKind::RequestExternal => self.request_external(request, p),
+            RequestKind::AuthorizeExternal => self.authorize_external(request, p, origin),
+            RequestKind::InspectExternal => self.inspect_external(request, p),
+            RequestKind::ResolveExternal => self.resolve_external(request, p, origin),
             _ => Err("UnknownType".into()),
         }
     }
@@ -211,6 +215,12 @@ impl Service {
         }
         if kind == RequestKind::Validate {
             fields.push(("validation".into(), text("not repeated")));
+        }
+        if matches!(
+            kind,
+            RequestKind::AuthorizeExternal | RequestKind::InspectExternal
+        ) {
+            fields.push(("dispatch".into(), text("not repeated")));
         }
         if kind == RequestKind::ChatTurn {
             fields.push(("turn".into(), identity(e.request)));

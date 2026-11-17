@@ -15,9 +15,10 @@ from pathlib import Path
 import gui_p1_14 as g
 import gui_p2_02 as p202
 
-# The frames the app sends above minor 1 on every launch: the sidebar counter's documents (1.6)
+# The frames the app sends above minor 1 on every launch: the sidebar counter's documents (1.6;
+# at 1.10 since M5, where they list the external requests that wait)
 # and what the Dashboard reads while it is shown (1.7).
-OVERVIEW_MINOR = {'Documents': 6, 'Features': 7, 'Attempts': 7, 'Events': 7, 'Executables': 4}
+OVERVIEW_MINOR = {'Documents': 10, 'Features': 7, 'Attempts': 7, 'Events': 7, 'Executables': 4}
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = str(ROOT / 'scripts/tests/fake_helper_p2_03.py')

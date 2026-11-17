@@ -164,8 +164,9 @@ fn record(h: &mut H) {
     h.send("snapshot before hello", "Snapshot", object([]));
     h.at("hello 1.0", 0, "Hello", object([]));
     // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2, 1.5
-    // since D3, 1.7 since 1.6, 1.8 since 1.7, 1.9 since 1.8, 1.10 since 1.9).
-    h.at("hello 1.10", 10, "Hello", object([("junk", n(1))]));
+    // since D3, 1.7 since 1.6, 1.8 since 1.7, 1.9 since 1.8, 1.10 since 1.9, 1.11 since
+    // 1.10).
+    h.at("hello 1.11", 11, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1248,6 +1249,53 @@ fn record(h: &mut H) {
         "AttemptDetail",
         object([("plan", hex(41))]),
     );
+    // M5 (1.10): external actions; this helper reaches no remote.
+    h.at(
+        "external actions at 1.9",
+        9,
+        "ExternalActions",
+        object([("plan", Json::Null)]),
+    );
+    h.at(
+        "external actions none",
+        10,
+        "ExternalActions",
+        object([("plan", Json::Null)]),
+    );
+    h.at(
+        "external actions without plan",
+        10,
+        "ExternalActions",
+        object([]),
+    );
+    h.at(
+        "request external without a remote",
+        10,
+        "RequestExternal",
+        object([("plan", hex(41)), ("kind", text("Push"))]),
+    );
+    h.at(
+        "request external of an unknown kind",
+        10,
+        "RequestExternal",
+        object([("plan", hex(41)), ("kind", text("Merge"))]),
+    );
+    h.at(
+        "authorize external of no action",
+        10,
+        "AuthorizeExternal",
+        object([
+            ("action", text("x")),
+            ("digest", text("0".repeat(64))),
+            ("decision", text("Authorize")),
+        ]),
+    );
+    h.at(
+        "documents at 1.10",
+        10,
+        "Documents",
+        object([("before", Json::Null)]),
+    );
 }
 
 #[test]
@@ -1264,7 +1312,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.10 => 1.9 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features Document Decisions PlanDetail AttemptDetail","slice":true}
+hello 1.11 => 1.10 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan RequestExternal AuthorizeExternal InspectExternal ResolveExternal","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features Document Decisions PlanDetail AttemptDetail ExternalActions","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1492,4 +1540,11 @@ decisions newest => 1.9 Response {"decisions":[],"next":null}
 plan detail unknown => 1.9 Response null
 attempt detail unknown => 1.9 Response null
 attempt detail without attempt => 1.9 Error {"code":"InvalidPayload: unexpected or missing fields"}
+external actions at 1.9 => 1.9 Error {"code":"UnknownType"}
+external actions none => 1.10 Response {"actions":[],"auth":{"gh":{"detail":"this helper reaches no remote","state":"NotConfigured"},"git":{"detail":"this helper reaches no remote","state":"NotConfigured"}},"runs":[]}
+external actions without plan => 1.10 Error {"code":"InvalidPayload: unexpected or missing fields"}
+request external without a remote => 1.10 Error {"code":"RemoteNotConfigured: this helper reaches no remote"}
+request external of an unknown kind => 1.10 Error {"code":"UnknownKind"}
+authorize external of no action => 1.10 Error {"code":"expected an external action"}
+documents at 1.10 => 1.10 Response {"candidates":[],"documents":[],"external":[],"next":null,"pending":0}
 "#;

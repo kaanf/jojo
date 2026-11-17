@@ -300,7 +300,9 @@ impl ReadView<'_> {
     /// whose newest revision was created before event `before`, each with its approval
     /// state; and, whatever the page, the candidates that wait for the human's decision
     /// and the number of things that wait (`pending`).
-    pub fn ipc_documents(&self, before: Option<u64>) -> Result<Json, StorageError> {
+    /// M5 (protocol 1.10, `external`): also the push and pull request requests that wait
+    /// for the human's decision, counted in `pending`.
+    pub fn ipc_documents(&self, before: Option<u64>, external: bool) -> Result<Json, StorageError> {
         let c = self.conn;
         let before = before.map_or(Ok(i64::MAX), to_db)?;
         let all = c.query(
@@ -378,12 +380,21 @@ impl ReadView<'_> {
         } else {
             Json::Null
         };
-        Ok(object([
+        let mut fields = vec![
             ("documents", Json::List(out)),
             ("next", next),
             ("candidates", Json::List(listed)),
-            ("pending", number(pending)),
-        ]))
+        ];
+        if external {
+            let requests = self.pending_external()?;
+            pending += requests.len() as u64;
+            fields.push((
+                "external",
+                Json::List(requests.into_iter().take(OVERVIEW_ROWS).collect()),
+            ));
+        }
+        fields.push(("pending", number(pending)));
+        Ok(object(fields))
     }
 
     /// Sealed candidates whose newest host validation passed and that the human has

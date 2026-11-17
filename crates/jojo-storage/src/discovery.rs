@@ -231,6 +231,20 @@ impl Discovery {
         Lookup::Checking
     }
 
+    /// M5: the native binary a tool's `PATH` entry stands for (`gh`), resolved like a
+    /// provider's but never probed; `None` while `PATH` is being captured. Starts nothing.
+    pub fn tool(&self, name: &'static str) -> Option<Result<PathBuf, String>> {
+        Some(self.search(name)?.and_then(|entry| {
+            let real = std::fs::canonicalize(&entry)
+                .map_err(|e| format!("{}: resolve: {e}", entry.display()))?;
+            if native_header(&real) {
+                Ok(real)
+            } else {
+                Err(format!("{}: not a native executable", entry.display()))
+            }
+        }))
+    }
+
     /// The first entry of `name` on `PATH`; `None` while `PATH` is being captured. A name
     /// that is missing has `PATH` captured once more before it is reported missing.
     fn search(&self, name: &'static str) -> Option<Result<PathBuf, String>> {
