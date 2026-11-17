@@ -54,7 +54,7 @@ impl ScopePath {
                 .is_some_and(|rest| rest.starts_with('/'))
     }
 
-    fn overlaps(&self, other: &Self) -> bool {
+    pub fn overlaps(&self, other: &Self) -> bool {
         self.contains(&other.0) || other.contains(&self.0)
     }
 }

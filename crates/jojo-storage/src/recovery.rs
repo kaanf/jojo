@@ -308,7 +308,7 @@ fn db_digest(c: &Connection, id: &str) -> Result<String, StorageError> {
 
 /// Strict parse of a stored `SessionIdentified` payload, accepted only if it formats back
 /// to exactly the stored text.
-fn parse_session(payload: &str) -> Option<SessionRef> {
+pub(crate) fn parse_session(payload: &str) -> Option<SessionRef> {
     fn quoted(s: &str) -> Option<(String, &str)> {
         let s = s.strip_prefix('"')?;
         let (mut out, mut escaped) = (String::new(), false);

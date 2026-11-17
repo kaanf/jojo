@@ -48,7 +48,7 @@ pub struct HumanDecision {
 fn deny(s: &str) -> TxError {
     TxError::Rejected(s.into())
 }
-fn hash(fields: &[&str]) -> String {
+pub(crate) fn hash(fields: &[&str]) -> String {
     let mut bytes = Vec::new();
     for f in fields {
         bytes.extend_from_slice(&(f.len() as u64).to_be_bytes());

@@ -164,8 +164,8 @@ fn record(h: &mut H) {
     h.send("snapshot before hello", "Snapshot", object([]));
     h.at("hello 1.0", 0, "Hello", object([]));
     // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2, 1.5
-    // since D3, 1.7 since 1.6, 1.8 since 1.7, 1.9 since 1.8).
-    h.at("hello 1.9", 9, "Hello", object([("junk", n(1))]));
+    // since D3, 1.7 since 1.6, 1.8 since 1.7, 1.9 since 1.8, 1.10 since 1.9).
+    h.at("hello 1.10", 10, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1208,6 +1208,46 @@ fn record(h: &mut H) {
         "FeatureChat",
         object([("feature", hex(41)), ("after", n(0))]),
     );
+    // 1.9: the document, decisions, plan detail and attempt detail queries, unknown
+    // before 1.9, each with exactly its fields.
+    let document = |extra: bool| {
+        let mut fields = vec![
+            ("document", hex(41)),
+            ("revision", Json::Null),
+            ("offset", n(0)),
+        ];
+        if extra {
+            fields.push(("part", text("Prd")));
+        }
+        object(fields)
+    };
+    h.at("document at 1.8", 8, "Document", document(false));
+    h.at("document unknown", 9, "Document", document(false));
+    h.at("document with a field", 9, "Document", document(true));
+    h.at(
+        "decisions newest",
+        9,
+        "Decisions",
+        object([("before", Json::Null)]),
+    );
+    h.at(
+        "plan detail unknown",
+        9,
+        "PlanDetail",
+        object([("plan", hex(41))]),
+    );
+    h.at(
+        "attempt detail unknown",
+        9,
+        "AttemptDetail",
+        object([("attempt", hex(41))]),
+    );
+    h.at(
+        "attempt detail without attempt",
+        9,
+        "AttemptDetail",
+        object([("plan", hex(41))]),
+    );
 }
 
 #[test]
@@ -1224,7 +1264,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.9 => 1.8 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features","slice":true}
+hello 1.10 => 1.9 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features Document Decisions PlanDetail AttemptDetail","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1445,4 +1485,11 @@ features with a field => 1.7 Error {"code":"InvalidPayload: unexpected or missin
 attempts at 1.7 => 1.7 Response {"attempts":[],"next":null}
 events at 1.7 => 1.7 Response [{"actor":"Core","aggregate_id":null,"aggregate_kind":null,"at_unix_ms":1700000000000,"detail_complete":true,"epoch":1,"payload":"previous_epoch=0;previous_shutdown=NONE;quarantined_claims=0","revision":null,"seq":1,"summary":"Session 1 started","type":"EngineStarted"},{"actor":"Human","aggregate_id":null,"aggregate_kind":null,"at_unix_ms":1700000000000,"detail_complete":true,"epoch":1,"payload":"95eb9cc2f28783674ee4858759130e25fc6ee54822d07726fb3868924bdb21ba","revision":null,"seq":2,"summary":"Admission reopened after the recovery review","type":"RecoveryStarted"}]
 feature chat of an unknown feature at 1.8 => 1.8 Response {"assumptions":[],"feature":"00000000000000000000000000000029","next":null,"prd":null,"running":null,"turns":[]}
+document at 1.8 => 1.8 Error {"code":"UnknownType"}
+document unknown => 1.9 Response null
+document with a field => 1.9 Error {"code":"InvalidPayload: unexpected or missing fields"}
+decisions newest => 1.9 Response {"decisions":[],"next":null}
+plan detail unknown => 1.9 Response null
+attempt detail unknown => 1.9 Response null
+attempt detail without attempt => 1.9 Error {"code":"InvalidPayload: unexpected or missing fields"}
 "#;

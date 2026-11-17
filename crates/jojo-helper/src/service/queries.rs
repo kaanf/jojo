@@ -159,6 +159,44 @@ impl Service {
                     })
                     .map_err(|e| e.to_string())
             }
+            // Protocol 1.9: the document, decision, plan and attempt details of the
+            // rebuilt screens.
+            RequestKind::Document => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let q = protocol::DocumentQuery::parse(p)?;
+                reader
+                    .read(|v| v.ipc_document(q.document, q.revision, q.offset))
+                    .map_err(|e| e.to_string())
+            }
+            RequestKind::Decisions => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let q = protocol::OverviewQuery::parse(p)?;
+                reader
+                    .read(|v| v.ipc_decisions(q.before))
+                    .map_err(|e| e.to_string())
+            }
+            RequestKind::PlanDetail => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let q = protocol::PlanDetailQuery::parse(p)?;
+                reader
+                    .read(|v| v.ipc_plan_detail(q.plan))
+                    .map_err(|e| e.to_string())
+            }
+            RequestKind::AttemptDetail => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let q = protocol::AttemptDetailQuery::parse(p)?;
+                reader
+                    .read(|v| v.ipc_attempt_detail(q.attempt))
+                    .map_err(|e| e.to_string())
+            }
             _ => unreachable!("not a snapshot query: {kind:?}"),
         }
     }

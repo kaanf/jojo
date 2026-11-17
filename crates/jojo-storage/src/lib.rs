@@ -79,6 +79,7 @@ pub use slice::*;
 mod projects;
 mod runner;
 pub use runner::*;
+mod details;
 mod features;
 mod overview;
 mod repairs;

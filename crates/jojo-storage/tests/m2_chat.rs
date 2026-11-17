@@ -2058,3 +2058,169 @@ fn s4_a_chat_at_1_8_dates_its_turns_and_lists_the_drafts_assumptions() {
     assert!(get(&old, "assumptions").is_err());
     assert!(get(&items(field(&old, &["turns"]))[0], "started_at_unix_ms").is_err());
 }
+
+impl H {
+    fn ok9(&mut self, kind: &str, payload: Json) -> Json {
+        let r = self.at(9, kind, payload);
+        assert_eq!(r.kind, "Response", "{kind}: {:?}", r.payload);
+        r.payload
+    }
+
+    fn document(&mut self, subject: &Json) -> Json {
+        self.ok9(
+            "Document",
+            object([
+                ("document", subject.clone()),
+                ("revision", Json::Null),
+                ("offset", number(0)),
+            ]),
+        )
+    }
+}
+
+#[test]
+fn s4c_documents_plans_and_attempts_report_their_details_at_1_9() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h_save_project(&mut h, &repository);
+    h.turn(
+        4101,
+        &repository,
+        "Codex",
+        "slugify should be usable from the shell.\nfixture: lead",
+    );
+    let prd = h.approved_requirements_draft(&repository);
+    let r = h.at(
+        8,
+        "Document",
+        object([
+            ("document", prd.clone()),
+            ("revision", Json::Null),
+            ("offset", number(0)),
+        ]),
+    );
+    assert_eq!(field(&r.payload, &["code"]), &text("UnknownType"));
+
+    // A requirements document: its revisions, sections counted, criteria and text.
+    let doc = h.document(&prd);
+    assert_eq!(str_of(&doc, &["kind"]), "Prd");
+    assert_eq!(str_of(&doc, &["approval"]), "Pending");
+    assert_eq!(items(field(&doc, &["revisions"])).len(), 1);
+    assert_eq!(
+        field(&items(field(&doc, &["revisions"]))[0], &["decision"]),
+        &Json::Null
+    );
+    assert!(uint(field(&doc, &["counts", "acceptance_criteria"])).unwrap() > 0);
+    assert!(!items(field(&doc, &["criteria"])).is_empty());
+    assert!(!str_of(&doc, &["text"]).is_empty());
+    assert_eq!(field(&doc, &["complete"]), &Json::Bool(true));
+    assert!(items(field(&doc, &["history"])).is_empty());
+    h.approve(&prd);
+    let doc = h.document(&prd);
+    assert_eq!(str_of(&doc, &["approval"]), "Approved");
+    let history = items(field(&doc, &["history"])).to_vec();
+    assert_eq!(history.len(), 1);
+    assert_eq!(str_of(&history[0], &["decision"]), "Approved");
+    assert_eq!(field(&history[0], &["applies"]), &Json::Bool(true));
+    assert_eq!(
+        str_of(&items(field(&doc, &["revisions"]))[0], &["decision"]),
+        "Approved"
+    );
+
+    // The plan drafted on it: the ADR names its requirements document upstream.
+    let row = h.drafted_plan(&repository, 4103, "fixture: lead-kinds");
+    let plan = field(&row, &["plan"]).clone();
+    let adr = field(&plan, &["adr"]).clone();
+    let doc = h.document(&adr);
+    assert_eq!(str_of(&doc, &["kind"]), "Adr");
+    assert_eq!(field(&doc, &["counts"]), &Json::Null);
+    assert!(str_of(&doc, &["text"]).contains("Three small files."));
+    assert_eq!(
+        str_of(&items(field(&doc, &["upstream"]))[0], &["kind"]),
+        "Prd"
+    );
+    assert!(!items(field(&h.document(&prd), &["downstream"])).is_empty());
+    h.approve(&adr);
+    h.approve(&field(&plan, &["validation"]).clone());
+    let plan_id = field(&plan, &["plan"]).clone();
+
+    // Before its approval every step waits for it; afterwards the two first steps could
+    // start and the third waits for them.
+    let detail = h.ok9("PlanDetail", object([("plan", plan_id.clone())]));
+    let steps = items(field(&detail, &["steps"])).to_vec();
+    assert_eq!(steps.len(), 3);
+    assert!(
+        steps
+            .iter()
+            .all(|s| field(s, &["eligible"]) == &Json::Bool(false))
+    );
+    h.approve(&plan_id);
+    let detail = h.ok9("PlanDetail", object([("plan", plan_id.clone())]));
+    assert_eq!(str_of(&detail, &["approval"]), "Approved");
+    assert_eq!(field(&detail, &["run"]), &Json::Null);
+    assert_eq!(field(&detail, &["checks", "cycle"]), &Json::Bool(false));
+    assert!(items(field(&detail, &["checks", "conflicts"])).is_empty());
+    let steps = items(field(&detail, &["steps"])).to_vec();
+    let keys: Vec<&str> = steps.iter().map(|s| str_of(s, &["key"])).collect();
+    assert_eq!(keys, ["api", "usage", "join"]);
+    let waves: Vec<Json> = steps.iter().map(|s| field(s, &["wave"]).clone()).collect();
+    assert_eq!(waves, [number(1), number(1), number(2)]);
+    assert_eq!(str_of(&steps[0], &["kind"]), "backend");
+    assert_eq!(
+        items(field(&steps[0], &["write_scope"]))[0],
+        text("src/api.txt")
+    );
+    assert_eq!(items(field(&steps[0], &["tests"]))[0], text("api"));
+    assert_eq!(field(&steps[0], &["eligible"]), &Json::Bool(true));
+    assert_eq!(field(&steps[2], &["eligible"]), &Json::Bool(false));
+    assert_eq!(
+        str_of(&items(field(&steps[2], &["blockers"]))[0], &["kind"]),
+        "Dependency"
+    );
+
+    // The newest decisions over all documents: the plan's approval applies.
+    let decisions = items(field(
+        &h.ok9("Decisions", object([("before", Json::Null)])),
+        &["decisions"],
+    ))
+    .to_vec();
+    assert_eq!(decisions.len(), 4);
+    assert_eq!(str_of(&decisions[0], &["kind"]), "ExecutionPlan");
+    assert_eq!(field(&decisions[0], &["applies"]), &Json::Bool(true));
+
+    // A run: the steps carry the run's states, and an attempt its details.
+    h.ok3("RunPlan", object([("plan", plan_id.clone())]));
+    h.run_until(&plan_id, |s| s[0] == "Review" && s[1] == "Review");
+    let detail = h.ok9("PlanDetail", object([("plan", plan_id.clone())]));
+    assert_eq!(str_of(&detail, &["run"]), "RUNNING");
+    let first = items(field(&detail, &["steps"]))[0].clone();
+    assert_eq!(str_of(&first, &["state"]), "Review");
+    let attempts = items(field(&first, &["attempts"])).to_vec();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(str_of(&attempts[0], &["validation"]), "Passed");
+    let attempt = field(&attempts[0], &["attempt"]).clone();
+    let a = h.ok9("AttemptDetail", object([("attempt", attempt)]));
+    assert_eq!(str_of(&a, &["key"]), "api");
+    assert_eq!(field(&a, &["ordinal"]), &number(1));
+    assert!(uint(field(&a, &["process", "pid"])).unwrap() > 0);
+    assert!(!str_of(&a, &["worktree", "base"]).is_empty());
+    assert!(!str_of(&a, &["candidate_head"]).is_empty());
+    assert_eq!(items(field(&a, &["write_scope"]))[0], text("src/api.txt"));
+    assert!(!items(field(&a, &["events"])).is_empty());
+    assert!(
+        items(field(&a, &["events"]))
+            .iter()
+            .all(|e| !str_of(e, &["summary"]).is_empty())
+    );
+    let runs = items(field(&a, &["validations"])).to_vec();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(field(&runs[0], &["ordinal"]), &number(1));
+    assert_eq!(field(&runs[0], &["passed"]), &Json::Bool(true));
+    assert!(!str_of(&runs[0], &["validator"]).is_empty());
+    let r = h.at(
+        9,
+        "AttemptDetail",
+        object([("attempt", text("00000000000000000000000000000099"))]),
+    );
+    assert_eq!(r.payload, Json::Null);
+}

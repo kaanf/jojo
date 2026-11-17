@@ -372,3 +372,66 @@ Protocol minor 8 adds no request. For a frame of minor ≥ 8 the `FeatureChat` a
 
 `crates/jojo-storage/tests/r01_frames.rs` sends its newer-than-helper Hello at minor 9 and pins one more answer at its end (223 in all).
 
+## Protocol 1.9: the details of the rebuilt screens
+
+Protocol minor 9 adds four read-only queries for Specifications, the Approval Inbox, Execution Plan, Agent Runs, Source Control and Verification & Evidence. Nothing is stored for them: the helper derives each value from what the core already records (schema 15 unchanged). The helper's `MINOR` is 9; Hello for a frame of minor ≥ 9 lists `Document Decisions PlanDetail AttemptDetail` after `Features`. A frame of minor ≤ 8 naming any of them is answered `UnknownType`. Each payload has exactly its fields; anything else is `InvalidPayload: unexpected or missing fields`. The derivations are `crates/jojo-storage/src/overview.rs` (`Document`, `Decisions`) and `crates/jojo-storage/src/details.rs` (`PlanDetail`, `AttemptDetail`).
+
+The macOS client sends each of them at minor 9 and only while the screen that shows it is the shown destination, again with each new snapshot. `ReviewBundle`, `Candidate` and the other requests the GUI scenarios drive are sent as before, so the scenarios see no 1.9 frame.
+
+### Document
+
+`Document {document, revision, offset}` (`revision`: `null` for the newest, or a revision number; `offset`: a character offset into the text) returns `null` when the core has no such document or revision, else:
+
+| Field | Meaning |
+|---|---|
+| `document`, `kind`, `title`, `feature`, `feature_name` | As in `Documents` (1.6); `title` of the chosen revision |
+| `revision`, `newest` | The revision described and the document's newest |
+| `approval`, `stale` | The newest revision's approval state, as in `Documents` |
+| `revisions` | At most 32, newest first: `revision`, `created_at_unix_ms`, `digest` (the content digest a decision binds), `author` (`Human`, `Model` or `null`), `decision` (the latest recorded on that revision: `Approved`, `Rejected`, `Revoked` or `null`), `decided_at_unix_ms`, `superseded` (a newer revision exists) |
+| `history` | At most 32 decisions on the document, newest first: `revision`, `decision`, `at_unix_ms`, `digest`, `applies` (the decision that binds the current bundle) |
+| `upstream` | The requirements document and ADR this revision was drafted on: `document`, `kind`, `revision`, `title`, `approval` |
+| `downstream` | The ADRs and plans drafted on this document, newest revision of each: `document`, `kind`, `revision`, `approval` |
+| `counts` | For a requirements document: how many `actors`, `use_cases`, `acceptance_criteria`, `nfrs`, `assumptions`, `blockers`, `non_goals` and whether it has a `goal` (0 or 1); else `null` |
+| `findings` | For a requirements document: at most 32 `{path, problem}` (`Empty`, `Placeholder`, `UnknownReference`, `OpenBlocker`); else `null` |
+| `criteria` | For a requirements document: at most 32 acceptance criteria `{id, statement, use_cases}` (the use cases that name it); else `null` |
+| `offset`, `next`, `total`, `complete`, `text` | At most 8192 characters of the revision's rendered text, as `ChatText` pages it |
+
+### Decisions
+
+`Decisions {before}` returns `decisions`, at most 16 decisions on documents newest first, recorded before event `before` (`null` for the newest), and `next`. Each: `order` (the decision's event; the cursor), `document`, `kind`, `title` (of the decided revision of a requirements document), `feature`, `feature_name`, `revision`, `decision`, `applies` (it is the document's newest decision and binds its current bundle; an approval that no longer applies was invalidated by a newer revision or a later decision), `at_unix_ms`.
+
+### PlanDetail
+
+`PlanDetail {plan}` returns `null` for a plan the core does not hold, else the newest stored revision of that execution plan: `plan`, `revision`, `approval` (as in `Documents`), `feature`, `feature_name`, `run` (the newest run's state, as in `PlanRun`, or `null`), `checks` (`cycle`: a step depends on itself through others; `missing`: prerequisites the plan does not hold; `conflicts`: `{steps, paths}` for two steps whose write scopes overlap) and `steps` in plan order:
+
+| Field | Meaning |
+|---|---|
+| `step`, `key`, `title`, `kind`, `provider` | As in `PlanRun`; `key` and `title` `null` for an imported plan |
+| `depends_on`, `wave` | Prerequisite keys; 1 for a step without prerequisites, else one more than its latest prerequisite (`null` on a cycle) |
+| `write_scope`, `baseline`, `tests`, `command` | What the approved validation plan declares for the step |
+| `state`, `detail` | The run's step state and detail; without a run, from the step's newest attempt: `Waiting` (none), `Running`, `Validating`, `Review` (passed, not decided), `Accepted`, `Failed`, `Cancelled` |
+| `eligible` | With a run, the step is `Ready`; without, it has no attempt and no blocker |
+| `attempts` | Oldest first: `attempt`, `ordinal`, `outcome` (or `null` while live), `started_at_unix_ms`, `ended_at_unix_ms`, `validation` (`NotRun`, `Unknown`, `Passed`, `Failed` or `null` without a candidate), `accepted` |
+| `blockers` | `{kind, reason}`: `Approval` (the revision is not approved), `Question` (an open blocking question about the step), `Dependency` (prerequisites not accepted or integrated), `Step` (the run's detail of a blocked, held, conflicting, refused or failed step) |
+
+### AttemptDetail
+
+`AttemptDetail {attempt}` returns `null` for an attempt the core does not hold, else `attempt`, `step`, `key`, `title`, `plan`, `feature`, `feature_name`, the 1.7 fields of `Attempts` (`ordinal`, `repository`, `repository_name`, `project`, `project_name`, `validation`, `activity`) and:
+
+| Field | Meaning |
+|---|---|
+| `provider` | Of its newest launch, or `null` |
+| `session` | The provider session its stream identified, or `null` |
+| `process` | The root process `{pid, pgid}`, or `null` before one was identified |
+| `heartbeat_at_unix_ms` | Its newest scheduler heartbeat |
+| `worktree` | `{root, base, state, snapshot}` of its owned worktree, or `null` |
+| `candidate_head` | The commit of its sealed candidate, or `null` |
+| `continues`, `continued_by` | The attempt it continues after a recovery and the one that continues it |
+| `claims` | At most 64 `{resource, mode, state}` it holds or held |
+| `write_scope`, `baseline`, `tests`, `command` | What its step's approved validation plan declares |
+| `events` | At most 64 events about it, oldest first: `seq`, `at_unix_ms`, `kind`, `summary` (the 1.7 sentence) |
+| `validations` | At most 64 host validation receipts, oldest first: `ordinal` ("V-n"), `receipt`, `at_unix_ms`, `candidate`, `base`, `validator`, `passed`, `reasons`, `report` (the report's evidence digest), `approvals` (the approval bundle it was bound to) |
+| `executable` | `{version, sha256, profiled}` of the executable it ran, or `null` |
+| `evidence_records` | How many evidence records it has |
+
+`crates/jojo-storage/tests/r01_frames.rs` sends its newer-than-helper Hello at minor 10 ("hello 1.10 => 1.9") and pins seven more answers at its end (230 in all).

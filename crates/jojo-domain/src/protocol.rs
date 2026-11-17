@@ -63,6 +63,10 @@ pub enum RequestKind {
     Attempts,
     Documents,
     Features,
+    Document,
+    Decisions,
+    PlanDetail,
+    AttemptDetail,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -125,7 +129,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 44] = [
+pub const SPECS: [Spec; 48] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -170,6 +174,10 @@ pub const SPECS: [Spec; 44] = [
     spec(K::Attempts, "Attempts", Query, 6, false, Exact, &["before"]),
     spec(K::Documents, "Documents", Query, 6, false, Exact, &["before"]),
     spec(K::Features, "Features", Query, 7, false, Exact, &["before"]),
+    spec(K::Document, "Document", Query, 9, false, Exact, &["document", "revision", "offset"]),
+    spec(K::Decisions, "Decisions", Query, 9, false, Exact, &["before"]),
+    spec(K::PlanDetail, "PlanDetail", Query, 9, false, Exact, &["plan"]),
+    spec(K::AttemptDetail, "AttemptDetail", Query, 9, false, Exact, &["attempt"]),
 ];
 
 impl RequestKind {
@@ -390,7 +398,8 @@ impl ApprovedPlanQuery {
     }
 }
 
-/// Protocol 1.6: one page of `Attempts` or `Documents`, newest first; 1.7: of `Features`.
+/// Protocol 1.6: one page of `Attempts` or `Documents`, newest first; 1.7: of `Features`;
+/// 1.9: of `Decisions`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OverviewQuery {
     /// The `next` of the previous answer; `None` asks for the newest rows.
@@ -400,6 +409,50 @@ impl OverviewQuery {
     pub fn parse(p: &Json) -> Result<Self, String> {
         Ok(Self {
             before: optional_uint(get(p, "before")?)?,
+        })
+    }
+}
+
+/// Protocol 1.9: one revision of a document (`None`: its newest) and its text from a
+/// character offset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DocumentQuery {
+    pub document: ArtifactId,
+    pub revision: Option<u64>,
+    pub offset: usize,
+}
+impl DocumentQuery {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            document: ArtifactId(id(get(p, "document")?)?),
+            revision: optional_uint(get(p, "revision")?)?,
+            offset: usize::try_from(uint(get(p, "offset")?)?).map_err(|_| "Offset")?,
+        })
+    }
+}
+
+/// Protocol 1.9: the steps of one execution plan with what the Execution Plan screen shows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlanDetailQuery {
+    pub plan: ArtifactId,
+}
+impl PlanDetailQuery {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            plan: ArtifactId(id(get(p, "plan")?)?),
+        })
+    }
+}
+
+/// Protocol 1.9: what the core records about one attempt beyond `Attempts`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AttemptDetailQuery {
+    pub attempt: OpaqueId,
+}
+impl AttemptDetailQuery {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            attempt: id(get(p, "attempt")?)?,
         })
     }
 }
@@ -963,7 +1016,8 @@ mod tests {
         // M4 (1.5): the repairs query, after everything 1.4 knows.
         // 1.6: the attempts and documents queries, after everything 1.5 knows.
         // 1.7: the features query, after everything 1.6 knows.
-        for minor in [3, 4, 5, 6, 7, 9] {
+        // 1.9: the document, decision, plan and attempt detail queries (1.8 added none).
+        for minor in [3, 4, 5, 6, 7, 8, 9, 10] {
             assert_eq!(
                 names(Mutation, minor),
                 format!("{v12_commands} SaveProject RunPlan ControlPlan")
@@ -976,9 +1030,14 @@ mod tests {
                 ""
             };
             let v17 = if minor >= 7 { " Features" } else { "" };
+            let v19 = if minor >= 9 {
+                " Document Decisions PlanDetail AttemptDetail"
+            } else {
+                ""
+            };
             assert_eq!(
                 names(Query, minor),
-                format!("{v12_queries} Projects PlanRun{v14}{v15}{v16}{v17}")
+                format!("{v12_queries} Projects PlanRun{v14}{v15}{v16}{v17}{v19}")
             );
         }
         assert_eq!(RequestKind::of_frame("Executables", 3), None);
@@ -987,6 +1046,11 @@ mod tests {
         assert_eq!(RequestKind::of_frame("Documents", 6), Some(K::Documents));
         assert_eq!(RequestKind::of_frame("Features", 6), None);
         assert_eq!(RequestKind::of_frame("Features", 7), Some(K::Features));
+        assert_eq!(RequestKind::of_frame("Document", 8), None);
+        assert_eq!(
+            RequestKind::of_frame("AttemptDetail", 9),
+            Some(K::AttemptDetail)
+        );
         assert_eq!(RequestKind::of_frame("SaveProject", 2), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 1), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 2), Some(K::ChatTurn));

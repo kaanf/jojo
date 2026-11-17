@@ -364,6 +364,21 @@ public final class WorkspaceModel {
     /// human, read with every snapshot for the sidebar counter.
     public internal(set) var documents: DocumentList?
     public internal(set) var documentsLoad = PlanLoad.idle
+    /// Protocol 1.9: the document Specifications or the Approval Inbox shows, with its text.
+    public internal(set) var document: DocumentDetail?
+    public internal(set) var documentLoad = PlanLoad.idle
+    var documentKey = ""
+    /// Protocol 1.9: the newest decisions on documents (the Approval Inbox).
+    public internal(set) var decisions: [DecisionSummary] = []
+    public internal(set) var decisionsLoad = PlanLoad.idle
+    /// Protocol 1.9: plans step by step, by plan (Execution Plan).
+    public internal(set) var planDetails: [String: PlanDetail] = [:]
+    public internal(set) var planDetailLoads: [String: PlanLoad] = [:]
+    /// Protocol 1.9: one attempt beyond `Attempts` (Agent Runs, Source Control,
+    /// Verification & Evidence).
+    public internal(set) var attemptDetail: AttemptDetail?
+    public internal(set) var attemptDetailLoad = PlanLoad.idle
+    var attemptDetailKey = ""
     /// M2: Feature Chat. Read only when that screen asks; `refresh` does not fill them.
     public internal(set) var chatIndex: ChatIndex?
     public internal(set) var chatIndexLoad = PlanLoad.idle

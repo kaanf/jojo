@@ -16,7 +16,8 @@ pub const MAJOR: i64 = 1;
 /// ordinal, repository, project, host validation and newest activity.
 /// 1.8 adds to the feature chat each turn's start and end and the requirements
 /// document's assumptions.
-pub const MINOR: i64 = 8;
+/// 1.9 adds the document, decisions, plan detail and attempt detail queries.
+pub const MINOR: i64 = 9;
 pub const MAX_FRAME: usize = 64 * 1024;
 pub const MAX_PAGE: u32 = 8;
 
