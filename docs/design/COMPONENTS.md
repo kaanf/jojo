@@ -403,6 +403,8 @@ Added to `Surfaces.swift` for Settings & Providers ([screens/SETTINGS.md](screen
 
 Not built from the board: the compact buttons of a line ("Change…", "Edit", "Add…", "Back Up Now", "Restore…"), the switch (32 × 19) and the segmented control. Each would change a setting, and the app has no request that writes one. The operational pills of a line ("Ready", "Limited", "Connected") have no source.
 
+D3 (2026-11-17) added no component. A provider section shows the change of its executable with the existing `Banner` in its warning kind above the groups, and the version of the found executable with the evidence pill "Profiled" (Passed form) or a note; a refused executable has the evidence pill "Refused" (Failed form). The board's "Compatible" pill still has no source.
+
 ## 22. Implementation notes: plan surfaces (design wave 1, Execution Plan)
 
 Added to `Surfaces.swift` for Execution Plan ([screens/EXECUTION_PLAN.md](screens/EXECUTION_PLAN.md), section 7). The measures are those of section 6 and of the canvas board; the values they do not have are named in EXECUTION_PLAN.md, section 7.4.

@@ -227,3 +227,31 @@ The helper's serve loop runs one runner pass every 250 ms. A pass does nothing u
 ### Integration
 
 An accepted step's sealed candidate is applied onto the plan branch in the registered repository, in a new detached worktree under `<data root>/integration/`: `git apply` of the packet (no three-way merge) onto the branch's head, `git add --all`, `write-tree`, `commit-tree` as `Jojo <jojo@localhost>` with the step's key and title, then `update-ref refs/heads/jojo/plan/<plan>` from the expected head (or from nothing for the first). A hunk or new file that does not apply, or a branch that someone else moved, records a `CONFLICT` and moves nothing. An integration records the `ValidationPassed` observation the step's dependents wait for. A step of a running plan starts from the plan branch's head (E8 in `docs/roadmap/DESIGN_ROADMAP_DIFFERENCES.md`). The developer's checkout is never touched and nothing is pushed.
+
+## Protocol 1.4: the executables query (D3)
+
+Protocol minor 4 adds one read-only query. The helper's `MINOR` is 4; Hello for a frame of minor ≥ 4 lists `Executables` after `PlanRun`. A frame of minor ≤ 3 naming it is answered `UnknownType`. The macOS client sends it at minor 4 and only while Settings & Providers is shown (`Request.minor`); it asks again after a second while a provider is still `checking`. The payload has no field; anything else is `InvalidPayload: unexpected or missing fields`.
+
+`Executables` returns `providers`, Claude Code first, then Codex. Each entry:
+
+| Field | Meaning |
+|---|---|
+| `provider` | `ClaudeCode` or `Codex` |
+| `source` | `discovered` (looked up on the login shell's PATH), `path` (the launcher's `--…-executable` alone), `pinned` (path, version and digest given at launch), `none` (not configured) |
+| `state` | `ready`, `checking` (being looked up, probed or hashed on a background thread), `refused`, `unconfigured` |
+| `detail` | Why it is refused; empty otherwise |
+| `entry` | The PATH entry it was found under (a link, or the npm launcher of Codex); `null` unless `discovered` |
+| `path`, `version`, `sha256`, `profiled` | The native binary as the helper knows it now, its `--version` text, its digest and whether that version is the one the stream profiles were written against; `null` while unknown |
+| `last_run` | The executable of the provider's last attempt or lead turn: `path`, `version`, `sha256`, `profiled`, `event` (the event that first recorded it); `null` before any run |
+| `change` | The latest change between two runs: `event` (`ExecutableChanged`), `previous` and `current` (each like `last_run`); `null` when it never changed |
+
+Asking may start a background check in the helper; it never waits for one and never runs a provider.
+
+Changed in 1.4 for every client:
+
+- `Start`, `ChatTurn` and a runner pass can be answered `ExecutableChecking: the <provider> executable … try again shortly` while the helper learns an executable's version and digest off its control thread. Nothing is accepted. The runner leaves that step ready and starts the other provider's steps in the same pass.
+- A discovered provider that cannot be run is refused with `ExecutableRefused: <provider>: <reason>` (not on the login shell's PATH, a script launcher, no usable `--version`).
+- A version other than the profiled one is no longer refused, except for a pinned executable, which still answers `AdapterRejected: Version` (or `AdapterRejected: Digest`).
+- Schema 14 records, in the transaction that issues the run, the executable of every launched attempt (`attempt_executables`) and every accepted lead turn (`turn_executables`), with the events `ExecutableRecorded` (a new provider, file, release and digest) and `ExecutableChanged` (`<provider>|<previous identity>|<identity>`).
+
+How the helper finds an executable is in `crates/jojo-storage/src/discovery.rs` and in `docs/roadmap/DESIGN_ROADMAP_DIFFERENCES.md`, E9.

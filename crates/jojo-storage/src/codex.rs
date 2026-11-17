@@ -5,9 +5,11 @@
 //! into the one `ProcessLaunch` the Codex contract allows (`jojo_domain::codex`) after
 //! proving that the configured executable is the approved file:
 //!
-//! * an explicit, fully resolved absolute path — never a `PATH` lookup, a symbolic link
-//!   or a script launcher (the Homebrew `codex` entry is a Node script that cannot run
-//!   under the cleared launch environment and would execute whatever `node` resolves to);
+//! * a fully resolved absolute path — never a symbolic link or a script launcher (the
+//!   Homebrew `codex` entry is a Node script that cannot run under the cleared launch
+//!   environment and would execute whatever `node` resolves to). The adapter does no
+//!   `PATH` lookup; executable discovery (`discovery.rs`, D3) resolves that entry to the
+//!   native binary its package ships;
 //! * a regular native executable that only its owner can modify;
 //! * bytes whose SHA-256 equals the digest bound in the provider fingerprint, so an
 //!   update of the installed package invalidates the fingerprint.
