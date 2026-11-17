@@ -232,6 +232,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.styleMask.insert(.fullSizeContentView)
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            // An empty unified toolbar gives the title bar the macOS 26 height, which places
+            // the traffic lights inside the sidebar's glass panel instead of on its corner.
+            window.toolbar = NSToolbar(identifier: "jojo.primary")
+            window.toolbarStyle = .unified
             window.identifier = NSUserInterfaceItemIdentifier("jojo.primary")
             primary = window
         }

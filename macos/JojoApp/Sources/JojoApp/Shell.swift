@@ -175,7 +175,7 @@ struct Sidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             // The system traffic lights sit here.
-            Spacer().frame(height: 26)
+            Spacer().frame(height: 32)
             SearchField().padding(.bottom, 14)
             items(.workspace)
             FeatureHeading().padding(EdgeInsets(top: 14, leading: 9, bottom: 4, trailing: 9))
