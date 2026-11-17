@@ -175,8 +175,6 @@ def collect(root, a):
     result['developer_checkout_unchanged'] = {k: v for k, v in sample.repository_state(path).items()
                                               if k != 'refs'} == {k: v for k, v in before.items() if k != 'refs'}
     result['first_events'] = events
-    (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-    print(json.dumps({k: result[k] for k in result if k != 'first_events'}, indent=2))
     # Done when the step was reviewed by the other provider and nothing else ran: either it
     # is on the plan branch, or it waits for the human after a rejection, with no repair.
     step = run['steps'][0] if run else {}
@@ -186,6 +184,9 @@ def collect(root, a):
     ok = (bool(run) and result['reviewed_by_other_provider'] and result['provider_runs'] <= 2
           and step.get('repairs') == 0 and result['developer_checkout_unchanged']
           and (run['state'] == 'DONE' or step.get('state') == 'NeedsHuman'))
+    result['passed'] = ok
+    (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps({k: result[k] for k in result if k != 'first_events'}, indent=2))
     sys.exit(0 if ok else 1)
 
 
