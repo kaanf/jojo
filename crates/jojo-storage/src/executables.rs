@@ -24,7 +24,7 @@ pub const MAX_CODEX_EXECUTABLE_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// What identifies the bytes of a file without reading them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FileKey {
+pub(crate) struct FileKey {
     dev: u64,
     ino: u64,
     size: u64,
@@ -79,6 +79,11 @@ fn listed(path: &Path) -> Result<Metadata, String> {
         return Err("larger than the inspection limit".into());
     }
     Ok(listed)
+}
+
+/// The identity of a file that passes every structural check, without reading it.
+pub(crate) fn file_key(path: &Path) -> Result<FileKey, String> {
+    listed(path).map(|listed| FileKey::of(&listed))
 }
 
 /// SHA-256 of a native executable that passes every structural check. The bytes are read

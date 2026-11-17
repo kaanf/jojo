@@ -140,7 +140,7 @@ pub fn check_spec(spec: &LaunchSpec) -> Result<(), ProviderError> {
     let fingerprint = &spec.fingerprint;
     if fingerprint.provider != ProviderKind::Codex
         || fingerprint.parser != CODEX_EXEC_JSONL
-        || fingerprint.version != CODEX_VERSION
+        || !crate::provider::plain_version(&fingerprint.version)
         || configured_digest(&fingerprint.configuration).is_none()
     {
         return Err(ProviderError::FingerprintMismatch);

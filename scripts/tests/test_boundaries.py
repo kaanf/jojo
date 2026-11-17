@@ -172,6 +172,21 @@ class BoundaryRegressionTests(unittest.TestCase):
         self.mutate("crates/jojo-storage/src/process.rs",
                     '\nfn forbidden(guard: &Path) { Command::new(guard).arg(GUARD_ARGUMENT).env_clear(); }\n')
 
+    def test_discovery_surface_launches_only_the_shell_script_and_version(self):
+        p = self.root / "crates/jojo-storage/src/discovery.rs"
+        source = p.read_text()
+        # A third launch, another argument, an inherited environment or another script.
+        self.mutate("crates/jojo-storage/src/discovery.rs", '\nfn forbidden() { Command::new("/bin/sh"); }\n')
+        for old, new in [('.arg("--version")', '.arg("login")'), (".env_clear()", ""),
+                         ("__JOJO_PATH__%s", "$(id)%s")]:
+            p.write_text(source.replace(old, new, 1))
+            self.assertTrue(CHECK.boundary_errors(self.root), old)
+        p.write_text(source)
+        self.mutate("crates/jojo-storage/src/discovery.rs", '\nfn forbidden(c: &mut Command) { c.arg("-x"); }\n')
+
+    def test_install_layout_may_be_named_only_by_discovery(self):
+        self.mutate("crates/jojo-storage/src/codex.rs", '\nconst FORBIDDEN: &str = "node_modules/@openai";\n')
+
     def test_helper_guard_mode_may_not_build_a_launch_or_read_the_environment(self):
         self.mutate("crates/jojo-helper/src/main.rs", '\nfn forbidden() { std::env::var("PATH").ok(); }\n')
 

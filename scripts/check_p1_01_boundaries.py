@@ -96,6 +96,16 @@ ALLOWED_PROGRAM = r'(?:std::env::current_exe\(\)\.unwrap\(\)|env!\("CARGO_BIN_EX
 REAL_HELPER_TEST = "crates/jojo-storage/tests/p2_03_real_helper.rs"
 REAL_HELPER = r'let helper = Path::new\(CODEX_FIXTURE\)\.with_file_name\("jojo-helper"\);'
 PROCESS_SURFACE = "crates/jojo-storage/src/process.rs"
+# D3: executable discovery starts two programs, each in one reviewed shape: the validated
+# login shell with the fixed PATH script, and a found CLI with `--version`.
+DISCOVERY_SURFACE = "crates/jojo-storage/src/discovery.rs"
+DISCOVERY_SCRIPT = 'const SCRIPT: &str = "printf \'\\\\n__JOJO_PATH__%s__JOJO_PATH__\\\\n\' \\"$PATH\\"";'
+DISCOVERY_LAUNCHES = [
+    r'Command::new\(shell\);\s*launch\s*\.args\(\["-ilc", SCRIPT\]\)\s*\.env_clear\(\)\s*\.envs\(\[\("HOME", home\)\]\)',
+    r'Command::new\(executable\);\s*launch\s*\.arg\("--version"\)\s*\.env_clear\(\)',
+]
+# The one install layout discovery may name: Codex's npm launcher and its platform binary.
+DISCOVERY_LAYOUT = '"node_modules/@openai"'
 PROCESS_FIXTURE = "crates/jojo-storage/src/bin/jojo-process-fixture.rs"
 CODEX_FIXTURE = "crates/jojo-storage/src/bin/jojo-codex-fixture.rs"
 FIXTURES = {PROCESS_FIXTURE, CODEX_FIXTURE}
@@ -123,6 +133,19 @@ def process_surface_errors(relative: str, code: str) -> list[str]:
     if code.count(".env_clear()") != 3 or re.search(r"\.(?:exec|pre_exec|uid|gid|arg0)\s*\(", code):
         errors.append(f"{relative}: launches must clear the environment and use only process_group")
     return errors
+
+
+def discovery_surface_errors(relative: str, code: str) -> list[str]:
+    """Discovery launches only the login shell with the PATH script and a CLI with --version."""
+    remainder = code
+    for shape in DISCOVERY_LAUNCHES:
+        if len(re.findall(shape, remainder)) != 1:
+            return [f"{relative}: discovery may launch only the login shell script and --version"]
+        remainder = re.sub(shape, "", remainder)
+    if ("Command::new" in remainder or "CommandExt" in code or DISCOVERY_SCRIPT not in code
+            or re.search(r"\.(?:args?|env|exec|pre_exec|uid|gid|arg0|process_group|current_dir)\s*\(", remainder)):
+        return [f"{relative}: discovery may launch only the login shell script and --version"]
+    return []
 
 
 def fixture_errors(relative: str, code: str) -> list[str]:
@@ -163,12 +186,15 @@ def source_errors(root: Path, name: str, path: Path) -> list[str]:
         errors.extend(codex_fixture_errors(relative, code))
     elif re.search(r"jojo-(?:process|codex)-fixture", code) and not is_test:
         errors.append(f"{relative}: production code must not name the test fixture executable")
-    if not is_test and relative not in FIXTURES and re.search(PROVIDER_SECRETS, code):
+    named = code.replace(DISCOVERY_LAYOUT, "", 1) if relative == DISCOVERY_SURFACE else code
+    if not is_test and relative not in FIXTURES and re.search(PROVIDER_SECRETS, named):
         errors.append(f"{relative}: provider credential store, install location or variable named in production")
     if re.search(PROCESS, code) and relative == PROCESS_SURFACE:
         errors.extend(process_surface_errors(relative, code))
     elif re.search(PROCESS, code) and relative == PROCESS_FIXTURE:
         pass
+    elif relative == DISCOVERY_SURFACE:
+        errors.extend(discovery_surface_errors(relative, code))
     elif re.search(PROCESS, code) and relative == REAL_HELPER_TEST:
         remainder = re.sub(r"Command::new\(&helper\)", "", code)
         if ("Command::new" in remainder or "CommandExt" in code or len(re.findall(REAL_HELPER, code)) != 1

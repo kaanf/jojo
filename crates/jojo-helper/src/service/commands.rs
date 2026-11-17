@@ -518,32 +518,88 @@ impl Service {
             )),
         }
     }
-    /// The two production adapters. A provider whose executable the launcher did not
-    /// configure cannot be launched by Start or by a turn.
+    /// The two production adapters. A provider the launcher did not configure cannot be
+    /// launched by Start or by a turn. A pinned executable must be the profiled release
+    /// with the pinned digest; a discovered one is found and checked again here (D3).
     fn adapter(&self, provider: ProviderKind, slice: &SliceConfig) -> Result<Adapter, String> {
+        let pinned = |version: &str| {
+            if version == profiled_version(provider) {
+                Ok(())
+            } else {
+                Err("AdapterRejected: Version".to_owned())
+            }
+        };
         match provider {
             ProviderKind::Codex => {
-                let codex = slice
-                    .codex
-                    .clone()
-                    .ok_or("NoProductionAdapter: Codex is not configured")?;
-                self.executable_known(provider, &codex.executable)?;
+                let codex = match slice.codex.clone() {
+                    Some(codex) => {
+                        pinned(&codex.version)?;
+                        self.executable_known(provider, &codex.executable)?;
+                        codex
+                    }
+                    None => {
+                        let (found, unpinned) = self
+                            .found(provider)?
+                            .ok_or("NoProductionAdapter: Codex is not configured")?;
+                        CodexAdapterConfig {
+                            executable: found.path,
+                            version: found.version,
+                            sha256: found.sha256,
+                            home: unpinned.home,
+                            auth: AuthMode::NativeSubscription,
+                        }
+                    }
+                };
                 CodexAdapter::new(codex)
                     .and_then(|adapter| adapter.ready().map(|()| adapter))
                     .map(Adapter::Codex)
                     .map_err(|e| format!("AdapterRejected: {e:?}"))
             }
             ProviderKind::ClaudeCode => {
-                let claude = self
-                    .claude
-                    .clone()
-                    .ok_or_else(|| format!("NoProductionAdapter: {provider:?}"))?;
-                self.executable_known(provider, &claude.executable)?;
+                let claude = match self.claude.clone() {
+                    Some(claude) => {
+                        pinned(&claude.version)?;
+                        self.executable_known(provider, &claude.executable)?;
+                        claude
+                    }
+                    None => {
+                        let (found, unpinned) = self
+                            .found(provider)?
+                            .ok_or_else(|| format!("NoProductionAdapter: {provider:?}"))?;
+                        ClaudeAdapterConfig {
+                            executable: found.path,
+                            version: found.version,
+                            sha256: found.sha256,
+                            home: unpinned.home,
+                            user: unpinned.user,
+                            auth: AuthMode::NativeSubscription,
+                        }
+                    }
+                };
                 ClaudeAdapter::new(claude)
                     .and_then(|adapter| adapter.ready().map(|()| adapter))
                     .map(Adapter::Claude)
                     .map_err(|e| format!("AdapterRejected: {e:?}"))
             }
+        }
+    }
+    /// D3: the discovered executable of a provider the launcher did not pin, as it is now.
+    /// `None` when the provider is not discovered at all.
+    fn found(&self, provider: ProviderKind) -> Result<Option<(FoundExecutable, Unpinned)>, String> {
+        let Some(discovered) = &self.discovered else {
+            return Ok(None);
+        };
+        let (Some(lookup), Some(unpinned)) =
+            (discovered.find(provider), discovered.provider(provider))
+        else {
+            return Ok(None);
+        };
+        match lookup {
+            Lookup::Checking => Err(format!(
+                "ExecutableChecking: the {provider:?} executable is being found and checked; try again shortly"
+            )),
+            Lookup::Refused(why) => Err(format!("ExecutableRefused: {provider:?}: {why}")),
+            Lookup::Found(found) => Ok(Some((found, unpinned.clone()))),
         }
     }
     /// D3: with background checks on, an executable whose digest is not known yet is

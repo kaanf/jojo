@@ -144,8 +144,8 @@ fn m1_spec_must_be_one_fresh_developer_run_of_the_pinned_profile() {
             FingerprintMismatch,
         ),
         (
-            "version",
-            changed(|s| s.fingerprint.version = "2.1.312 (Claude Code)".into()),
+            "version text of two lines",
+            changed(|s| s.fingerprint.version = "2.1.312\n(Claude Code)".into()),
             FingerprintMismatch,
         ),
         (
@@ -250,6 +250,9 @@ fn m1_spec_must_be_one_fresh_developer_run_of_the_pinned_profile() {
     for (name, spec, expected) in cases {
         assert_eq!(check_spec(&spec), Err(expected), "{name}");
     }
+    // D3: another release is recorded with the run, not refused.
+    let release = changed(|s| s.fingerprint.version = "2.1.312 (Claude Code)".into());
+    assert_eq!(check_spec(&release), Ok(()));
     // HOME and USER are provider variables of this profile only.
     let codex = changed(|s| {
         s.fingerprint.provider = ProviderKind::Codex;

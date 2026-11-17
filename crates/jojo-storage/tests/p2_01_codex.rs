@@ -339,7 +339,8 @@ fn p2_01_symlink_script_wrong_digest_wrong_version_or_missing_executable_is_reje
     chmod(&empty, 0o755);
     because(executable(empty), "inspection limit");
 
-    // Right file, wrong approved digest; right digest, wrong release.
+    // Right file, wrong approved digest; a version text that is not one plain line. D3:
+    // another release is recorded, not refused (a pinned one is refused by the helper).
     let other = "0".repeat(64);
     assert_eq!(
         rejected(CodexAdapterConfig {
@@ -348,13 +349,7 @@ fn p2_01_symlink_script_wrong_digest_wrong_version_or_missing_executable_is_reje
         }),
         CodexRejection::Digest
     );
-    for version in [
-        "codex-cli 0.170.0",
-        "codex-cli 0.169.1",
-        "0.169.0",
-        "fixture-v1",
-        "",
-    ] {
+    for version in ["", "  ", "codex-cli\n0.170.0", &"9".repeat(129)] {
         assert_eq!(
             rejected(CodexAdapterConfig {
                 version: version.into(),
@@ -363,6 +358,14 @@ fn p2_01_symlink_script_wrong_digest_wrong_version_or_missing_executable_is_reje
             CodexRejection::Version,
             "{version:?}"
         );
+    }
+    for version in ["codex-cli 0.170.0", "codex-cli 0.169.1", "fixture-v1"] {
+        let adapter = CodexAdapter::new(CodexAdapterConfig {
+            version: version.into(),
+            ..c.config()
+        })
+        .unwrap();
+        assert_eq!(adapter.fingerprint().version, version);
     }
     // The selected home must be a real, resolved, non-world-writable directory.
     let home_link = c.base.join("home-link");
@@ -423,9 +426,9 @@ fn p2_01_symlink_script_wrong_digest_wrong_version_or_missing_executable_is_reje
             other => panic!("{why}: {other:?}"),
         }
     }
-    let other_release = forged(&|f| f.version = "codex-cli 0.170.0".into());
+    let two_lines = forged(&|f| f.version = "codex-cli\n0.170.0".into());
     assert_eq!(
-        ProcessLaunch::from_spec(&other_release, c.golden(&spec), c.environment()),
+        ProcessLaunch::from_spec(&two_lines, c.golden(&spec), c.environment()),
         Err(LaunchRejection::Spec(ProviderError::FingerprintMismatch))
     );
     assert!(!c.issued());
@@ -847,4 +850,166 @@ fn p2_01_stderr_flood_is_capped_drained_and_recorded() {
     // Stdout stayed complete and separately accounted.
     assert!(!report.protocol_failed && !report.evidence_lost);
     assert_eq!(report.terminal, Some(TerminalStatus::Success));
+}
+
+// D3: executable discovery over a given PATH, with private fixture copies as the CLIs.
+// No login shell runs; the fixture answers `--version` by its file name.
+fn settled(d: &Discovery, provider: ProviderKind, environment: &[(String, String)]) -> Lookup {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        match d.find(provider, None, environment) {
+            Lookup::Checking => {}
+            other => return other,
+        }
+        assert!(Instant::now() < deadline, "discovery never settled");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn installed(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::copy(CODEX_FIXTURE, path).unwrap();
+    chmod(path, 0o755);
+}
+
+#[test]
+fn d3_discovery_takes_the_first_path_entry_resolves_its_link_and_learns_version_and_digest() {
+    let c = C::new();
+    let claude = [
+        ("HOME".to_owned(), c.home.display().to_string()),
+        ("USER".to_owned(), "tester".to_owned()),
+    ];
+    let (first, second) = (c.base.join("first"), c.base.join("second"));
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    // A versioned install directory and a link to it, as a cask installs it.
+    let real = c.base.join("Caskroom/claude-code/2.1.311/claude");
+    installed(&real);
+    std::os::unix::fs::symlink(&real, second.join("claude")).unwrap();
+    let search = format!(
+        "relative/bin::{}:{}:/nonexistent",
+        first.display(),
+        second.display()
+    );
+    let d = Discovery::with_search_path(search);
+    let digest = sha256_hex(&[&fs::read(&real).unwrap()]);
+    assert_eq!(
+        d.find(ProviderKind::ClaudeCode, None, &claude),
+        Lookup::Checking
+    );
+    assert_eq!(
+        settled(&d, ProviderKind::ClaudeCode, &claude),
+        Lookup::Found(FoundExecutable {
+            entry: Some(second.join("claude")),
+            path: real.clone(),
+            version: jojo_domain::claude::CLAUDE_VERSION.into(),
+            sha256: digest.clone(),
+            profiled: true,
+        })
+    );
+    // An entry earlier on PATH wins, and a release no profile was written against is
+    // found and marked, not refused.
+    let next = c.base.join("Caskroom/claude-code/2.9.0/claude-next");
+    installed(&next);
+    std::os::unix::fs::symlink(&next, first.join("claude")).unwrap();
+    let Lookup::Found(found) = settled(&d, ProviderKind::ClaudeCode, &claude) else {
+        panic!("not found")
+    };
+    assert_eq!(
+        (found.entry, found.path),
+        (Some(first.join("claude")), next.clone())
+    );
+    assert_eq!(
+        (found.version.as_str(), found.profiled),
+        ("2.9.0 (Claude Code)", false)
+    );
+    // The same file rewritten in place is checked again and gets its new digest.
+    let mut bytes = fs::read(&next).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xff;
+    fs::write(&next, &bytes).unwrap();
+    assert_eq!(
+        d.find(ProviderKind::ClaudeCode, None, &claude),
+        Lookup::Checking
+    );
+    let Lookup::Found(changed) = settled(&d, ProviderKind::ClaudeCode, &claude) else {
+        panic!("not found")
+    };
+    assert_eq!(changed.sha256, sha256_hex(&[&bytes]));
+    assert_ne!(changed.sha256, digest);
+    // A launcher option replaces the lookup.
+    let given = d.find(ProviderKind::ClaudeCode, Some(&real), &claude);
+    assert!(
+        matches!(given, Lookup::Found(ref f) if f.entry.is_none() && f.path == real),
+        "{given:?}"
+    );
+}
+
+#[test]
+fn d3_the_codex_npm_launcher_is_resolved_to_the_binary_its_package_ships() {
+    let c = C::new();
+    let codex = c.environment();
+    let package = c.base.join("lib/node_modules/@openai/codex");
+    let launcher = package.join("bin/codex.js");
+    fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+    fs::write(&launcher, "#!/usr/bin/env node\n").unwrap();
+    chmod(&launcher, 0o755);
+    let (platform, triple) = if cfg!(target_arch = "aarch64") {
+        ("codex-darwin-arm64", "aarch64-apple-darwin")
+    } else {
+        ("codex-darwin-x64", "x86_64-apple-darwin")
+    };
+    let binary = package
+        .join("node_modules/@openai")
+        .join(platform)
+        .join("vendor")
+        .join(triple)
+        .join("bin/codex");
+    let bin = c.base.join("homebrew/bin");
+    fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(
+        "../../lib/node_modules/@openai/codex/bin/codex.js",
+        bin.join("codex"),
+    )
+    .unwrap();
+    let d = Discovery::with_search_path(bin.display().to_string());
+    // Without the platform binary the launcher is a script, and is refused.
+    let Lookup::Refused(why) = settled(&d, ProviderKind::Codex, &codex) else {
+        panic!("a script launcher was accepted")
+    };
+    assert!(why.contains("script launcher"), "{why}");
+    installed(&binary);
+    let Lookup::Found(found) = settled(&d, ProviderKind::Codex, &codex) else {
+        panic!("not found")
+    };
+    assert_eq!((found.entry, found.path), (Some(bin.join("codex")), binary));
+    assert_eq!(found.version, CODEX_VERSION);
+    assert!(found.profiled);
+    // The same layout means nothing for Claude Code.
+    std::os::unix::fs::symlink(&launcher, bin.join("claude")).unwrap();
+    assert!(matches!(
+        settled(&d, ProviderKind::ClaudeCode, &codex),
+        Lookup::Refused(_)
+    ));
+}
+
+#[test]
+fn d3_a_missing_cli_or_one_without_a_usable_version_is_refused() {
+    let c = C::new();
+    let codex = c.environment();
+    let bin = c.base.join("path");
+    fs::create_dir(&bin).unwrap();
+    let d = Discovery::with_search_path(bin.display().to_string());
+    let Lookup::Refused(why) = settled(&d, ProviderKind::Codex, &codex) else {
+        panic!("a missing executable was found")
+    };
+    assert!(why.contains("not on the login shell's PATH"), "{why}");
+    let mute = c.base.join("install/codex-mute");
+    installed(&mute);
+    std::os::unix::fs::symlink(&mute, bin.join("codex")).unwrap();
+    let fresh = Discovery::with_search_path(bin.display().to_string());
+    let Lookup::Refused(why) = settled(&fresh, ProviderKind::Codex, &codex) else {
+        panic!("a CLI without a version was accepted")
+    };
+    assert!(why.contains("no usable version"), "{why}");
 }

@@ -321,6 +321,23 @@ fn codex_lead(act: Lead) {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // D3: the version probe of executable discovery. A copy named `claude…` answers like
+    // Claude Code, any other like Codex; a name ending in `-next` answers a release no
+    // profile was written against, and one ending in `-mute` answers nothing.
+    if args == ["--version"] {
+        let me = std::env::args().next().unwrap_or_default();
+        let name = me.rsplit('/').next().unwrap_or_default();
+        let version = match (name.starts_with("claude"), name.ends_with("-next")) {
+            (true, false) => jojo_domain::claude::CLAUDE_VERSION,
+            (true, true) => "2.9.0 (Claude Code)",
+            (false, false) => jojo_domain::codex::CODEX_VERSION,
+            (false, true) => "codex-cli 0.900.0",
+        };
+        if !name.ends_with("-mute") {
+            println!("{version}");
+        }
+        return;
+    }
     let mut prompt = String::new();
     let _ = std::io::stdin().read_to_string(&mut prompt);
     let scenario = prompt

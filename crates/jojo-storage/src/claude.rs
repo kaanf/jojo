@@ -7,16 +7,16 @@
 //! Codex adapter: an explicit, fully resolved path to a native executable that only its
 //! owner can modify, whose SHA-256 equals the digest bound in the provider fingerprint.
 //!
-//! The version is an attested value bound to that digest: Jojo does not run `--version`.
+//! The version is the `--version` text that executable discovery recorded for that file (D3),
+//! or the one the launcher pinned; this adapter executes nothing.
 //! Sign-in state is attested by the human and never inspected here; the stream profile
 //! additionally refuses a run whose first record reports an API key. Every check is
 //! repeated by [`verify_launch`] when the request is rebuilt at the launch boundary.
 use std::path::PathBuf;
 
 use jojo_domain::claude::{
-    CLAUDE_PRINT_STREAM_JSON, CLAUDE_VARIABLES, CLAUDE_VERSION, check_environment,
-    check_print_argv, check_spec, configuration, configured_digest, observed_capabilities,
-    print_argv,
+    CLAUDE_PRINT_STREAM_JSON, CLAUDE_VARIABLES, check_environment, check_print_argv, check_spec,
+    configuration, configured_digest, observed_capabilities, print_argv,
 };
 use jojo_domain::provider::{
     AuthMode, Capabilities, LaunchSpec, PROVIDER_SCHEMA, ProviderAdapter, ProviderError,
@@ -47,7 +47,8 @@ pub struct ClaudeAdapterConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClaudeRejection {
     Executable(String),
-    /// Not the release the parser profile was written against.
+    /// The version text is not one plain line. Another release than the one the parser
+    /// profile was written against is accepted and recorded (D3).
     Version,
     /// The file's bytes are not the approved ones.
     Digest,
@@ -105,7 +106,7 @@ impl ClaudeAdapter {
     /// Validates the configured executable and home. Reads the executable's bytes once to
     /// hash them; executes nothing.
     pub fn new(config: ClaudeAdapterConfig) -> Result<Self, ClaudeRejection> {
-        if config.version != CLAUDE_VERSION {
+        if !jojo_domain::provider::plain_version(&config.version) {
             return Err(ClaudeRejection::Version);
         }
         let digest = inspect_executable(&config.executable).map_err(ClaudeRejection::Executable)?;

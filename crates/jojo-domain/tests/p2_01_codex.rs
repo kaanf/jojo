@@ -255,8 +255,8 @@ fn p2_01_profile_rejects_everything_one_exec_run_cannot_be_held_to() {
             UnsupportedPermission,
         ),
         (
-            "other release",
-            changed(|s| s.fingerprint.version = "codex-cli 0.170.0".into()),
+            "version text of two lines",
+            changed(|s| s.fingerprint.version = "codex-cli\n0.170.0".into()),
             FingerprintMismatch,
         ),
         (
@@ -313,6 +313,9 @@ fn p2_01_profile_rejects_everything_one_exec_run_cannot_be_held_to() {
     for (name, case, expected) in cases {
         assert_eq!(check_spec(&case), Err(expected), "{name}");
     }
+    // D3: another release is recorded with the run, not refused.
+    let release = changed(|s| s.fingerprint.version = "codex-cli 0.170.0".into());
+    assert_eq!(check_spec(&release), Ok(()));
     for bad in ["", "sha256=", &DIGEST[1..], &DIGEST.to_uppercase(), "zz"] {
         assert_eq!(configuration(bad), None, "{bad:?}");
     }

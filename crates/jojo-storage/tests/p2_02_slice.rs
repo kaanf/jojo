@@ -11,7 +11,7 @@ use jojo_domain::codex::CODEX_VERSION;
 use jojo_domain::identity::*;
 use jojo_domain::ipc::*;
 use jojo_domain::json::Json;
-use jojo_domain::provider::AuthMode;
+use jojo_domain::provider::{AuthMode, ProviderKind};
 use jojo_domain::validation::{ScopePath, StepValidation, ValidationPlan};
 use jojo_helper::service::*;
 use jojo_storage::*;
@@ -1177,6 +1177,100 @@ fn d3_a_start_never_waits_for_an_executable_digest() {
     assert_eq!(dispatch(&h.start(900)), "launched");
     assert_eq!(h.settled(900).outcome, AttemptOutcome::Succeeded);
     assert_eq!(h.launches(), 1);
+}
+
+// D3: a Claude Code step whose executable the helper discovers on the PATH it was given,
+// learning its version and digest; nothing about the executable is configured.
+#[test]
+fn d3_a_discovered_claude_code_executable_runs_a_start() {
+    let mut h = H::with_claude();
+    h.s().claude = None;
+    let path = h.base.join("path");
+    let real = h.base.join("install/claude");
+    fs::create_dir_all(real.parent().unwrap()).unwrap();
+    fs::create_dir(&path).unwrap();
+    fs::copy(&h.fixture, &real).unwrap();
+    chmod(&real, 0o755);
+    std::os::unix::fs::symlink(&real, path.join("claude")).unwrap();
+    let unpinned = Unpinned {
+        executable: None,
+        home: h.base.join("claude-home"),
+        user: "tester".into(),
+    };
+    h.s().discovered = Some(Discovered {
+        discovery: Discovery::with_search_path(path.display().to_string()),
+        codex: None,
+        claude: Some(unpinned),
+    });
+    let repository = h.register();
+    let adr =
+        "Keep the change inside src/.\nfixture: develop src/feature.rs\nNo other file changes.";
+    let bundle = h.bundle(&repository, "ClaudeCode", adr);
+    for subjects in [vec![PRD], vec![ADR], vec![VALIDATION, PLAN]] {
+        h.ok("ImportBundle", bundle.clone());
+        for subject in subjects {
+            h.approve(subject);
+        }
+    }
+    h.open_admission();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let launched = loop {
+        let r = h.start(900);
+        if r.kind != "Error" {
+            break r;
+        }
+        let code = string(get(&r.payload, "code").unwrap()).unwrap().to_owned();
+        assert!(code.starts_with("ExecutableChecking"), "{code}");
+        assert!(std::time::Instant::now() < deadline, "never found");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_eq!(dispatch(&launched), "launched");
+    assert_eq!(h.settled(900).outcome, AttemptOutcome::Succeeded);
+    // The run was frozen against the binary the link resolves to.
+    let found = h
+        .s()
+        .discovered
+        .as_ref()
+        .unwrap()
+        .find(ProviderKind::ClaudeCode);
+    assert!(
+        matches!(found, Some(Lookup::Found(ref f)) if f.path == real && f.profiled),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn d3_a_provider_whose_executable_is_not_found_is_refused_with_the_reason() {
+    let mut h = H::with_claude();
+    h.s().claude = None;
+    let path = h.base.join("empty-path");
+    fs::create_dir(&path).unwrap();
+    h.s().discovered = Some(Discovered {
+        discovery: Discovery::with_search_path(path.display().to_string()),
+        codex: None,
+        claude: Some(Unpinned {
+            executable: None,
+            home: h.base.join("claude-home"),
+            user: "tester".into(),
+        }),
+    });
+    let repository = h.register();
+    let bundle = h.bundle(&repository, "ClaudeCode", "fixture: ok");
+    for subjects in [vec![PRD], vec![ADR], vec![VALIDATION, PLAN]] {
+        h.ok("ImportBundle", bundle.clone());
+        for subject in subjects {
+            h.approve(subject);
+        }
+    }
+    h.open_admission();
+    let code = h.refused("Start", h.start_payload());
+    assert!(
+        code.starts_with(
+            "ExecutableRefused: ClaudeCode: `claude` is not on the login shell's PATH"
+        ),
+        "{code}"
+    );
+    assert_eq!(h.launches(), 0);
 }
 
 #[test]

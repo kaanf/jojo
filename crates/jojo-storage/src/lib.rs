@@ -68,6 +68,8 @@ mod claude;
 pub use claude::*;
 mod codex;
 pub use codex::*;
+mod discovery;
+pub use discovery::{Discovery, FoundExecutable, Lookup, command_name, profiled_version};
 mod executables;
 pub use executables::{ExecutableCheck, begin_check};
 mod slice;

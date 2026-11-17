@@ -6,6 +6,17 @@ use std::path::PathBuf;
 
 pub const PROVIDER_SCHEMA: u32 = 1;
 pub const MAX_PROMPT_BYTES: usize = 64 * 1024;
+/// Longest `--version` text a fingerprint may record.
+pub const MAX_VERSION_BYTES: usize = 128;
+
+/// D3: a CLI's version is a recorded fact, not a gate. Any one line of printable text is
+/// accepted; a release other than the one a stream profile was written against runs
+/// under that profile, which fails closed on anything it does not know.
+pub fn plain_version(version: &str) -> bool {
+    !version.trim().is_empty()
+        && version.len() <= MAX_VERSION_BYTES
+        && version.bytes().all(|b| (0x20..0x7f).contains(&b))
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProviderKind {

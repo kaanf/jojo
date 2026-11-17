@@ -199,7 +199,7 @@ pub fn check_spec(spec: &LaunchSpec) -> Result<(), ProviderError> {
     let fingerprint = &spec.fingerprint;
     if fingerprint.provider != ProviderKind::ClaudeCode
         || fingerprint.parser != CLAUDE_PRINT_STREAM_JSON
-        || fingerprint.version != CLAUDE_VERSION
+        || !crate::provider::plain_version(&fingerprint.version)
         || configured_digest(&fingerprint.configuration).is_none()
     {
         return Err(ProviderError::FingerprintMismatch);

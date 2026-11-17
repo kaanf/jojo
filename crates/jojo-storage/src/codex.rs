@@ -12,7 +12,8 @@
 //! * bytes whose SHA-256 equals the digest bound in the provider fingerprint, so an
 //!   update of the installed package invalidates the fingerprint.
 //!
-//! The version is an attested value bound to that digest: Jojo does not run `--version`.
+//! The version is the `--version` text that executable discovery recorded for that file (D3),
+//! or the one the launcher pinned; this adapter executes nothing.
 //! Sign-in state is likewise attested by the human, never inspected. Every check is
 //! repeated by [`verify_launch`] when the request is rebuilt at the launch boundary, so a
 //! launch that names this profile cannot be issued with other arguments, another
@@ -21,8 +22,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use jojo_domain::codex::{
-    CODEX_EXEC_JSONL, CODEX_HOME_VARIABLE, CODEX_VERSION, check_environment, check_exec_argv,
-    check_spec, configuration, configured_digest, exec_argv, unverified_capabilities,
+    CODEX_EXEC_JSONL, CODEX_HOME_VARIABLE, check_environment, check_exec_argv, check_spec,
+    configuration, configured_digest, exec_argv, unverified_capabilities,
 };
 use jojo_domain::provider::{
     AuthMode, Capabilities, LaunchSpec, PROVIDER_SCHEMA, ProviderAdapter, ProviderError,
@@ -53,7 +54,8 @@ pub struct CodexAdapterConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CodexRejection {
     Executable(String),
-    /// Not the release the parser profile was written against.
+    /// The version text is not one plain line. Another release than the one the parser
+    /// profile was written against is accepted and recorded (D3).
     Version,
     /// The file's bytes are not the approved ones.
     Digest,
@@ -127,7 +129,7 @@ impl CodexAdapter {
     /// Validates the configured executable and home. Reads the executable's bytes once to
     /// hash them; executes nothing.
     pub fn new(config: CodexAdapterConfig) -> Result<Self, CodexRejection> {
-        if config.version != CODEX_VERSION {
+        if !jojo_domain::provider::plain_version(&config.version) {
             return Err(CodexRejection::Version);
         }
         let digest = inspect_executable(&config.executable).map_err(CodexRejection::Executable)?;

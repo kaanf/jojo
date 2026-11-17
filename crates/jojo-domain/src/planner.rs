@@ -22,8 +22,8 @@
 //! `factory-spec/SKILL.md` for "what we are deliberately not doing" and the least
 //! confident decisions; Kilbex/Vigla (Apache-2.0) `mission_supervisor_run/prompts.rs` for
 //! reading the codebase before decomposing into a few independently mergeable tasks.
-use crate::claude::{CLAUDE_DISCOVERY_STREAM_JSON, CLAUDE_VARIABLES, CLAUDE_VERSION};
-use crate::codex::{CODEX_DISCOVERY_JSONL, CODEX_HOME_VARIABLE, CODEX_VERSION};
+use crate::claude::{CLAUDE_DISCOVERY_STREAM_JSON, CLAUDE_VARIABLES};
+use crate::codex::{CODEX_DISCOVERY_JSONL, CODEX_HOME_VARIABLE};
 use crate::dependency::NodeRef;
 use crate::identity::{OpaqueId, Revision};
 use crate::json::{self, Json, JsonError, element_path, member_path};
@@ -147,25 +147,23 @@ impl TurnSpec {
     }
 }
 
-/// The rules of the two lead agent profiles on top of [`TurnSpec::validate`]: the pinned
-/// release, the turn parser and exactly the provider's own variables.
+/// The rules of the two lead agent profiles on top of [`TurnSpec::validate`]: a plain
+/// version text (D3), the turn parser and exactly the provider's own variables.
 pub fn check_turn(spec: &TurnSpec) -> Result<(), ProviderError> {
     spec.validate()?;
     let fingerprint = &spec.fingerprint;
-    let (version, digest, variables): (_, _, &[&str]) = match fingerprint.provider {
+    let (digest, variables): (_, &[&str]) = match fingerprint.provider {
         ProviderKind::ClaudeCode => (
-            CLAUDE_VERSION,
             crate::claude::configured_digest(&fingerprint.configuration),
             &CLAUDE_VARIABLES,
         ),
         ProviderKind::Codex => (
-            CODEX_VERSION,
             crate::codex::configured_digest(&fingerprint.configuration),
             &[CODEX_HOME_VARIABLE],
         ),
     };
     if fingerprint.parser != turn_parser(fingerprint.provider)
-        || fingerprint.version != version
+        || !crate::provider::plain_version(&fingerprint.version)
         || digest.is_none()
     {
         return Err(ProviderError::FingerprintMismatch);

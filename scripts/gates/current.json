@@ -1,9 +1,9 @@
 {
   "artifact": "gate-d3",
   "scope": "Tree after D3: executables discovered through the login shell PATH, re-checked before each attempt and lead turn, version and digest recorded per run, a changed executable warned rather than refused.",
-  "boundary_tests_min": 105,
+  "boundary_tests_min": 107,
   "rust": {
-    "passed_min": 455,
+    "passed_min": 461,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -61,7 +61,13 @@
       "t07_worktree_administration_runs_beside_shared_scheduler_claims",
       "d3_executable_digest_is_remembered_per_file_identity",
       "d3_a_start_never_waits_for_an_executable_digest",
-      "d3_a_step_waits_for_its_executable_digest_and_the_other_provider_starts"
+      "d3_a_step_waits_for_its_executable_digest_and_the_other_provider_starts",
+      "d3_discovery_takes_the_first_path_entry_resolves_its_link_and_learns_version_and_digest",
+      "d3_the_codex_npm_launcher_is_resolved_to_the_binary_its_package_ships",
+      "d3_a_missing_cli_or_one_without_a_usable_version_is_refused",
+      "d3_a_discovered_claude_code_executable_runs_a_start",
+      "d3_a_provider_whose_executable_is_not_found_is_refused_with_the_reason",
+      "tests::d3_an_executable_is_discovered_given_by_path_or_pinned"
     ],
     "ignored": [
       "child_fixture",

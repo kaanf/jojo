@@ -163,7 +163,7 @@ fn m2_turn_request_is_one_bounded_run_of_the_pinned_profile() {
         let mismatched: Vec<TurnSpec> = vec![
             changed(provider, |s| s.fingerprint.parser = developer.into()),
             changed(provider, |s| {
-                s.fingerprint.version = "another release".into()
+                s.fingerprint.version = "another\nrelease".into()
             }),
             changed(provider, |s| {
                 s.fingerprint.configuration = "unpinned".into()

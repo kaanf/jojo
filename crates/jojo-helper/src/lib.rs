@@ -33,34 +33,47 @@ pub enum Invocation {
     },
 }
 
-/// The one root under which a repository may be registered, and optionally the one
-/// Codex executable and the one Claude Code executable a Start may launch.
+/// The one root under which a repository may be registered, and optionally how the
+/// helper knows its Codex and Claude Code executables (D3).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SliceOptions {
     pub disposable_root: PathBuf,
     pub codex: Option<CodexOptions>,
     pub claude: Option<Box<ClaudeOptions>>,
+    /// D3: the login shell asked for `PATH`; the helper's default when absent.
+    pub login_shell: Option<PathBuf>,
 }
 
-/// Human-approved Claude Code identity (M1): explicit native binary, recorded version,
-/// approved digest, the home directory and account name its sign-in is stored under, and
-/// the human's attestation of native sign-in.
+/// D3: how a provider's executable is known.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExecutableOption {
+    /// No executable option: looked up on the login shell's PATH before each run.
+    Discover,
+    /// `--…-executable` alone: that file; its version and digest are learned from it.
+    Path(PathBuf),
+    /// Path, version and digest together: exactly that file at that release, refused
+    /// when either differs (the behaviour before D3).
+    Pinned {
+        path: PathBuf,
+        version: String,
+        sha256: String,
+    },
+}
+
+/// Claude Code (M1): how its executable is known, the home directory and account name
+/// its sign-in is stored under, and the human's attestation of native sign-in.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClaudeOptions {
-    pub executable: PathBuf,
-    pub version: String,
-    pub sha256: String,
+    pub executable: ExecutableOption,
     pub home: PathBuf,
     pub user: String,
 }
 
-/// Human-approved Codex identity: explicit native binary, recorded version, approved
-/// digest, explicitly selected home, and the human's attestation of native sign-in.
+/// Codex: how its executable is known, the explicitly selected home, and the human's
+/// attestation of native sign-in.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CodexOptions {
-    pub executable: PathBuf,
-    pub version: String,
-    pub sha256: String,
+    pub executable: ExecutableOption,
     pub home: PathBuf,
 }
 
@@ -117,9 +130,9 @@ pub fn parse_invocation(
     let mut worktrees = None;
     // Slice options, in order: disposable root; Codex executable, version, digest, home,
     // sign-in attestation; Claude Code executable, version, digest, home, account name,
-    // sign-in attestation. Accepted only with --serve.
-    let mut slice: [Option<OsString>; 12] = Default::default();
-    const SLICE: [&str; 12] = [
+    // sign-in attestation; the login shell (D3). Accepted only with --serve.
+    let mut slice: [Option<OsString>; 13] = Default::default();
+    const SLICE: [&str; 13] = [
         "--disposable-root",
         "--codex-executable",
         "--codex-version",
@@ -132,6 +145,7 @@ pub fn parse_invocation(
         "--claude-home",
         "--claude-user",
         "--claude-auth",
+        "--login-shell",
     ];
     while let Some(argument) = arguments.next() {
         let value = arguments.next();
@@ -164,56 +178,69 @@ pub fn parse_invocation(
         sha256,
         codex_home,
         auth,
-        claude @ ..,
+        claude_executable,
+        claude_version,
+        claude_sha256,
+        claude_home,
+        user,
+        claude_auth,
+        login_shell,
     ] = slice;
     let text = |v: OsString| v.into_string().map_err(|_| ConfigError::Usage);
-    let codex = match (executable, version, sha256, codex_home, auth) {
-        (None, None, None, None, None) => None,
-        (Some(executable), Some(version), Some(sha256), Some(codex_home), Some(auth)) => {
+    // D3: no executable option, the path alone, or path, version and digest together.
+    let known =
+        |executable: Option<OsString>, version: Option<OsString>, sha256: Option<OsString>| {
+            Ok(match (executable, version, sha256) {
+                (None, None, None) => ExecutableOption::Discover,
+                (Some(path), None, None) => ExecutableOption::Path(path.into()),
+                (Some(path), Some(version), Some(sha256)) => ExecutableOption::Pinned {
+                    path: path.into(),
+                    version: text(version)?,
+                    sha256: text(sha256)?,
+                },
+                _ => return Err(ConfigError::Usage),
+            })
+        };
+    let codex_executable = known(executable, version, sha256)?;
+    let codex = match (codex_home, auth) {
+        (None, None) if codex_executable == ExecutableOption::Discover => None,
+        (Some(codex_home), Some(auth)) => {
             // The only accepted attestation. There is no API-key or unknown mode to pass.
             if auth != "native-subscription" {
                 return Err(ConfigError::Usage);
             }
             Some(CodexOptions {
-                executable: executable.into(),
-                version: text(version)?,
-                sha256: text(sha256)?,
+                executable: codex_executable,
                 home: codex_home.into(),
             })
         }
         _ => return Err(ConfigError::Usage),
     };
-    let claude = match claude {
-        [None, None, None, None, None, None] => None,
-        [
-            Some(executable),
-            Some(version),
-            Some(sha256),
-            Some(claude_home),
-            Some(user),
-            Some(auth),
-        ] => {
+    let claude_executable = known(claude_executable, claude_version, claude_sha256)?;
+    let claude = match (claude_home, user, claude_auth) {
+        (None, None, None) if claude_executable == ExecutableOption::Discover => None,
+        (Some(claude_home), Some(user), Some(auth)) => {
             if auth != "native-subscription" {
                 return Err(ConfigError::Usage);
             }
             Some(Box::new(ClaudeOptions {
-                executable: executable.into(),
-                version: text(version)?,
-                sha256: text(sha256)?,
+                executable: claude_executable,
                 home: claude_home.into(),
                 user: text(user)?,
             }))
         }
         _ => return Err(ConfigError::Usage),
     };
-    let slice = match (disposable, codex, claude) {
-        (None, None, None) => None,
-        (Some(root), codex, claude) => Some(SliceOptions {
+    let login_shell = login_shell.map(PathBuf::from);
+    let slice = match (disposable, codex, claude, login_shell) {
+        (None, None, None, None) => None,
+        (Some(root), codex, claude, login_shell) => Some(SliceOptions {
             disposable_root: root.into(),
             codex,
             claude,
+            login_shell,
         }),
-        (None, _, _) => return Err(ConfigError::Usage),
+        (None, ..) => return Err(ConfigError::Usage),
     };
     let defaults = if data.is_none() || worktrees.is_none() {
         Some(
@@ -491,9 +518,11 @@ mod tests {
             panic!("slice invocation")
         };
         let claude = Box::new(ClaudeOptions {
-            executable: "/test/bin/claude".into(),
-            version: "2.1.311 (Claude Code)".into(),
-            sha256: "11".into(),
+            executable: ExecutableOption::Pinned {
+                path: "/test/bin/claude".into(),
+                version: "2.1.311 (Claude Code)".into(),
+                sha256: "11".into(),
+            },
             home: "/test/home".into(),
             user: "tester".into(),
         });
@@ -540,6 +569,87 @@ mod tests {
     }
 
     #[test]
+    fn d3_an_executable_is_discovered_given_by_path_or_pinned() {
+        let parse = |extra: &[&str]| {
+            let all: Vec<&str> = SLICE[..7].iter().chain(extra).copied().collect();
+            parse_invocation(args(&all), None)
+        };
+        let codex = |options: &SliceOptions| options.codex.as_ref().map(|c| c.executable.clone());
+        // Home and sign-in alone: the executable is looked up on the login shell's PATH.
+        let discover = [
+            "--codex-home",
+            "/test/codex-home",
+            "--codex-auth",
+            "native-subscription",
+        ];
+        let Ok(Invocation::ServeSlice(_, options)) = parse(&discover) else {
+            panic!("discovered Codex")
+        };
+        assert_eq!(codex(&options), Some(ExecutableOption::Discover));
+        assert_eq!(options.login_shell, None);
+        // The path alone; its version and digest are learned from the file.
+        let path: Vec<&str> = ["--codex-executable", "/test/bin/codex"]
+            .iter()
+            .chain(&discover)
+            .copied()
+            .collect();
+        let Ok(Invocation::ServeSlice(_, options)) = parse(&path) else {
+            panic!("Codex by path")
+        };
+        assert_eq!(
+            codex(&options),
+            Some(ExecutableOption::Path("/test/bin/codex".into()))
+        );
+        // Claude Code discovered, with the login shell named.
+        let claude = [
+            "--claude-home",
+            "/test/home",
+            "--claude-user",
+            "tester",
+            "--claude-auth",
+            "native-subscription",
+            "--login-shell",
+            "/bin/bash",
+        ];
+        let Ok(Invocation::ServeSlice(_, options)) = parse(&claude) else {
+            panic!("discovered Claude Code")
+        };
+        assert_eq!(
+            options.claude.map(|c| c.executable),
+            Some(ExecutableOption::Discover)
+        );
+        assert_eq!(options.login_shell, Some("/bin/bash".into()));
+        // A version or digest without the path, or only one of the two, is refused; so is
+        // an executable without a home, and a login shell without a disposable root.
+        for partial in [
+            &["--codex-version", "codex-cli 0.169.0"][..],
+            &["--codex-sha256", "00"],
+            &[
+                "--codex-executable",
+                "/test/bin/codex",
+                "--codex-sha256",
+                "00",
+            ],
+        ] {
+            let all: Vec<&str> = partial.iter().chain(&discover).copied().collect();
+            assert_eq!(parse(&all), Err(ConfigError::Usage), "{partial:?}");
+        }
+        assert_eq!(
+            parse(&["--codex-executable", "/test/bin/codex"]),
+            Err(ConfigError::Usage)
+        );
+        let shell_only: Vec<&str> = SLICE[..5]
+            .iter()
+            .chain(&["--login-shell", "/bin/zsh"])
+            .copied()
+            .collect();
+        assert_eq!(
+            parse_invocation(args(&shell_only), None),
+            Err(ConfigError::Usage)
+        );
+    }
+
+    #[test]
     fn p2_02_slice_options_are_explicit_complete_and_only_for_serve() {
         let Ok(Invocation::ServeSlice(roots, options)) = parse_invocation(args(&SLICE), None)
         else {
@@ -551,12 +661,15 @@ mod tests {
             SliceOptions {
                 disposable_root: "/test/disposable".into(),
                 codex: Some(CodexOptions {
-                    executable: "/test/bin/codex".into(),
-                    version: "codex-cli 0.169.0".into(),
-                    sha256: "00".into(),
+                    executable: ExecutableOption::Pinned {
+                        path: "/test/bin/codex".into(),
+                        version: "codex-cli 0.169.0".into(),
+                        sha256: "00".into(),
+                    },
                     home: "/test/codex-home".into(),
                 }),
                 claude: None,
+                login_shell: None,
             }
         );
         // A disposable root alone enables registration and import, with no adapter.

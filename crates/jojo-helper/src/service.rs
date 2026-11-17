@@ -211,15 +211,121 @@ impl SliceConfig {
         Self {
             disposable_root: options.disposable_root,
             worktree_root: roots.worktrees().to_path_buf(),
-            codex: options.codex.map(|c| CodexAdapterConfig {
-                executable: c.executable,
-                version: c.version,
-                sha256: c.sha256,
-                home: c.home,
-                // The launcher's flag is the human's attestation; nothing is inspected.
-                auth: AuthMode::NativeSubscription,
+            codex: options.codex.and_then(|c| match c.executable {
+                crate::ExecutableOption::Pinned {
+                    path,
+                    version,
+                    sha256,
+                } => Some(CodexAdapterConfig {
+                    executable: path,
+                    version,
+                    sha256,
+                    home: c.home,
+                    // The launcher's flag is the human's attestation; nothing is inspected.
+                    auth: AuthMode::NativeSubscription,
+                }),
+                _ => None,
             }),
         }
+    }
+}
+
+/// D3: a provider whose executable this helper finds, and checks again before each run.
+#[derive(Clone, Debug)]
+pub struct Unpinned {
+    /// The launcher's path option; `None`: looked up on the login shell's PATH.
+    pub executable: Option<PathBuf>,
+    pub home: PathBuf,
+    /// Claude Code's account name; empty for Codex.
+    pub user: String,
+}
+impl Unpinned {
+    /// The variables of the provider's launch envelope, which its `--version` probe gets.
+    fn environment(&self, provider: ProviderKind) -> Vec<(String, String)> {
+        let home = self.home.display().to_string();
+        match provider {
+            ProviderKind::Codex => vec![(CODEX_HOME_VARIABLE.to_owned(), home)],
+            ProviderKind::ClaudeCode => {
+                let [home_name, user_name] = CLAUDE_VARIABLES;
+                vec![
+                    (home_name.to_owned(), home),
+                    (user_name.to_owned(), self.user.clone()),
+                ]
+            }
+        }
+    }
+}
+
+/// D3: the providers whose executables are discovered, and the discovery itself.
+#[derive(Clone, Debug)]
+pub struct Discovered {
+    pub discovery: Discovery,
+    pub codex: Option<Unpinned>,
+    pub claude: Option<Unpinned>,
+}
+impl Discovered {
+    /// The login shell the helper asks for PATH when its launcher names none.
+    pub const DEFAULT_SHELL: &str = "/bin/zsh";
+
+    /// The unpinned providers of the launcher's options; `None` when every configured
+    /// provider is pinned. `home` is the helper's own HOME, the shell's only variable;
+    /// needed only when something is discovered.
+    pub fn from_options(
+        options: &crate::SliceOptions,
+        home: Option<&Path>,
+    ) -> Result<Option<Self>, String> {
+        let unpinned =
+            |executable: &crate::ExecutableOption, home: &Path, user: &str| match executable {
+                crate::ExecutableOption::Pinned { .. } => None,
+                crate::ExecutableOption::Path(path) => Some(Unpinned {
+                    executable: Some(path.clone()),
+                    home: home.to_owned(),
+                    user: user.to_owned(),
+                }),
+                crate::ExecutableOption::Discover => Some(Unpinned {
+                    executable: None,
+                    home: home.to_owned(),
+                    user: user.to_owned(),
+                }),
+            };
+        let codex = options
+            .codex
+            .as_ref()
+            .and_then(|c| unpinned(&c.executable, &c.home, ""));
+        let claude = options
+            .claude
+            .as_ref()
+            .and_then(|c| unpinned(&c.executable, &c.home, &c.user));
+        if codex.is_none() && claude.is_none() {
+            return Ok(None);
+        }
+        let shell = options
+            .login_shell
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(Self::DEFAULT_SHELL));
+        let home = home.ok_or("HOME is not set")?;
+        Ok(Some(Self {
+            discovery: Discovery::login_shell(&shell, home)?,
+            codex,
+            claude,
+        }))
+    }
+
+    fn provider(&self, provider: ProviderKind) -> Option<&Unpinned> {
+        match provider {
+            ProviderKind::Codex => self.codex.as_ref(),
+            ProviderKind::ClaudeCode => self.claude.as_ref(),
+        }
+    }
+
+    /// Looks the provider's executable up now; never waits.
+    pub fn find(&self, provider: ProviderKind) -> Option<Lookup> {
+        let unpinned = self.provider(provider)?;
+        Some(self.discovery.find(
+            provider,
+            unpinned.executable.as_deref(),
+            &unpinned.environment(provider),
+        ))
     }
 }
 #[derive(Default)]
@@ -263,23 +369,34 @@ pub struct Service {
     /// Start or a turn never waits for one; it answers `ExecutableChecking` instead.
     /// Off in in-process tests, which hash in place (once per file identity).
     pub background_checks: bool,
+    /// D3: the providers whose executables this helper discovers. A provider configured
+    /// both ways is pinned.
+    pub discovered: Option<Discovered>,
     /// Stop flag of the latest validation run, set on close, emergency and drop.
     validation_stop: Arc<AtomicBool>,
     /// M2: stop flag of the latest lead agent turn, set on close, emergency and drop.
     turn_stop: Arc<AtomicBool>,
 }
 
-/// The launcher's flags as the adapter's configuration.
-pub fn claude_config(options: crate::ClaudeOptions) -> ClaudeAdapterConfig {
-    ClaudeAdapterConfig {
-        executable: options.executable,
-        version: options.version,
-        sha256: options.sha256,
+/// The launcher's pinned flags as the adapter's configuration; `None` unless pinned.
+pub fn claude_config(options: crate::ClaudeOptions) -> Option<ClaudeAdapterConfig> {
+    let crate::ExecutableOption::Pinned {
+        path,
+        version,
+        sha256,
+    } = options.executable
+    else {
+        return None;
+    };
+    Some(ClaudeAdapterConfig {
+        executable: path,
+        version,
+        sha256,
         home: options.home,
         user: options.user,
         // The launcher's flag is the human's attestation; nothing is inspected.
         auth: AuthMode::NativeSubscription,
-    }
+    })
 }
 
 /// The production adapters. A Start reaches a process only through one of them.
@@ -344,6 +461,12 @@ impl Service {
         for path in paths.chain(self.claude.as_ref().map(|c| &c.executable)) {
             let _ = jojo_storage::begin_check(path);
         }
+        if let Some(discovered) = &self.discovered {
+            discovered.discovery.begin();
+            for provider in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
+                let _ = discovered.find(provider);
+            }
+        }
     }
     pub fn new(engine: Arc<Engine>) -> Result<Self, String> {
         Self::with_config(engine, ServiceConfig::default())
@@ -372,6 +495,7 @@ impl Service {
             guard: None,
             claude: None,
             background_checks: false,
+            discovered: None,
             validation_stop: Arc::new(AtomicBool::new(false)),
             turn_stop: Arc::new(AtomicBool::new(false)),
         })
