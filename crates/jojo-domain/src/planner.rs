@@ -57,6 +57,9 @@ pub enum TurnKind {
     Discover,
     /// With an approved PRD: drafts the ADR, the steps and their validation.
     Plan,
+    /// M4: reads a settled step's candidate and judges it (`review.rs`). Not a chat turn:
+    /// it is started by the plan runner, never requested by name.
+    Review,
 }
 
 impl TurnKind {
@@ -64,9 +67,11 @@ impl TurnKind {
         match self {
             Self::Discover => "Discover",
             Self::Plan => "Plan",
+            Self::Review => "Review",
         }
     }
 
+    /// A chat turn's kind by name. `Review` is not one.
     pub fn named(name: &str) -> Option<Self> {
         [Self::Discover, Self::Plan]
             .into_iter()
@@ -114,9 +119,13 @@ fn plain_absolute(path: &Path) -> bool {
 }
 
 impl TurnSpec {
-    /// A turn is always the planner; no other role can be expressed.
+    /// A chat turn is the planner and a review turn the reviewer; no other role can be
+    /// expressed. Both are read-only.
     pub fn role(&self) -> Role {
-        Role::Planner
+        match self.kind {
+            TurnKind::Discover | TurnKind::Plan => Role::Planner,
+            TurnKind::Review => Role::Reviewer,
+        }
     }
 
     /// Structural boundary, like `LaunchSpec::validate`: not admission and not approval.
@@ -256,7 +265,7 @@ fn exchanges(out: &mut String, list: &[Exchange]) {
     }
 }
 
-const REPLY_RULES: &str = "Your last message must be exactly one JSON object and nothing else: \
+pub(crate) const REPLY_RULES: &str = "Your last message must be exactly one JSON object and nothing else: \
 no prose before or after it and no code fence. Use only integers, strings, booleans, null, \
 arrays and objects; every key shown must be present and no other key may appear.";
 
@@ -514,6 +523,7 @@ impl PlanDraft {
 pub enum LeadReply {
     Discovery(Discovery),
     Plan(PlanDraft),
+    Review(crate::review::Verdict),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -528,7 +538,7 @@ pub enum LeadError {
     Plan(String),
 }
 
-fn bad(path: impl Into<String>, problem: &'static str) -> LeadError {
+pub(crate) fn bad(path: impl Into<String>, problem: &'static str) -> LeadError {
     LeadError::Field {
         path: path.into(),
         problem,
@@ -536,14 +546,14 @@ fn bad(path: impl Into<String>, problem: &'static str) -> LeadError {
 }
 
 /// One JSON object being decoded: every member must be consumed exactly once.
-struct Members<'a> {
+pub(crate) struct Members<'a> {
     path: &'a str,
     members: &'a [(String, Json)],
     taken: Vec<&'static str>,
 }
 
 impl<'a> Members<'a> {
-    fn of(value: &'a Json, path: &'a str) -> Result<Self, LeadError> {
+    pub(crate) fn of(value: &'a Json, path: &'a str) -> Result<Self, LeadError> {
         match value {
             Json::Object(members) => Ok(Self {
                 path,
@@ -554,7 +564,7 @@ impl<'a> Members<'a> {
         }
     }
 
-    fn take(&mut self, key: &'static str) -> Result<(&'a Json, String), LeadError> {
+    pub(crate) fn take(&mut self, key: &'static str) -> Result<(&'a Json, String), LeadError> {
         let path = member_path(self.path, key);
         self.taken.push(key);
         match self.members.iter().find(|(name, _)| name == key) {
@@ -564,7 +574,12 @@ impl<'a> Members<'a> {
     }
 
     /// Non-empty text of at most `limit` bytes. Line breaks are kept when `lines`.
-    fn text(&mut self, key: &'static str, limit: usize, lines: bool) -> Result<String, LeadError> {
+    pub(crate) fn text(
+        &mut self,
+        key: &'static str,
+        limit: usize,
+        lines: bool,
+    ) -> Result<String, LeadError> {
         let (value, path) = self.take(key)?;
         text(value, &path, limit, lines)
     }
@@ -589,7 +604,7 @@ impl<'a> Members<'a> {
             .collect()
     }
 
-    fn finish(self) -> Result<(), LeadError> {
+    pub(crate) fn finish(self) -> Result<(), LeadError> {
         match self
             .members
             .iter()
@@ -601,7 +616,12 @@ impl<'a> Members<'a> {
     }
 }
 
-fn text(value: &Json, path: &str, limit: usize, lines: bool) -> Result<String, LeadError> {
+pub(crate) fn text(
+    value: &Json,
+    path: &str,
+    limit: usize,
+    lines: bool,
+) -> Result<String, LeadError> {
     let Json::Text(text) = value else {
         return Err(bad(path, "not a string"));
     };
@@ -665,7 +685,7 @@ fn questions(members: &mut Members<'_>, with_step: bool) -> Result<Vec<LeadQuest
     Ok(list)
 }
 
-fn schema(members: &mut Members<'_>, expected: &str) -> Result<(), LeadError> {
+pub(crate) fn schema(members: &mut Members<'_>, expected: &str) -> Result<(), LeadError> {
     match members.take("schema")? {
         (Json::Text(schema), _) if schema == expected => Ok(()),
         (_, path) => Err(bad(path, "not the schema of this turn")),
@@ -802,7 +822,7 @@ fn plan(root: &Json) -> Result<PlanDraft, LeadError> {
 }
 
 /// The reply without one surrounding Markdown code fence. Nothing else is removed.
-fn unfenced(reply: &str) -> &str {
+pub(crate) fn unfenced(reply: &str) -> &str {
     let trimmed = reply.trim();
     let inner = trimmed
         .strip_prefix("```json")
@@ -821,5 +841,6 @@ pub fn parse_reply(kind: TurnKind, reply: &str) -> Result<LeadReply, LeadError> 
     match kind {
         TurnKind::Discover => discovery(&root).map(LeadReply::Discovery),
         TurnKind::Plan => plan(&root).map(LeadReply::Plan),
+        TurnKind::Review => crate::review::verdict(&root).map(LeadReply::Review),
     }
 }

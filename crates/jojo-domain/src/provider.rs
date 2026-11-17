@@ -88,6 +88,9 @@ pub enum Role {
     /// M2: the lead agent of a Feature Chat turn. Read-only; it is never launched from a
     /// `LaunchSpec`, only from a `planner::TurnSpec`.
     Planner,
+    /// M4: the reviewer of a settled plan step, of the provider that did not do the step.
+    /// Read-only and launched only from a review `planner::TurnSpec`.
+    Reviewer,
 }
 /// Product approvals are references only; tool permission cannot create these.
 #[derive(Clone, Debug, Eq, PartialEq)]

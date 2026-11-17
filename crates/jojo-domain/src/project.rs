@@ -2,12 +2,16 @@
 //! them, instructions given to every agent session, the default provider per task kind
 //! and the parallel capacity (D4). No I/O or mutation authority.
 //!
+//! M4 adds the repair limit and the cross-provider reviewer (D2). A record saved before
+//! M4 has neither; it reads as two repairs with the reviewer on.
+//!
 //! A record is saved whole, as a new revision; revisions are immutable. What a plan was
 //! drafted under is pinned by revision, so a later edit never changes an approved plan.
 use crate::identity::RepositoryId;
 use crate::ipc::{get, id, number, object, string, text, uint};
 use crate::json::{self, Json};
 use crate::provider::ProviderKind;
+use crate::repair::MAX_REPAIRS;
 
 pub const MAX_PROJECTS: usize = 8;
 pub const MAX_PROJECT_REPOSITORIES: usize = 4;
@@ -42,6 +46,10 @@ pub struct ProjectRecord {
     pub default_provider: ProviderKind,
     /// Parallel attempts in all. A lead turn takes one unit of it as well.
     pub capacity: u32,
+    /// M4 (D2): automatic repairs of a failed plan step, 0 to two.
+    pub repair_limit: u8,
+    /// M4 (D2): a settled plan step is reviewed by the other provider.
+    pub review: bool,
 }
 
 pub fn provider_name(provider: ProviderKind) -> &'static str {
@@ -132,6 +140,9 @@ impl ProjectRecord {
         if self.capacity == 0 || self.capacity > MAX_CAPACITY {
             return bad("capacity is one to eight");
         }
+        if self.repair_limit > MAX_REPAIRS {
+            return bad("the repair limit is zero to two");
+        }
         Ok(())
     }
 
@@ -170,6 +181,8 @@ impl ProjectRecord {
                 text(provider_name(self.default_provider)),
             ),
             ("capacity", number(self.capacity.into())),
+            ("repair_limit", number(self.repair_limit.into())),
+            ("review", Json::Bool(self.review)),
         ])
     }
 
@@ -203,6 +216,17 @@ impl ProjectRecord {
             provider_named(string(get(p, "default_provider")?)?).ok_or("UnknownProvider")?;
         let capacity = u32::try_from(uint(get(p, "capacity")?)?)
             .map_err(|_| "InvalidProject: capacity is one to eight")?;
+        // M4: absent in a record saved before M4.
+        let repair_limit = match get(p, "repair_limit").ok() {
+            None => MAX_REPAIRS,
+            Some(v) => u8::try_from(uint(v)?)
+                .map_err(|_| "InvalidProject: the repair limit is zero to two")?,
+        };
+        let review = match get(p, "review").ok() {
+            None => true,
+            Some(Json::Bool(b)) => *b,
+            Some(_) => return Err("InvalidProject: review is not a boolean".into()),
+        };
         let record = Self {
             name,
             repositories,
@@ -212,6 +236,8 @@ impl ProjectRecord {
             kinds,
             default_provider,
             capacity,
+            repair_limit,
+            review,
         };
         record.validate()?;
         Ok(record)
@@ -221,10 +247,25 @@ impl ProjectRecord {
         crate::ipc::encode(&self.to_json())
     }
 
+    /// The canonical text of a record saved before M4: without the two M4 fields, which
+    /// then hold their defaults. `None` when they do not.
+    fn legacy_canonical(&self) -> Option<Vec<u8>> {
+        if self.repair_limit != MAX_REPAIRS || !self.review {
+            return None;
+        }
+        let Json::Object(mut fields) = self.to_json() else {
+            return None;
+        };
+        fields.truncate(fields.len() - 2);
+        Some(crate::ipc::encode(&Json::Object(fields)).into_bytes())
+    }
+
     pub fn import(bytes: &[u8]) -> Result<Self, String> {
         let value = json::parse(bytes).map_err(|e| format!("{e:?}"))?;
         let record = Self::from_json(&value)?;
-        if record.canonical().as_bytes() != bytes {
+        if record.canonical().as_bytes() != bytes
+            && record.legacy_canonical().as_deref() != Some(bytes)
+        {
             return Err("project record is not canonical".into());
         }
         Ok(record)
@@ -324,6 +365,8 @@ mod tests {
             ],
             default_provider: ProviderKind::ClaudeCode,
             capacity: DEFAULT_CAPACITY,
+            repair_limit: MAX_REPAIRS,
+            review: true,
         }
     }
 
@@ -335,6 +378,28 @@ mod tests {
         assert_eq!(ProjectRecord::import(body.as_bytes()).unwrap(), record);
         let spaced = body.replacen(',', ", ", 1);
         assert!(ProjectRecord::import(spaced.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn m4_record_saved_before_m4_reads_as_two_repairs_with_the_reviewer() {
+        let record = sample();
+        let Json::Object(mut fields) = record.to_json() else {
+            unreachable!()
+        };
+        fields.truncate(fields.len() - 2);
+        let old = crate::ipc::encode(&Json::Object(fields));
+        assert_eq!(ProjectRecord::import(old.as_bytes()).unwrap(), record);
+        let off = ProjectRecord {
+            repair_limit: 0,
+            review: false,
+            ..record
+        };
+        assert_eq!(
+            ProjectRecord::import(off.canonical().as_bytes()).unwrap(),
+            off
+        );
+        let body = off.canonical();
+        assert!(body.contains(r#""repair_limit":0"#) && body.contains(r#""review":false"#));
     }
 
     #[test]
@@ -352,7 +417,7 @@ mod tests {
 
     #[test]
     fn invalid_records_are_refused() {
-        let cases: [fn(&mut ProjectRecord); 7] = [
+        let cases: [fn(&mut ProjectRecord); 8] = [
             |r| r.name = " ".into(),
             |r| r.repositories.clear(),
             |r| r.repositories.push(r.repositories[0]),
@@ -360,6 +425,7 @@ mod tests {
             |r| r.kinds[1].kind = "backend".into(),
             |r| r.capacity = 0,
             |r| r.test_command = vec!["make".into()],
+            |r| r.repair_limit = 3,
         ];
         for change in cases {
             let mut record = sample();

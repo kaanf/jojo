@@ -118,6 +118,11 @@ fn m2_golden_discovery_vectors_are_byte_exact_and_read_only() {
             );
         }
         assert_eq!(s.role(), Role::Planner);
+        let review = TurnSpec {
+            kind: TurnKind::Review,
+            ..s.clone()
+        };
+        assert_eq!(review.role(), Role::Reviewer);
     }
 }
 

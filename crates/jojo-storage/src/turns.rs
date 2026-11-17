@@ -743,6 +743,9 @@ impl Tx<'_> {
                     section.as_deref(),
                 )
             }
+            TurnKind::Review => {
+                return Err(deny("TurnRefused: a review is not a chat turn"));
+            }
         };
         if prompt.len() > MAX_PROMPT_BYTES {
             return Err(deny(

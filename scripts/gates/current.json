@@ -1,5 +1,5 @@
 {
-  "artifact": "gate-d3",
+  "artifact": "gate-m4",
   "scope": "Tree after D3: executables discovered through the login shell PATH, re-checked before each attempt and lead turn, version and digest recorded per run, a changed executable warned rather than refused.",
   "boundary_tests_min": 107,
   "rust": {
@@ -68,7 +68,15 @@
       "d3_a_discovered_claude_code_executable_runs_a_start",
       "d3_a_provider_whose_executable_is_not_found_is_refused_with_the_reason",
       "tests::d3_an_executable_is_discovered_given_by_path_or_pinned",
-      "d3_a_serving_helper_learns_discovered_executables_before_the_first_start"
+      "d3_a_serving_helper_learns_discovered_executables_before_the_first_start",
+      "project::tests::m4_record_saved_before_m4_reads_as_two_repairs_with_the_reviewer",
+      "m4_agent_failures_are_repaired_twice_then_held",
+      "m4_failures_the_agent_did_not_cause_are_never_repaired",
+      "m4_the_limit_is_a_setting_and_never_above_two",
+      "m4_repair_section_carries_the_end_of_the_failure_output_and_the_paths",
+      "m4_review_prompt_has_the_developer_inputs_and_fits_the_diff",
+      "m4_review_reply_is_one_strict_verdict",
+      "m4_review_is_not_a_chat_turn_kind"
     ],
     "ignored": [
       "child_fixture",

@@ -17,6 +17,8 @@ pub mod prd;
 pub mod project;
 pub mod provider;
 pub mod recovery;
+pub mod repair;
+pub mod review;
 pub mod shutdown;
 pub mod stream;
 pub mod time;
