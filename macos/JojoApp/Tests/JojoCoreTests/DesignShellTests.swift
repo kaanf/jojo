@@ -1790,6 +1790,7 @@ extension DesignShellTests {
         XCTAssertEqual(draft.problem, "Capacity is a number from 1 to 8.")
         // The runner's requests exist only from 1.3; everything else keeps its frame.
         for request in [Request.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun] { XCTAssertEqual(request.minor, 3) }
+        XCTAssertEqual(Request.Executables.minor, 4)
         XCTAssertEqual(Request.ApprovedPlan.minor, 1)
         XCTAssertTrue(MainView.built.contains(.projects))
     }

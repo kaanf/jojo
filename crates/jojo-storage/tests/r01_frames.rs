@@ -163,8 +163,9 @@ fn record(h: &mut H) {
     // Before and around the handshake.
     h.send("snapshot before hello", "Snapshot", object([]));
     h.at("hello 1.0", 0, "Hello", object([]));
-    // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2).
-    h.at("hello 1.4", 4, "Hello", object([("junk", n(1))]));
+    // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2, 1.5
+    // since D3).
+    h.at("hello 1.5", 5, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1094,6 +1095,15 @@ fn record(h: &mut H) {
         object([("plan", hex(7)), ("action", text("Retry"))]),
     );
     at3(h, "plan run none", "PlanRun", object([("plan", hex(7))]));
+    // D3 (1.4): the executables query; unknown before 1.4, and it takes no field.
+    at3(h, "executables at 1.3", "Executables", object([]));
+    h.at("executables none configured", 4, "Executables", object([]));
+    h.at(
+        "executables with a field",
+        4,
+        "Executables",
+        object([("provider", text("Codex"))]),
+    );
 }
 
 #[test]
@@ -1110,7 +1120,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.4 => 1.3 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun","slice":true}
+hello 1.5 => 1.4 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1309,4 +1319,7 @@ run unknown plan => 1.3 Error {"code":"RunRefused: not a plan a lead drafted"}
 control unknown plan => 1.3 Error {"code":"UnknownPlanRun: this plan was never started"}
 control unknown action => 1.3 Error {"code":"UnknownAction"}
 plan run none => 1.3 Response null
+executables at 1.3 => 1.3 Error {"code":"UnknownType"}
+executables none configured => 1.4 Response {"providers":[{"change":null,"detail":"","entry":null,"last_run":null,"path":null,"profiled":null,"provider":"ClaudeCode","sha256":null,"source":"none","state":"unconfigured","version":null},{"change":null,"detail":"","entry":null,"last_run":null,"path":null,"profiled":null,"provider":"Codex","sha256":null,"source":"none","state":"unconfigured","version":null}]}
+executables with a field => 1.4 Error {"code":"InvalidPayload: unexpected or missing fields"}
 "#;

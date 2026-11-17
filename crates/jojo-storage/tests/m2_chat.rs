@@ -10,7 +10,7 @@ use jojo_domain::codex::CODEX_VERSION;
 use jojo_domain::identity::*;
 use jojo_domain::ipc::*;
 use jojo_domain::json::Json;
-use jojo_domain::provider::AuthMode;
+use jojo_domain::provider::{AuthMode, ProviderKind};
 use jojo_helper::service::*;
 use jojo_storage::*;
 use std::fs;
@@ -1107,9 +1107,11 @@ fn m3_a_started_plan_runs_its_ready_steps_validates_them_and_waits_for_the_human
 }
 
 // D3: while one provider's executable digest is computed in the background, the runner
-// leaves that step ready (it is not refused) and starts the other provider's step.
+// leaves that step ready (it is not refused) and starts the other provider's step. Every
+// turn and attempt records the executable it ran; a provider whose executable differs
+// from its previous run keeps the change, which the Executables query reports.
 #[test]
-fn d3_a_step_waits_for_its_executable_digest_and_the_other_provider_starts() {
+fn d3_a_step_waits_for_its_executable_digest_and_every_run_records_its_executable() {
     let mut h = H::new();
     let repository = h.ready();
     let (_, _, plan, _, _) = h.approved_kinds_plan(&repository);
@@ -1119,6 +1121,7 @@ fn d3_a_step_waits_for_its_executable_digest_and_the_other_provider_starts() {
     chmod(&copy, 0o755);
     h.s().claude.as_mut().unwrap().executable = copy.clone();
     h.s().background_checks = true;
+    let before = h.read(|v| v.executable_record(ProviderKind::ClaudeCode)).0;
     h.ok3("RunPlan", object([("plan", plan.clone())]));
     h.s().tick().unwrap();
     assert_eq!(h.step_states(&plan), ["Ready", "Running", "Waiting"]);
@@ -1126,6 +1129,55 @@ fn d3_a_step_waits_for_its_executable_digest_and_the_other_provider_starts() {
     let states = h.run_until(&plan, |s| s[0] == "Review" && s[1] == "Review");
     assert_eq!(states[2], "Waiting");
     assert_eq!(begin_check(&copy), ExecutableCheck::Known);
+    // The plan turn ran the shared fixture; each attempt ran its provider's executable.
+    let agent = h.base.join("bin/agent").display().to_string();
+    let turn = h.read(|v| v.run_executable(OpaqueId(4003))).unwrap();
+    assert_eq!(turn.path, agent);
+    let api = id(&h.step_field(&plan, 0, "attempt")).unwrap();
+    let usage = id(&h.step_field(&plan, 1, "attempt")).unwrap();
+    let claude = h.read(|v| v.run_executable(api)).unwrap();
+    assert_eq!(
+        (claude.provider, claude.path.as_str()),
+        (
+            ProviderKind::ClaudeCode,
+            copy.display().to_string().as_str()
+        )
+    );
+    assert_eq!(
+        (claude.version.as_str(), claude.profiled),
+        (CLAUDE_VERSION, true)
+    );
+    assert_eq!(claude.sha256, h.digest());
+    let codex = h.read(|v| v.run_executable(usage)).unwrap();
+    assert_eq!(
+        (codex.provider, codex.path.as_str()),
+        (ProviderKind::Codex, agent.as_str())
+    );
+    // Claude Code ran the shared fixture in a lead turn (4002), so its executable changed
+    // between two runs: the change is recorded, not refused.
+    let changed = h.read(|v| v.executable_record(ProviderKind::ClaudeCode));
+    assert_eq!(changed.0.as_ref(), Some(&claude));
+    let previous = before.expect("the lead turn recorded Claude Code's executable");
+    assert_eq!(previous.path, agent);
+    let change = changed.1.clone().expect("a recorded change");
+    assert_eq!((&change.previous, &change.current), (&previous, &claude));
+    let r = h.at(4, "Executables", object([]));
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    let rows = items(field(&r.payload, &["providers"]));
+    assert_eq!(str_of(&rows[0], &["provider"]), "ClaudeCode");
+    assert_eq!(str_of(&rows[0], &["source"]), "pinned");
+    assert_eq!(str_of(&rows[0], &["state"]), "ready");
+    assert_eq!(
+        str_of(&rows[0], &["last_run", "path"]),
+        copy.display().to_string()
+    );
+    assert_eq!(
+        field(&rows[0], &["last_run", "profiled"]),
+        &Json::Bool(true)
+    );
+    assert_eq!(str_of(&rows[0], &["change", "previous", "path"]), agent);
+    assert_eq!(field(&rows[0], &["change", "event"]), &number(change.event));
+    assert_eq!(str_of(&rows[1], &["last_run", "path"]), agent);
 }
 
 #[test]

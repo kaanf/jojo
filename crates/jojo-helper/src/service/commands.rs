@@ -664,9 +664,15 @@ impl Service {
             provider: c.provider,
             message: c.message,
         };
+        // D3: the turn records the version and digest of the executable it will run.
+        let fingerprint = adapter.fingerprint().clone();
         let r = self
             .engine
-            .execute(request, move |tx| tx.accept_turn(&accepted, &base))
+            .execute(request, move |tx| {
+                let receipt = tx.accept_turn(&accepted, &base)?;
+                tx.record_turn_executable(turn, &fingerprint)?;
+                Ok(receipt)
+            })
             .map_err(rejected)?;
         if r.replayed {
             return Ok(with(r, "not repeated"));

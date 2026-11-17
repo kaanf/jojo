@@ -94,6 +94,11 @@ impl MigrationPlan {
                 name: "plan runs and their integration",
                 sql: SCHEMA_V13,
             },
+            Migration {
+                version: 14,
+                name: "executable identities per run",
+                sql: SCHEMA_V14,
+            },
         ])
     }
 
@@ -1154,6 +1159,35 @@ CREATE TRIGGER plan_integrations_immutable BEFORE UPDATE ON plan_integrations BE
 CREATE TRIGGER plan_integrations_keep BEFORE DELETE ON plan_integrations BEGIN SELECT RAISE(ABORT,'immutable plan integration'); END;
 "#;
 
+/// D3: the executable each run used: the version and digest discovery found or the
+/// launcher pinned, one row per distinct file and release, linked to every attempt and
+/// lead turn. A provider's last used identity and each change of it are kept too.
+const SCHEMA_V14: &str = r#"
+CREATE TABLE executable_identities (
+ identity TEXT PRIMARY KEY CHECK(length(identity)=64),
+ provider TEXT NOT NULL CHECK(provider IN ('Codex','ClaudeCode')),
+ path TEXT NOT NULL CHECK(length(path)>0),
+ version TEXT NOT NULL CHECK(length(version) BETWEEN 1 AND 128),
+ sha256 TEXT NOT NULL CHECK(length(sha256)=64),
+ profiled INTEGER NOT NULL CHECK(profiled IN (0,1)),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq));
+CREATE TABLE provider_executables (
+ provider TEXT PRIMARY KEY CHECK(provider IN ('Codex','ClaudeCode')),
+ identity TEXT NOT NULL REFERENCES executable_identities(identity));
+CREATE TABLE executable_changes (
+ event INTEGER PRIMARY KEY REFERENCES events(seq),
+ provider TEXT NOT NULL CHECK(provider IN ('Codex','ClaudeCode')),
+ previous TEXT NOT NULL REFERENCES executable_identities(identity),
+ identity TEXT NOT NULL REFERENCES executable_identities(identity),
+ CHECK(previous<>identity));
+CREATE TABLE attempt_executables (
+ attempt TEXT PRIMARY KEY REFERENCES process_launches(attempt),
+ identity TEXT NOT NULL REFERENCES executable_identities(identity));
+CREATE TABLE turn_executables (
+ turn TEXT PRIMARY KEY REFERENCES lead_turns(turn),
+ identity TEXT NOT NULL REFERENCES executable_identities(identity));
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -1165,7 +1199,7 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 13));
+        assert_eq!((report.from_version, report.to_version), (0, 14));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);

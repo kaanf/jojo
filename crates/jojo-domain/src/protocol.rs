@@ -58,6 +58,7 @@ pub enum RequestKind {
     RunPlan,
     ControlPlan,
     PlanRun,
+    Executables,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,7 +121,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 39] = [
+pub const SPECS: [Spec; 40] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -160,6 +161,7 @@ pub const SPECS: [Spec; 39] = [
     spec(K::RunPlan, "RunPlan", Mutation, 3, false, Exact, &["plan"]),
     spec(K::ControlPlan, "ControlPlan", Mutation, 3, true, Exact, &["plan", "action"]),
     spec(K::PlanRun, "PlanRun", Query, 3, false, Exact, &["plan"]),
+    spec(K::Executables, "Executables", Query, 4, false, Exact, &[]),
 ];
 
 impl RequestKind {
@@ -935,16 +937,19 @@ mod tests {
         assert_eq!(names(Mutation, 2), v12_commands);
         assert_eq!(names(Query, 2), v12_queries);
         // M3 (1.3): project records and the plan runner, after everything 1.2 knows.
-        for minor in [3, 9] {
+        // D3 (1.4): the executables query, after everything 1.3 knows.
+        for minor in [3, 4, 9] {
             assert_eq!(
                 names(Mutation, minor),
                 format!("{v12_commands} SaveProject RunPlan ControlPlan")
             );
+            let v14 = if minor >= 4 { " Executables" } else { "" };
             assert_eq!(
                 names(Query, minor),
-                format!("{v12_queries} Projects PlanRun")
+                format!("{v12_queries} Projects PlanRun{v14}")
             );
         }
+        assert_eq!(RequestKind::of_frame("Executables", 3), None);
         assert_eq!(RequestKind::of_frame("SaveProject", 2), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 1), None);
         assert_eq!(RequestKind::of_frame("ChatTurn", 2), Some(K::ChatTurn));

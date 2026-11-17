@@ -198,6 +198,8 @@ impl Tx<'_> {
                 Value::Int(to_db(event.0)?),
             ],
         )?;
+        // D3: the version and digest of the executable this run uses.
+        self.record_attempt_executable(attempt, &spec.fingerprint)?;
         Ok(true)
     }
 

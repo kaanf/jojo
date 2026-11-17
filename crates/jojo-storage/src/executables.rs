@@ -118,6 +118,12 @@ pub(crate) fn inspect_executable(path: &Path) -> Result<String, String> {
     Ok(digest)
 }
 
+/// The digest of an executable whose digest is known (`begin_check` said `Known`); one
+/// that is not known is hashed in place.
+pub fn executable_digest(path: &Path) -> Result<String, String> {
+    inspect_executable(path)
+}
+
 /// Where the digest of one executable stands.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutableCheck {

@@ -1237,6 +1237,28 @@ fn d3_a_discovered_claude_code_executable_runs_a_start() {
         matches!(found, Some(Lookup::Found(ref f)) if f.path == real && f.profiled),
         "{found:?}"
     );
+    // The Executables query reports the discovered file and the run that used it.
+    let r = h.frame(9000, 4, "Executables", object([]));
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    let Json::List(rows) = get(&r.payload, "providers").unwrap() else {
+        panic!("providers")
+    };
+    let claude = &rows[0];
+    let field = |name: &str| string(get(claude, name).unwrap()).unwrap().to_owned();
+    assert_eq!(
+        (field("source"), field("state")),
+        ("discovered".into(), "ready".into())
+    );
+    assert_eq!(field("entry"), path.join("claude").display().to_string());
+    assert_eq!(field("path"), real.display().to_string());
+    let last = get(claude, "last_run").unwrap();
+    assert_eq!(
+        string(get(last, "path").unwrap()).unwrap(),
+        real.display().to_string()
+    );
+    assert_eq!(get(claude, "change").unwrap(), &Json::Null);
+    // Codex is pinned by this helper's launcher.
+    assert_eq!(string(get(&rows[1], "source").unwrap()).unwrap(), "pinned");
 }
 
 #[test]

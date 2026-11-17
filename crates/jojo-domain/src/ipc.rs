@@ -8,7 +8,7 @@ pub const MAJOR: i64 = 1;
 /// 1.2 (M2) adds Feature Chat: lead agent turns, answers to their questions and the chat
 /// queries. A 1.1 client is unaffected: the additions answer only to minor >= 2.
 /// 1.3 (M3) adds project records and the plan runner.
-pub const MINOR: i64 = 3;
+pub const MINOR: i64 = 4;
 pub const MAX_FRAME: usize = 64 * 1024;
 pub const MAX_PAGE: u32 = 8;
 

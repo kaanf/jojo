@@ -131,7 +131,142 @@ impl Service {
                     .read(|v| v.ipc_plan_run(q.plan))
                     .map_err(|e| e.to_string())
             }
+            // Protocol 1.4 (D3): what the helper knows about each provider's executable.
+            RequestKind::Executables => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                self.executables(reader)
+            }
             _ => unreachable!("not a snapshot query: {kind:?}"),
+        }
+    }
+    /// D3: per provider, the executable as it is now (pinned, given by path, discovered
+    /// or not configured) and, from the database, the one of its last run and the latest
+    /// change between two runs. Asking may start a background check; it never waits.
+    fn executables(&self, reader: &mut Reader) -> Result<Json, String> {
+        let record = |r: &ExecutableRecord| {
+            object([
+                ("path", text(r.path.clone())),
+                ("version", text(r.version.clone())),
+                ("sha256", text(r.sha256.clone())),
+                ("profiled", Json::Bool(r.profiled)),
+                ("event", number(r.event)),
+            ])
+        };
+        let mut rows = Vec::new();
+        for provider in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
+            let now = self.executable_now(provider);
+            let (last, change) = reader
+                .read(|v| v.executable_record(provider))
+                .map_err(|e| e.to_string())?;
+            let found = now.found.as_ref();
+            let optional = |value: Option<String>| value.map_or(Json::Null, text);
+            rows.push(object([
+                ("provider", text(format!("{provider:?}"))),
+                ("source", text(now.source)),
+                ("state", text(now.state)),
+                ("detail", text(now.detail)),
+                ("entry", optional(found.and_then(|f| f.entry.clone()))),
+                ("path", optional(found.map(|f| f.path.clone()))),
+                ("version", optional(found.map(|f| f.version.clone()))),
+                ("sha256", optional(found.map(|f| f.sha256.clone()))),
+                (
+                    "profiled",
+                    found.map_or(Json::Null, |f| Json::Bool(f.profiled)),
+                ),
+                ("last_run", last.as_ref().map_or(Json::Null, record)),
+                (
+                    "change",
+                    change.as_ref().map_or(Json::Null, |c| {
+                        object([
+                            ("event", number(c.event)),
+                            ("previous", record(&c.previous)),
+                            ("current", record(&c.current)),
+                        ])
+                    }),
+                ),
+            ]));
+        }
+        Ok(object([("providers", Json::List(rows))]))
+    }
+    fn executable_now(&self, provider: ProviderKind) -> ExecutableNow {
+        let pinned = match provider {
+            ProviderKind::Codex => self
+                .config
+                .slice
+                .as_ref()
+                .and_then(|s| s.codex.as_ref())
+                .map(|c| (c.executable.clone(), c.version.clone(), c.sha256.clone())),
+            ProviderKind::ClaudeCode => self
+                .claude
+                .as_ref()
+                .map(|c| (c.executable.clone(), c.version.clone(), c.sha256.clone())),
+        };
+        if let Some((path, version, sha256)) = pinned {
+            let found = |state: &'static str, detail: String| ExecutableNow {
+                source: "pinned",
+                state,
+                detail,
+                found: Some(ExecutableShown {
+                    entry: None,
+                    path: path.display().to_string(),
+                    profiled: version == profiled_version(provider),
+                    version: version.clone(),
+                    sha256: sha256.clone(),
+                }),
+            };
+            return match jojo_storage::begin_check(&path) {
+                ExecutableCheck::Checking => found("checking", String::new()),
+                ExecutableCheck::Unusable(why) => found("refused", why),
+                ExecutableCheck::Known if version != profiled_version(provider) => {
+                    found("refused", "not the profiled version".into())
+                }
+                ExecutableCheck::Known => match executable_digest(&path) {
+                    Ok(digest) if digest == sha256 => found("ready", String::new()),
+                    Ok(_) => found("refused", "digest differs from the pinned digest".into()),
+                    Err(why) => found("refused", why),
+                },
+            };
+        }
+        let Some(discovered) = &self.discovered else {
+            return ExecutableNow::unconfigured();
+        };
+        let (Some(lookup), Some(unpinned)) =
+            (discovered.find(provider), discovered.provider(provider))
+        else {
+            return ExecutableNow::unconfigured();
+        };
+        let source = if unpinned.executable.is_some() {
+            "path"
+        } else {
+            "discovered"
+        };
+        match lookup {
+            Lookup::Checking => ExecutableNow {
+                source,
+                state: "checking",
+                detail: String::new(),
+                found: None,
+            },
+            Lookup::Refused(why) => ExecutableNow {
+                source,
+                state: "refused",
+                detail: why,
+                found: None,
+            },
+            Lookup::Found(f) => ExecutableNow {
+                source,
+                state: "ready",
+                detail: String::new(),
+                found: Some(ExecutableShown {
+                    entry: f.entry.map(|e| e.display().to_string()),
+                    path: f.path.display().to_string(),
+                    version: f.version,
+                    sha256: f.sha256,
+                    profiled: f.profiled,
+                }),
+            },
         }
     }
     fn recovery_rows(&self, e: &Envelope) -> Result<Json, String> {
@@ -327,4 +462,29 @@ fn review_bundle_json(b: ReviewBundle) -> Json {
             b.prior_decision.map_or(Json::Null, |s| number(s.0)),
         ),
     ])
+}
+
+/// D3: one provider's executable as the helper knows it now.
+struct ExecutableNow {
+    source: &'static str,
+    state: &'static str,
+    detail: String,
+    found: Option<ExecutableShown>,
+}
+struct ExecutableShown {
+    entry: Option<String>,
+    path: String,
+    version: String,
+    sha256: String,
+    profiled: bool,
+}
+impl ExecutableNow {
+    fn unconfigured() -> Self {
+        Self {
+            source: "none",
+            state: "unconfigured",
+            detail: String::new(),
+            found: None,
+        }
+    }
 }
