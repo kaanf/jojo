@@ -134,3 +134,7 @@ Built in `macos/JojoApp/Sources/JojoApp/Settings.swift` on the shared surfaces o
 | Tile glyphs (SF Symbols) | Claude Code `sparkle`, Codex `chevron.left.forwardslash.chevron.right`, Core `cpu`, Executable discovery `magnifyingglass`, Defaults & concurrency `slider.horizontal.3`, Git & GitHub `arrow.triangle.branch`, Workspace storage `internaldrive`, Evidence retention `archivebox`, Security & approvals `lock.shield`, Keyboard shortcuts `keyboard`, Appearance `paintbrush` |
 | Setting line | The label keeps 170 and the value takes the rest (the canvas grows them 1 to 2); a value without a source in `text3` |
 | Section tile, section item, setting line | COMPONENTS.md, section 21 |
+
+### 5.5 Repair and review (M4)
+
+Default providers: "Validator" now says that the host validation is followed by a read-only review by the other provider, which approves nothing; "Repair" says it is set per project, at most two tries, then a hold, 0 switches it off, external actions are never retried, shown on Projects. The board's "Validator: command runner only · no agent" no longer holds (D2). Both lines stay read-only.

@@ -255,3 +255,29 @@ Changed in 1.4 for every client:
 - Schema 14 records, in the transaction that issues the run, the executable of every launched attempt (`attempt_executables`) and every accepted lead turn (`turn_executables`), with the events `ExecutableRecorded` (a new provider, file, release and digest) and `ExecutableChanged` (`<provider>|<previous identity>|<identity>`).
 
 How the helper finds an executable is in `crates/jojo-storage/src/discovery.rs` and in `docs/roadmap/DESIGN_ROADMAP_DIFFERENCES.md`, E9.
+
+## Protocol 1.5: repairs and reviews (M4)
+
+Protocol minor 5 adds one read-only query and two fields of a project record. The helper's `MINOR` is 5; Hello for a frame of minor ≥ 5 lists `Repairs` after `Executables`. A frame of minor ≤ 4 naming it is answered `UnknownType`. The macOS client sends it at minor 5 and only while Agent Runs is shown, again with each new snapshot (`Request.minor`). The payload has no field; anything else is `InvalidPayload: unexpected or missing fields`.
+
+`SaveProject` carries two more fields at every minor, and a payload without them is `InvalidPayload: unexpected or missing fields`: `repair_limit` (0 to 2: automatic repairs of a failed plan step; 0 is off) and `review` (boolean: a step whose host validation passed is reviewed by the other provider). `Projects` answers both for every record. A record saved before 1.5 reads as `repair_limit` 2 and `review` true.
+
+`Repairs` returns `attempts` (at most 64, newest run first, each step's attempts newest first) and `complete` (false when more exist). Each entry:
+
+| Field | Meaning |
+|---|---|
+| `attempt`, `plan`, `step`, `key`, `provider` | The attempt, its plan run, the step, its key and the provider that did it |
+| `state` | The step's state when this is the step's newest attempt (see `PlanRun`); `null` for an older attempt |
+| `repair` | `null` for a step's first attempt; else `ordinal`, `limit` and `failure` (one line: why the attempt it repairs failed) |
+| `hold` | Why the step waits for the human because of this attempt; `null` otherwise |
+| `review` | `null` until a review of this attempt's candidate started; else `review`, `provider` (the other one), `state` (`RUNNING`, `APPROVED`, `REJECTED`, `FAILED`, `CANCELLED`, `INTERRUPTED`), `notes` (2048 characters at most), `objection` (`null` or one sentence), `detail` |
+
+Changed in 1.5 for every client:
+
+- `PlanRun` answers `repair_limit` and `review_enabled` (the project's newest settings) for the run, and `repairs`, `repair` (`null` or `ordinal` and `limit`) and `review` (as above) for each step. A step's `state` may also be `Repairing` (a repair is decided or running), `Reviewing` (validation passed; the review is queued or running) and `NeedsHuman` (held; `detail` says why). `Failed` now means the runner has not yet decided between a repair and a hold; it is decided on the next pass.
+- `Start` of a step that already ran is refused with `DuplicateStart` as before, except for the repair the core recorded for the step's newest, sealed attempt; only the runner starts that, under the identity it recorded.
+- A running review takes one unit of capacity: `CapacityFull: <n> attempts and <m> turns use all <c> units; <what> waits`, where turns now count lead turns and reviews.
+- A cancelled run asks its running review to stop. A review left by a helper that ended is closed as `INTERRUPTED` when the next helper starts; its step waits for the human.
+- Schema 15 records repairs, holds, reviews, their results and stops, and the executable of each review (`review_executables`; `Executables` counts a review as a run).
+
+The policy is `crates/jojo-domain/src/repair.rs`; the review prompt and verdict are `crates/jojo-domain/src/review.rs`; the decisions are in `docs/roadmap/DESIGN_ROADMAP_DIFFERENCES.md`, D2 and E10.

@@ -29,3 +29,7 @@ Reading (Loading form "Reading the project records…"); no projects (Empty form
 | Instructions revisions | Every save is a revision of the whole record; a plan keeps the revision it was drafted under, and the instructions reach attempts through the approved ADR |
 | Test and CI commands are run | The test command is offered to the lead; host validation runs the approved validation plan's command. The CI command is stored and shown only |
 | Capacity per project | One number for the whole core (D4); the last record saved sets it |
+
+## 5. Repair and review (M4)
+
+Not on the board. The record shows "Automatic repair" ("Off", "Once", "Up to 2 times") and "Cross-provider review" ("On: the other provider reviews each step", "Off"). The form sets them with three filter chips and a check box. Saving sends both with the whole record; a record saved before M4 reads as up to two repairs with the reviewer on. They apply from the next decision of every running plan of the project's repositories (the newest revision counts).

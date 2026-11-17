@@ -224,3 +224,7 @@ Since M3 a plan a lead drafted can be started as a whole. The run is read with `
 - **Graph and inspector.** A node of a running plan shows the step's key, title, provider and state; the legend says that a dependency is met when its step is on the plan branch. The step inspector's title is the key and title, and a "Run" section shows the state, the detail, the task kind, the attempt and the integration commit.
 - **What changed in section 7.** Step names and states are reported for a running lead plan (7.3, first and third points); the attempt of a step is shown in the run (second point). An imported plan still has no names, and a plan that never ran has no states. "Parallel capacity" says "Decided (D4): one number for the whole core, set in the project record. Shown on Projects."
 - **Not built.** The lifecycle stepper, task counts, filters, plan checks, a revision comparison, the gate nodes, the blocker list per step (the run gives one detail line), accept and reject on this screen, a sidebar counter.
+
+## 9. Repair and review (M4)
+
+A step's state may also be "Repairing" and "Reviewing" (info tone) or "Needs human" (warn tone; the core's `NeedsHuman`). The step inspector's Run section adds "Repair" ("1 of 2"; "Repairs" with the count when the newest attempt is a first one after repairs) and "Review" (the verdict line). "Repair" left the list of what this screen does not show. The run answers the project's repair limit and reviewer, which this screen does not draw; they are on Projects.

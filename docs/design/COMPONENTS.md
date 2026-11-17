@@ -42,6 +42,7 @@ Capsule, padding 7 leading and 8 trailing, gap 6, text 11 medium, height 18. Whe
 | Recovery required | `danger` | `dangerTint` | 9 pt ring, 1.5 pt, with a 3 pt dot inside |
 | Failed | `danger` | `dangerTint` | 7 pt dot, filled |
 | Completed | `ok` | `okTint` | 7 pt dot, filled |
+| Repairing | `info` | `infoTint` | 8 pt `arrow.triangle.2.circlepath` symbol (M4, D2: not on the canvas) |
 
 "Held" (Recovery Center rows) and "Requested" use the Recovery required and Waiting forms with their own label. "Temporarily unavailable" uses the Blocked form.
 

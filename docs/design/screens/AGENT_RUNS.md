@@ -174,3 +174,13 @@ One entry per record the app holds, in this order; an entry without a record is 
 | Notice well background | `fill2` (canvas white at 4%) |
 | Identifiers | The `mono` text style (11 pt) |
 | Glyphs (SF Symbols) | Load Result `arrow.down.circle`; Request Safe Stop `stop.circle`; Cancel Attempt `xmark.circle`; empty state `play.circle` |
+
+## 5. Repairs and reviews (M4)
+
+Not on the canvas; D2 asked for them (`docs/roadmap/DESIGN_ROADMAP_DIFFERENCES.md`, D2 and E10). The screen reads the `Repairs` query while it is shown, and again with each new snapshot. An attempt the answer lists is a plan step's:
+
+- List row: the pill shows the step's state for the step's newest attempt: "Repairing" (the Repairing form of COMPONENTS.md, section 2.2), "Reviewing" (the Running form) or "Needs human" (the Blocked form); a recovery hold still outranks it. The second line is "<step key> · repair 1 of 2" or "<step key> · first attempt".
+- Detail: a "Plan step" card after the summary: step, repair ("First attempt", "Repair 1 of 2"), review ("Approved by Claude Code", "Rejected by Codex", "No verdict from …", "… is reviewing", toned ok, danger, warn or info), why it was repaired, the reviewer's notes, the strongest objection, and the hold reason in a notice well. A footnote says that a failed step is repaired at most twice, then waits, and that a review approves nothing.
+- Inspector, Supervision: "Repair" and "Review" facts.
+
+There is no command here: accept and reject stay on Verification & Evidence, and nothing restarts a held step. Snapshots: `agent-runs-repairing`, `agent-runs-rejected`, `agent-runs-needs-human`.
