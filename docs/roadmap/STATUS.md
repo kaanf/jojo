@@ -1,6 +1,6 @@
 # Jojo status and next step
 
-Read this first in a new session. Updated 2026-11-17 (M4). Update it whenever a step finishes or a decision changes.
+Read this first in a new session. Updated 2026-11-17 (design system v2). Update it whenever a step finishes or a decision changes.
 
 ## Where we are
 
@@ -23,14 +23,19 @@ Read this first in a new session. Updated 2026-11-17 (M4). Update it whenever a 
 | **M3** (project record and plan runner) | **Done** (2026-11-17): project records (schema 12), the plan runner with shared parallel capacity (D4), integration onto a local plan branch (schema 13), protocol 1.3; live: Claude Code and Codex in parallel, then the dependent step from the plan branch. Details: DESIGN_ROADMAP_DIFFERENCES.md, E8 |
 | **Design wave 3** (Projects, Execution Plan, Dashboard) | **Partly done** (2026-11-17): Projects as a list and a form; Execution Plan draws the run. Dashboard not built. Details: `docs/design/screens/PROJECTS.md`, `docs/design/screens/EXECUTION_PLAN.md`, section 8 |
 | **M4** (bounded repair and cross-provider review) | **Done** (2026-11-17): a failed plan step is repaired at most twice, each time as a new attempt whose prompt carries the failure, then held for the human; a step whose host validation passed is reviewed read-only by the other provider before the human decides; repair limit and reviewer per project (schema 15, protocol 1.5 `Repairs`); Agent Runs shows "Repairing", the repair counter, the verdict and the hold. Live: Codex did the step, Claude Code reviewed and approved it, the human accepted. Details: DESIGN_ROADMAP_DIFFERENCES.md, D2 and E10 |
+| **Design system v2** (Liquid Glass) | **Written down** (2026-11-17): the human decided to build the canvas's current Product page (the `…Mac.dc.html` boards, macOS 26 Liquid Glass) as drawn, adding to the core what the screens need instead of showing "Not reported"; Onboarding and New Project are deferred. `docs/design/DESIGN_SYSTEM.md`, `COMPONENTS.md` (sections 1 to 12) and `STATES.md` were rewritten from the "Components & states" boards at version `1794922102-b518`. The app's code is not moved yet (the Liquid Glass migration) |
 | M5, M6 | Not started |
 
-## Next step: to be chosen by the human
+## Next step: the Liquid Glass migration
 
-M4 is done (2026-11-17). The candidates:
+Decided by the human on 2026-11-17: build the canvas's current Product page as drawn, and add to the core the data its screens show. The order (SOURCE_FIRST_REUSE_MAP.md, section 3, "Order from 2026-11-17"):
 
-1. **M5.** Review-ready hand-off: the plan branch with its commits, diff, a generated PR title and body; push and a draft PR each a separate, confirmed approval. The demo is complete at M5.
-2. **Dashboard** (the rest of design wave 3).
+1. **Liquid Glass migration** (next, not started): the tokens and materials of `docs/design/DESIGN_SYSTEM.md` in `Theme.swift`, the glass shell (sidebar, header row, inspector; COMPONENTS.md, section 4), the status components (sections 2 and 3). Interface only; the token tests in `DesignShellTests.swift` move to the new values.
+2. **User-facing data in the core:** names of features, tasks and documents; the live state of an attempt ("Running"); the list of pending approvals; time and actor of an event. This removes the identity fields from the screens.
+3. **Dashboard**, on that data (`DashboardMac.dc.html`).
+4. **The screens in flow order:** New Feature, Feature Chat, Specifications, Approval Inbox, Execution Plan, Agent Runs, Source Control, Verification & Evidence; each screen document is rewritten from its `…Mac.dc.html` board.
+5. **M5** (push and draft PR) with the rebuilt Source Control and Approval Inbox. The demo is complete here.
+6. Projects, Recovery Center, Activity & Audit, Settings & Providers; then Onboarding and New Project (deferred).
 
 Smaller follow-ups of M4, none started: a way out of a hold other than accept or reject (one more repair on the human's word, a restart of a refused or conflicting step); a review of a step that was started by hand; repair or review of a lead turn.
 
