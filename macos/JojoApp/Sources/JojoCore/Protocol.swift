@@ -72,9 +72,11 @@ public enum Request: String, CaseIterable, Sendable {
     /// feature (Activity & Audit reads events at `Request.attributedEvents` for the same
     /// reason). The features query exists only from 1.7, and at 1.7 an attempt carries
     /// its ordinal, repository, validation and newest activity, so attempts are read there.
+    /// At 1.8 a feature chat dates its turns and lists the assumptions, so it is read there.
     public var minor: Int64 {
         let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText]
         let runner: [Request] = [.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun]
+        if self == .FeatureChat { return 8 }
         if [.Features, .Attempts].contains(self) { return 7 }
         if [.Documents, .ChatIndex].contains(self) { return 6 }
         if self == .Repairs { return 5 }

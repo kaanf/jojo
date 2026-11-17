@@ -95,7 +95,7 @@ impl Service {
                 }
                 let q = protocol::FeatureChatQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_feature_chat(q.feature, q.after))
+                    .read(|v| v.ipc_feature_chat(q.feature, q.after, e.minor >= 8))
                     .map_err(|e| e.to_string())
             }
             RequestKind::ChatText => {

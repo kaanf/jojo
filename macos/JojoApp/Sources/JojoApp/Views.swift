@@ -9,13 +9,14 @@ struct MainView: View {
     @State private var screen = Screen.dashboard
     @State private var range = DashboardRange.today
     @State private var newFeatureProject: String?
+    @State private var exportingTranscript = false
 
     var body: some View {
         Themed {
             AppShell(model: model, screen: $screen, showInspector: { delegate.showAuxiliary() },
-                     controls: screen == .dashboard ? AnyView(SegmentedCapsule(selection: $range, label: "Time range")) : nil,
+                     controls: controls,
                      primary: screen == .dashboard ? AnyView(NewFeatureButton(newFeature: newFeature)) : nil,
-                     heading: newFeatureHeading) {
+                     heading: featureHeading) {
                 VStack(alignment: .leading, spacing: 8) {
                     QuitBanner(model: model).padding(EdgeInsets(top: 20, leading: 20, bottom: 0, trailing: 20))
                     ZStack(alignment: .topLeading) {
@@ -29,7 +30,8 @@ struct MainView: View {
                         shown(.agentRuns) { AgentRunsScreen(model: model, visible: screen == .agentRuns, open: { screen = $0 }) }
                         shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
                         shown(.featureChat) {
-                            FeatureChatScreen(model: model, visible: screen == .featureChat, project: $newFeatureProject, open: { screen = $0 })
+                            FeatureChatScreen(model: model, visible: screen == .featureChat, project: $newFeatureProject,
+                                              exporting: $exportingTranscript, open: { screen = $0 })
                         }
                         shown(.executionPlan) { ExecutionPlanScreen(model: model, visible: screen == .executionPlan, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
@@ -56,12 +58,29 @@ struct MainView: View {
     static let built: Set<Screen> = [.activity, .agentRuns, .approvalInbox, .dashboard, .recoveryCenter, .executionPlan,
                                      .featureChat, .projects, .settings, .sourceControl, .specifications, .verification]
 
-    /// Feature Chat holding no feature is New Feature: "Workspace · Crew · New Feature".
-    private var newFeatureHeading: (title: String, place: String)? {
-        guard screen == .featureChat, model.workspace.chatFeature == nil else { return nil }
-        let projects = model.workspace.projects?.projects ?? []
-        let project = projects.first { $0.id == newFeatureProject } ?? projects.first
-        return ("New Feature", ["Workspace", project?.name].compactMap { $0 }.joined(separator: " · "))
+    /// Feature Chat holding no feature is New Feature ("Workspace · Crew · New Feature");
+    /// holding one, its code and name ("FT-3 Leaderboard API", "Crew · Discovery rev 2").
+    private var featureHeading: (title: String, subtitle: String)? {
+        guard screen == .featureChat else { return nil }
+        let workspace = model.workspace
+        guard let feature = workspace.chatFeature else {
+            let projects = workspace.projects?.projects ?? []
+            let project = projects.first { $0.id == newFeatureProject } ?? projects.first
+            return ("New Feature", (["Workspace", project?.name].compactMap { $0 } + ["New Feature"]).joined(separator: " · "))
+        }
+        return FeatureChatState.heading(feature: feature, summary: workspace.features?.features.first { $0.id == feature },
+                                        name: workspace.chatIndex?.features.first { $0.id == feature }?.name,
+                                        turns: workspace.chat?.feature == feature ? workspace.chat?.turns ?? [] : [])
+    }
+
+    /// The shown screen's header controls: the Dashboard's time range, a chat's spike and
+    /// export buttons.
+    private var controls: AnyView? {
+        if screen == .dashboard { return AnyView(SegmentedCapsule(selection: $range, label: "Time range")) }
+        if screen == .featureChat, model.workspace.chatFeature != nil {
+            return AnyView(ChatHeaderActions(export: { exportingTranscript = true }))
+        }
+        return nil
     }
 
     /// New Feature is Feature Chat holding no feature.

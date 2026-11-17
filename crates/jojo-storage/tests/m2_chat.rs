@@ -2011,3 +2011,50 @@ fn s3_an_open_blocking_question_blocks_the_feature_and_names_it() {
     assert_eq!(str_of(&blockers[0], &["kind"]), "Question");
     assert!(!str_of(&blockers[0], &["reason"]).is_empty());
 }
+
+// ---- Protocol 1.8: turn times and assumptions in the feature chat ----
+
+#[test]
+fn s4_a_chat_at_1_8_dates_its_turns_and_lists_the_drafts_assumptions() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h_save_project(&mut h, &repository);
+    h.turn(
+        4001,
+        &repository,
+        "Codex",
+        "slugify should be usable from the shell.\nfixture: lead",
+    );
+    h.approved_requirements_draft(&repository);
+    let feature = field(&h.chat(0), &["feature"]).clone();
+    let page = |h: &mut H, minor: u64| {
+        let r = h.at(
+            minor,
+            "FeatureChat",
+            object([("feature", feature.clone()), ("after", number(0))]),
+        );
+        assert_eq!(r.kind, "Response", "{:?}", r.payload);
+        r.payload
+    };
+    let dated = page(&mut h, 8);
+    let turns = items(field(&dated, &["turns"])).to_vec();
+    assert_eq!(turns.len(), 2);
+    let mut last_end = 0;
+    for t in &turns {
+        let started = uint(field(t, &["started_at_unix_ms"])).unwrap();
+        let ended = uint(field(t, &["ended_at_unix_ms"])).unwrap();
+        assert!(started > 0 && ended >= started && started >= last_end);
+        last_end = ended;
+    }
+    let assumptions = items(field(&dated, &["assumptions"])).to_vec();
+    assert!(!assumptions.is_empty(), "{dated:?}");
+    for a in &assumptions {
+        assert!(!str_of(a, &["id"]).is_empty() && !str_of(a, &["statement"]).is_empty());
+        assert_eq!(str_of(a, &["state"]), "Current");
+        assert_eq!(field(a, &["revision"]), &number(1));
+    }
+    // A 1.7 frame is answered as before.
+    let old = page(&mut h, 7);
+    assert!(get(&old, "assumptions").is_err());
+    assert!(get(&items(field(&old, &["turns"]))[0], "started_at_unix_ms").is_err());
+}

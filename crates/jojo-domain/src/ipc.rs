@@ -14,7 +14,9 @@ pub const MAJOR: i64 = 1;
 /// actor and a feature of the chat index its name.
 /// 1.7 adds the features query; at 1.7 an event carries a sentence and an attempt its
 /// ordinal, repository, project, host validation and newest activity.
-pub const MINOR: i64 = 7;
+/// 1.8 adds to the feature chat each turn's start and end and the requirements
+/// document's assumptions.
+pub const MINOR: i64 = 8;
 pub const MAX_FRAME: usize = 64 * 1024;
 pub const MAX_PAGE: u32 = 8;
 

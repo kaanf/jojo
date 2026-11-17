@@ -121,7 +121,7 @@ final class S4NewFeatureTests: XCTestCase {
             for (file, state, size) in cases {
                 let shell = Themed {
                     AppShell(model: model, screen: .constant(.featureChat), showInspector: {},
-                             heading: ("New Feature", state.place)) {
+                             heading: ("New Feature", state.place + " · New Feature")) {
                         NewFeatureView(state: state)
                     }
                 }

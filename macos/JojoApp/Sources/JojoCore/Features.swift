@@ -110,9 +110,9 @@ public struct FeatureList: Equatable, Sendable {
 
 extension WorkspaceModel {
     /// Protocol 1.7: the newest features with their stages and blockers. Read only while
-    /// the Dashboard is shown, and again with each new snapshot.
+    /// the Dashboard or a feature's chat is shown, and again with each new snapshot.
     public func loadFeatures() {
-        guard featuresLoad != .loading, snapshotSeq != nil, dashboardShown else { return }
+        guard featuresLoad != .loading, snapshotSeq != nil, dashboardShown || chatShown else { return }
         featuresLoad = .loading
         onChange?()
         client.query(.Features, ["before": .null]) { [weak self] reply in

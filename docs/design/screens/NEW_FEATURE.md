@@ -1,6 +1,6 @@
 # New Feature
 
-Source: the canvas "Jojo macOS", page "Product", board "New Feature" (`NewFeatureMac.dc.html`, 1440 × 1160, light by default). Read on 2026-11-17 from version `1794931431-3abf`; the board file is byte-identical to the one in version `1794922102-b518` (sha256 `e10e58fb…8a34`). Tokens, components and states are named as in [DESIGN_SYSTEM.md](../DESIGN_SYSTEM.md), [COMPONENTS.md](../COMPONENTS.md) and [STATES.md](../STATES.md). It replaces the New Feature part of [FEATURE_CHAT.md](FEATURE_CHAT.md), which was written from the first board.
+Source: the canvas "Jojo macOS", page "Product", board "New Feature" (`NewFeatureMac.dc.html`, 1440 × 1160, light by default). Read on 2026-11-17 from version `1794931431-3abf`; the board file is byte-identical to the one in version `1794922102-b518` (sha256 `e10e58fb…8a34`). Tokens, components and states are named as in [DESIGN_SYSTEM.md](../DESIGN_SYSTEM.md), [COMPONENTS.md](../COMPONENTS.md) and [STATES.md](../STATES.md). It replaces the New Feature part of the wave 2 Feature Chat document (in the git history at commit `c3a9d64`); [FEATURE_CHAT.md](FEATURE_CHAT.md) is now the chat of a held feature.
 
 Built as the first screen of step 4 of the Liquid Glass order (STATUS.md), without a core or protocol change (DESIGN_ROADMAP_DIFFERENCES.md, E13). New Feature is Feature Chat holding no feature; the Dashboard's New Feature (⌘N) and a chat's "New Feature" open it.
 

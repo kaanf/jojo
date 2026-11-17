@@ -2,7 +2,7 @@
 
 The reusable parts of the app and the status model they draw. Token names refer to [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md). Source: the canvas page "Components & states", board "Components and status model" (`ComponentsMac.dc.html`), and the shell of the product boards (`DashboardMac.dc.html`, `AgentRunsMac.dc.html`, `RecoveryLaunchMac.dc.html`); see [README.md](README.md).
 
-Sections 1 to 12 are the design. Sections 13 to 26 are implementation notes written for the first design system; each is rewritten when its surface moves (DESIGN_SYSTEM.md, section 12).
+Sections 1 to 12 are the design. Sections 13 to 27 are implementation notes written for the first design system; each is rewritten when its surface moves (DESIGN_SYSTEM.md, section 12).
 
 ## 1. Status model
 
@@ -436,3 +436,18 @@ Built in `macos/JojoApp/Sources/JojoApp/NewFeature.swift` for `docs/design/scree
 | `DropZone` | Radius 14, padding 14 16, a 1.5 dashed `dotOff` outline, a 36 × 36 tile on `accentTint` with an `accent` glyph, a title and `sub` lines, one trailing control |
 
 The text fields are the existing `TextArea`; "What happens next" is a glass panel (radius 16). The header's title and place can be a screen's own (`AppShell`'s `heading`).
+
+## 27. Implementation notes: chat surfaces (Liquid Glass, step 4, Feature Chat)
+
+Built in `macos/JojoApp/Sources/JojoApp/FeatureChat.swift` for `docs/design/screens/FEATURE_CHAT.md`; they replace section 23's `ChatMessage` on that screen.
+
+| Component | Notes |
+|---|---|
+| `LifecycleStepper` | Section 2.1 from the core's stages: Done `green` with a `green` bar after it; Running and Current the `accent` dot with its `accentTint` halo and a semibold label; NeedsYou `orange`; Blocked and Failed `red`; Off `dotOff`; Evidence is always Off. The stage's word is its help text |
+| `HumanBubble`, `LeadBubble` | The human's message on the right, 14 on `accent` with white text, radius 16, at most 78% wide; the lead's with a 26 round indigo "J" avatar and a `cardHover` bubble (radius 16, 0.5 `sep` ring; 2 `accent` when its question is focused) |
+| `Inline` | 14 text whose `code` spans (Markdown backticks) are drawn in `mono` |
+| `Receipt` | A capsule on `grayBg` under a reply, indented 34: a dot in its hue, a 12 `text2` sentence and a 12 semibold `accent` link |
+| `KeyValueCard` | The inspector's key-value card (section 4.4): rows padding 9 12, a `mono` key, the value, a green "Done" pill or a `sub` note |
+| `LineField` | A frameless one-line text field; off screen its text or prompt as plain text, because a text field does not draw there |
+| `ChatHeaderActions`, `CapsuleTextButtonStyle` | The header's capsule group of 12 text buttons ("Create Spike", "Export Transcript") |
+

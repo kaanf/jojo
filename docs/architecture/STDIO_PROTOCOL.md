@@ -362,3 +362,13 @@ How each stage is derived:
 - `Events` gives each event `summary`: one sentence with the names a person knows ("api · attempt 1 started on Claude Code", "Host validation of api · attempt 1 passed", "Slugify from the shell rev 1 approved" for a requirements document by its title, "Plan run of Slugify from the shell started"). An event type without a sentence of its own is named by its type ("Worktree ready"), with the attempt its payload names.
 
 A frame of minor 1 to 6 is answered exactly as before. `crates/jojo-storage/tests/r01_frames.rs` sends its newer-than-helper Hello at minor 8 and pins five more answers at its end (222 in all).
+
+## Protocol 1.8: dated chat turns and assumptions
+
+Protocol minor 8 adds no request. For a frame of minor ≥ 8 the `FeatureChat` answer carries more; a frame of minor 1 to 7 is answered exactly as before. Nothing is stored for it (schema 15 unchanged); the derivation is `crates/jojo-storage/src/features.rs` (`turn_times`, `feature_assumptions`). The helper's `MINOR` is 8; Hello lists the same names as at 1.7. The macOS client sends `FeatureChat` at minor 8.
+
+- Each turn gives `started_at_unix_ms` (when the core accepted it) and `ended_at_unix_ms` (when its result was recorded; `null` while it runs).
+- The answer gives `assumptions`: at most 32, from the feature's newest requirements document over all its revisions in order. Each: `id` and `statement` (its newest wording, at most 160 characters), `state` `Current` (the newest revision has it; `revision` is the one it first appeared in) or `Dropped` (an earlier revision had it and the newest does not; `revision` is the one that dropped it). A revision whose content does not read as a requirements document is skipped. Whether an assumption was verified is not recorded.
+
+`crates/jojo-storage/tests/r01_frames.rs` sends its newer-than-helper Hello at minor 9 and pins one more answer at its end (223 in all).
+

@@ -1,9 +1,9 @@
 {
-  "artifact": "gate-s4a",
-  "scope": "Tree after New Feature, the first screen of step 4 of the Liquid Glass order: NewFeatureMac.dc.html on the Liquid Glass tokens; project, one repository, constraints and text references in the first ChatTurn message; no core or protocol change.",
+  "artifact": "gate-s4b",
+  "scope": "Tree after Feature Chat, the second screen of step 4 of the Liquid Glass order: FeatureChatMac.dc.html; protocol 1.8 dates chat turns and lists the requirements document's assumptions; no schema change.",
   "boundary_tests_min": 107,
   "rust": {
-    "passed_min": 482,
+    "passed_min": 484,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -88,7 +88,9 @@
       "s2_attempts_report_live_state_names_and_times_and_events_their_actor",
       "features::tests::s3_words_for_names_counts_and_records",
       "s3_a_feature_moves_through_its_stages_and_events_and_attempts_say_what_happened",
-      "s3_an_open_blocking_question_blocks_the_feature_and_names_it"
+      "s3_an_open_blocking_question_blocks_the_feature_and_names_it",
+      "features::tests::s4_an_assumption_a_newer_revision_drops_is_dropped_from_that_revision",
+      "s4_a_chat_at_1_8_dates_its_turns_and_lists_the_drafts_assumptions"
     ],
     "ignored": [
       "child_fixture",
@@ -106,7 +108,7 @@
     ]
   },
   "swift": {
-    "tests_min": 118
+    "tests_min": 121
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,

@@ -350,6 +350,9 @@ public final class WorkspaceModel {
     /// Protocol 1.7: whether the Dashboard is the shown destination; only then does it read
     /// the features, attempts, executables and events it shows.
     public var dashboardShown = false
+    /// Whether Feature Chat holds a feature and is shown; it reads the features too, for
+    /// the feature's stages and counts.
+    public var chatShown = false
     /// Protocol 1.7: each feature's stages and blockers, read only while the Dashboard is
     /// shown.
     public internal(set) var features: FeatureList?

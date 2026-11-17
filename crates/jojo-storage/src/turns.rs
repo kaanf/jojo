@@ -1272,13 +1272,28 @@ impl ReadView<'_> {
     /// questions it asked and their newest answers. Long texts are cut and say so; the
     /// whole text is read with [`Self::ipc_chat_text`]. Also the feature's requirements
     /// document as the core stores it, and the turn that is running, if any.
-    pub fn ipc_feature_chat(&self, feature: FeatureId, after: u64) -> Result<Json, StorageError> {
+    /// `dated` (protocol 1.8) adds each turn's start and end and the requirements
+    /// document's assumptions.
+    pub fn ipc_feature_chat(
+        &self,
+        feature: FeatureId,
+        after: u64,
+        dated: bool,
+    ) -> Result<Json, StorageError> {
         let turns = feature_turns(self.conn, feature)?;
         let mut rows = Vec::new();
         let mut used = 0usize;
         let mut next = Json::Null;
         for record in turns.iter().filter(|t| t.ordinal > after) {
-            let row = chat_row(self.conn, record)?;
+            let mut row = chat_row(self.conn, record)?;
+            if dated {
+                let Json::Object(fields) = &mut row else {
+                    unreachable!("a turn row is an object")
+                };
+                for (k, v) in crate::features::turn_times(self.conn, record.turn)? {
+                    fields.push((k.into(), v));
+                }
+            }
             let size = jojo_domain::ipc::encode(&row).len();
             if !rows.is_empty() && used + size > CHAT_PAGE_BYTES {
                 next = number(record.ordinal - 1);
@@ -1318,13 +1333,22 @@ impl ReadView<'_> {
                 ])
             }
         };
-        Ok(object([
+        let Json::Object(mut page) = object([
             ("feature", identity(feature.0)),
             ("turns", Json::List(rows)),
             ("next", next),
             ("running", running),
             ("prd", prd),
-        ]))
+        ]) else {
+            unreachable!("a chat page is an object")
+        };
+        if dated {
+            page.push((
+                "assumptions".into(),
+                crate::features::feature_assumptions(self.conn, feature)?,
+            ));
+        }
+        Ok(Json::Object(page))
     }
 
     /// M2 (protocol 1.2): one chunk of a long chat text from a character offset, or

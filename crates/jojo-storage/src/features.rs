@@ -558,6 +558,112 @@ pub(crate) fn event_summary(
     Ok(cut(&sentence))
 }
 
+/// Protocol 1.8: when a lead turn was accepted and when its result was recorded.
+pub(crate) fn turn_times(
+    c: &Connection,
+    turn: jojo_domain::identity::OpaqueId,
+) -> Result<[(&'static str, Json); 2], StorageError> {
+    let id = crate::model::id_to_text(turn);
+    let (started, ended) = c.query_one(
+        "SELECT (SELECT event FROM lead_turns WHERE turn=?1),
+                (SELECT event FROM lead_turn_results WHERE turn=?1)",
+        &[Value::Text(&id)],
+        |r| Ok((r.optional_int(0)?, r.optional_int(1)?)),
+    )?;
+    Ok([
+        (
+            "started_at_unix_ms",
+            started.map_or(Ok(Json::Null), |s| time_of(c, s))?,
+        ),
+        (
+            "ended_at_unix_ms",
+            ended.map_or(Ok(Json::Null), |s| time_of(c, s))?,
+        ),
+    ])
+}
+
+/// Assumptions listed per feature.
+const FEATURE_ASSUMPTIONS: usize = 32;
+
+/// Per assumption id over the revisions in order: its newest statement, the revision it
+/// first appeared in, and the first revision after its last appearance (`None` while the
+/// newest revision has it).
+fn merge_assumptions(
+    revisions: &[(i64, Vec<(String, String)>)],
+) -> Vec<(String, String, i64, Option<i64>)> {
+    let mut seen: Vec<(String, String, i64, Option<i64>)> = Vec::new();
+    for (revision, assumptions) in revisions {
+        for entry in seen.iter_mut() {
+            if entry.3.is_none() && !assumptions.iter().any(|(id, _)| *id == entry.0) {
+                entry.3 = Some(*revision);
+            }
+        }
+        for (id, statement) in assumptions {
+            match seen.iter_mut().find(|e| e.0 == *id) {
+                Some(entry) => {
+                    entry.1 = statement.clone();
+                    entry.3 = None;
+                }
+                None => seen.push((id.clone(), statement.clone(), *revision, None)),
+            }
+        }
+    }
+    seen
+}
+
+/// Protocol 1.8: the assumptions of a feature's requirements document. Those of the
+/// newest revision are `Current`, with the revision they first appeared in; one an
+/// earlier revision had and the newest does not is `Dropped`, with the revision that
+/// dropped it.
+pub(crate) fn feature_assumptions(
+    c: &Connection,
+    feature: jojo_domain::identity::FeatureId,
+) -> Result<Json, StorageError> {
+    let versions = c.query(
+        "SELECT revision, content FROM artifact_versions WHERE feature_id=?1
+           AND artifact_id=(SELECT artifact_id FROM artifact_versions WHERE feature_id=?1
+                            ORDER BY created_event_seq DESC LIMIT 1)
+         ORDER BY revision",
+        &[Value::Text(&crate::model::id_to_text(feature.0))],
+        |r| Ok((r.int(0)?, r.text(1)?)),
+    )?;
+    let revisions: Vec<(i64, Vec<(String, String)>)> = versions
+        .iter()
+        .filter_map(|(revision, content)| {
+            let document = jojo_domain::prd::PrdDocument::import(content.as_bytes()).ok()?;
+            Some((
+                *revision,
+                document
+                    .assumptions
+                    .into_iter()
+                    .map(|a| (a.id, cut(&a.statement)))
+                    .collect(),
+            ))
+        })
+        .collect();
+    let seen = merge_assumptions(&revisions);
+    Ok(Json::List(
+        seen.into_iter()
+            .take(FEATURE_ASSUMPTIONS)
+            .map(|(id, statement, since, dropped)| {
+                object([
+                    ("id", text(id)),
+                    ("statement", text(statement)),
+                    (
+                        "state",
+                        text(if dropped.is_some() {
+                            "Dropped"
+                        } else {
+                            "Current"
+                        }),
+                    ),
+                    ("revision", Json::Int(dropped.unwrap_or(since))),
+                ])
+            })
+            .collect(),
+    ))
+}
+
 /// Blocking questions about a feature whose newest answer is missing or not a human's.
 fn open_questions(c: &Connection, feature: &str) -> Result<Vec<(String, String)>, StorageError> {
     Ok(c.query(
@@ -893,7 +999,7 @@ impl ReadView<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{activity_text, counted, humanized, repository_name};
+    use super::{activity_text, counted, humanized, merge_assumptions, repository_name};
 
     #[test]
     fn s3_words_for_names_counts_and_records() {
@@ -905,5 +1011,29 @@ mod tests {
         assert_eq!(counted(3, "Q"), "3 Q");
         assert_eq!(activity_text("ToolStarted"), "Using a tool");
         assert_eq!(activity_text("Unseen"), "Unseen");
+    }
+
+    #[test]
+    fn s4_an_assumption_a_newer_revision_drops_is_dropped_from_that_revision() {
+        let a = |id: &str, s: &str| (id.to_owned(), s.to_owned());
+        let merged = merge_assumptions(&[
+            (1, vec![a("A1", "Links work"), a("A2", "Capacity 8")]),
+            (
+                2,
+                vec![a("A1", "Links work on both stores"), a("A3", "Guests join")],
+            ),
+            (
+                3,
+                vec![a("A1", "Links work on both stores"), a("A3", "Guests join")],
+            ),
+        ]);
+        assert_eq!(
+            merged,
+            [
+                ("A1".into(), "Links work on both stores".into(), 1, None),
+                ("A2".into(), "Capacity 8".into(), 1, Some(2)),
+                ("A3".into(), "Guests join".into(), 2, None),
+            ]
+        );
     }
 }

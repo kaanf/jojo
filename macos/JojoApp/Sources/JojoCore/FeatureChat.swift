@@ -128,6 +128,10 @@ public struct LeadTurn: Equatable, Sendable, Identifiable {
     public let prd: (document: String, revision: Int64)?
     public let plan: LeadPlanDraft?
     public let questions: [LeadQuestion]
+    /// Protocol 1.8: when the core accepted the turn and recorded its result; nil from an
+    /// older helper, and the end while it runs.
+    public let started: Date?
+    public let ended: Date?
 
     public var running: Bool { state == "Running" || state == "Stopping" }
 
@@ -152,6 +156,7 @@ public struct LeadTurn: Equatable, Sendable, Identifiable {
         (self.id, self.ordinal, self.kind, self.provider, self.base) = (id, ordinal, kind, provider, base)
         (self.message, self.messageComplete, self.state, self.detail, self.summary) = (message, complete, state, detail, summary)
         (self.prd, self.plan, self.questions) = (prd, plan, questions)
+        (started, ended) = (helperDate(r["started_at_unix_ms"]?.integer), helperDate(r["ended_at_unix_ms"]?.integer))
     }
 
     public static func == (a: LeadTurn, b: LeadTurn) -> Bool {
@@ -159,6 +164,7 @@ public struct LeadTurn: Equatable, Sendable, Identifiable {
             && a.message == b.message && a.messageComplete == b.messageComplete && a.state == b.state
             && a.detail == b.detail && a.summary == b.summary && a.prd?.document == b.prd?.document
             && a.prd?.revision == b.prd?.revision && a.plan == b.plan && a.questions == b.questions
+            && a.started == b.started && a.ended == b.ended
     }
 }
 
@@ -184,6 +190,26 @@ public struct ChatDocument: Equatable, Sendable {
     }
 }
 
+/// Protocol 1.8: an assumption of the feature's requirements document.
+public struct ChatAssumption: Equatable, Sendable, Identifiable {
+    public let id: String
+    public let statement: String
+    /// Current (in the newest revision) or Dropped (an earlier revision had it).
+    public let state: String
+    /// Where it first appeared, or the revision that dropped it.
+    public let revision: Int64
+
+    init?(_ r: JSON) {
+        guard let id = r["id"]?.string, let statement = r["statement"]?.string, let state = r["state"]?.string,
+              let revision = r["revision"]?.integer else { return nil }
+        (self.id, self.statement, self.state, self.revision) = (id, statement, state, revision)
+    }
+
+    public init(id: String, statement: String, state: String = "Current", revision: Int64 = 1) {
+        (self.id, self.statement, self.state, self.revision) = (id, statement, state, revision)
+    }
+}
+
 /// One feature's chat: every turn read so far, the turn that runs and the draft document.
 public struct FeatureChatPage: Equatable, Sendable {
     public let feature: String
@@ -193,6 +219,8 @@ public struct FeatureChatPage: Equatable, Sendable {
     public let prd: ChatDocument?
     /// The ordinal after which the next page starts; nil when this was the last page.
     public let next: Int64?
+    /// Protocol 1.8: the requirements document's assumptions; nil from an older helper.
+    public let assumptions: [ChatAssumption]?
 
     public init?(_ p: [String: JSON]) {
         guard let feature = p["feature"]?.string, Identity.valid(feature), let items = p["turns"]?.items,
@@ -215,11 +243,19 @@ public struct FeatureChatPage: Equatable, Sendable {
             next = ordinal
         }
         (self.feature, self.turns, self.running, self.prd, self.next) = (feature, turns, running, prd, next)
+        if let items = p["assumptions"]?.items {
+            let assumptions = items.compactMap(ChatAssumption.init)
+            guard assumptions.count == items.count else { return nil }
+            self.assumptions = assumptions
+        } else {
+            assumptions = nil
+        }
     }
 
     public static func == (a: FeatureChatPage, b: FeatureChatPage) -> Bool {
         a.feature == b.feature && a.turns == b.turns && a.running?.turn == b.running?.turn
             && a.running?.stopRequested == b.running?.stopRequested && a.prd == b.prd && a.next == b.next
+            && a.assumptions == b.assumptions
     }
 
     /// Every question of the chat, oldest first.
