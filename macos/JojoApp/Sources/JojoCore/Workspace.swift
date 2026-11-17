@@ -328,6 +328,12 @@ public final class WorkspaceModel {
     /// M3: the project records and the capacity, read only when Projects asks.
     public internal(set) var projects: ProjectList?
     public internal(set) var projectsLoad = PlanLoad.idle
+    /// D3: what the core knows about each provider's executable, read only when Settings &
+    /// Providers asks.
+    public internal(set) var executables: ExecutableList?
+    public internal(set) var executablesLoad = PlanLoad.idle
+    /// Whether Settings & Providers is the shown destination; only then is it read.
+    public var executablesShown = false
     /// M2: Feature Chat. Read only when that screen asks; `refresh` does not fill them.
     public internal(set) var chatIndex: ChatIndex?
     public internal(set) var chatIndexLoad = PlanLoad.idle

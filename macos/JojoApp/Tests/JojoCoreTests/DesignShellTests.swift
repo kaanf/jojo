@@ -1306,8 +1306,10 @@ final class DesignShellTests: XCTestCase {
     func test_dw1_settings_show_the_launch_options_of_a_provider_and_nothing_that_could_be_a_credential() {
         let state = settings()
         let claude = state.page(.claude)
-        XCTAssertEqual(claude.groups.map(\.title), ["Passed to the core at launch", "Authentication", "Reported by the core"])
+        XCTAssertEqual(claude.groups.map(\.title), ["Found by the core", "Passed to the core at launch", "Authentication", "Reported by the core"])
         let shown = values(claude)
+        // D3: until the Executables answer arrives, the found executable is being read.
+        XCTAssertEqual(shown["Executable"], "Being read…")
         XCTAssertEqual(shown["Path"], "/Users/dev/.local/share/claude/versions/2.1.311")
         XCTAssertEqual(shown["Version"], "2.1.311 (Claude Code)")
         XCTAssertEqual(shown["SHA-256 digest"], Self.claudeDigest)
@@ -1373,8 +1375,9 @@ final class DesignShellTests: XCTestCase {
         // D2: the board's validator line no longer holds.
         XCTAssertFalse(values(state.page(.defaults))["Validator"]!.contains("no agent"))
         XCTAssertEqual(values(state.page(.defaults))["Repair"], "Decided, not built: automatic, at most two tries, then a human hold.")
-        // D3: a changed binary is refused today, not warned about.
-        XCTAssertTrue(values(state.page(.discovery))["Changed binary"]!.hasPrefix("Refused, not warned"))
+        // D3: a changed binary is warned about, not refused (a pinned one is refused).
+        XCTAssertTrue(values(state.page(.discovery))["Changed binary"]!.hasPrefix("Warned, not refused (D3)"))
+        XCTAssertFalse(state.page(.discovery).groups.flatMap(\.lines).contains { $0.value.contains("Not built") })
         // Approvals in force: four kinds, no approve-all.
         XCTAssertEqual(values(state.page(.git))["Combined approval"], "None. There is no approve-all.")
         XCTAssertTrue(values(state.page(.security))["Approval kinds"]!.contains("There is no approve-all."))
@@ -1387,6 +1390,73 @@ final class DesignShellTests: XCTestCase {
         // The app sends no request that writes a setting.
         XCTAssertFalse(Request.allCases.contains { $0.rawValue.localizedCaseInsensitiveContains("setting") || $0.rawValue.localizedCaseInsensitiveContains("config") })
         XCTAssertTrue(MainView.built.contains(.settings))
+    }
+
+    /// D3: an `Executables` answer as the helper writes it: Claude Code discovered and changed
+    /// since an earlier run, Codex refused.
+    private static let executablesAnswer: [String: JSON] = {
+        func run(_ path: String, _ version: String, _ digest: String, _ event: Int64) -> JSON {
+            .object(["path": .text(path), "version": .text(version), "sha256": .text(digest), "profiled": .bool(version.hasPrefix("2.1.311")),
+                     "event": .int(event)])
+        }
+        let old = run("/opt/homebrew/Caskroom/claude-code/2.1.311/claude", "2.1.311 (Claude Code)", String(repeating: "9f3c", count: 16), 40)
+        let new = run("/opt/homebrew/Caskroom/claude-code/2.1.320/claude", "2.1.320 (Claude Code)", String(repeating: "a1b2", count: 16), 57)
+        return ["providers": .list([
+            .object(["provider": .text("ClaudeCode"), "source": .text("discovered"), "state": .text("ready"), "detail": .text(""),
+                     "entry": .text("/opt/homebrew/bin/claude"), "path": .text("/opt/homebrew/Caskroom/claude-code/2.1.320/claude"),
+                     "version": .text("2.1.320 (Claude Code)"), "sha256": .text(String(repeating: "a1b2", count: 16)), "profiled": .bool(false),
+                     "last_run": new, "change": .object(["event": .int(58), "previous": old, "current": new])]),
+            .object(["provider": .text("Codex"), "source": .text("discovered"), "state": .text("refused"),
+                     "detail": .text("`codex` is not on the login shell's PATH"), "entry": .null, "path": .null, "version": .null,
+                     "sha256": .null, "profiled": .null, "last_run": .null, "change": .null]),
+        ])]
+    }()
+
+    private func discovered(_ section: SettingsSection = .claude, connection: HelperConnection = .ready(epoch: 7)) -> SettingsState {
+        var state = settings(section, connection: connection)
+        state.executables = ExecutableList(Self.executablesAnswer)
+        state.executablesLoad = .loaded
+        state.launch.codex = ProviderLaunch(auth: "native-subscription")
+        return state
+    }
+
+    func test_d3_settings_show_the_executable_the_core_found_and_warn_when_it_changed() throws {
+        let list = try XCTUnwrap(ExecutableList(Self.executablesAnswer))
+        XCTAssertEqual(list["ClaudeCode"]?.source, .discovered)
+        XCTAssertEqual(list["ClaudeCode"]?.change?.previous.version, "2.1.311 (Claude Code)")
+        XCTAssertEqual(list["Codex"]?.state, .refused)
+        XCTAssertNil(list["Codex"]?.path)
+        // A malformed answer is not shown at all.
+        var broken = Self.executablesAnswer
+        broken["providers"] = .list([.object(["provider": .text("ClaudeCode"), "source": .text("elsewhere")])])
+        XCTAssertNil(ExecutableList(broken))
+
+        let claude = discovered().page(.claude)
+        let found = try XCTUnwrap(claude.groups.first)
+        XCTAssertEqual(found.title, "Found by the core")
+        let line = { (label: String) in found.lines.first { $0.label == label } }
+        XCTAssertEqual(line("Found")?.value, "On the login shell's PATH as /opt/homebrew/bin/claude")
+        XCTAssertEqual(line("Path")?.value, "/opt/homebrew/Caskroom/claude-code/2.1.320/claude")
+        XCTAssertEqual(line("Version")?.trailing, .note("Not the profiled release"))
+        XCTAssertEqual(line("Last run")?.value, "2.1.320 (Claude Code) · a1b2a1b2a1b2… · recorded at event 57")
+        // The change is a warning; nothing says the run was refused.
+        let warning = try XCTUnwrap(claude.warning)
+        XCTAssertEqual(warning.title, "Claude Code changed since an earlier run")
+        XCTAssertTrue(warning.message.contains("2.1.311 (Claude Code) at /opt/homebrew/Caskroom/claude-code/2.1.311/claude"))
+        XCTAssertTrue(warning.message.hasSuffix("The run was not refused."))
+        XCTAssertFalse(claude.groups.flatMap(\.lines).contains { $0.trailing == .evidence(.failed, "Refused") })
+
+        let codex = discovered().page(.codex)
+        let state = try XCTUnwrap(codex.groups.first?.lines.first { $0.label == "State" })
+        XCTAssertEqual(state.value, "`codex` is not on the login shell's PATH")
+        XCTAssertEqual(state.trailing, .evidence(.failed, "Refused"))
+        XCTAssertNil(codex.warning)
+        XCTAssertEqual(codex.groups[1].lines.first?.value, "Not passed. The core finds it on the login shell's PATH.")
+
+        // Without a connected core nothing found is shown as current.
+        let gone = discovered(connection: .channelLost("pipe closed")).page(.claude)
+        XCTAssertEqual(gone.groups.first?.lines.map(\.value), ["Unknown: the core is not connected."])
+        XCTAssertNil(gone.warning)
     }
 
     /// Review aid, as above: Settings & Providers in each section, and its empty, loading,
@@ -1405,6 +1475,8 @@ final class DesignShellTests: XCTestCase {
             ("settings-incompatible", settings(.core, connection: .incompatible(epoch: 7)), tall),
             ("settings-disconnected", settings(.core, connection: .channelLost("pipe closed")), opening),
             ("settings-disconnected-provider", settings(.claude, connection: .ended(status: 1)), opening),
+            ("settings-claude-changed", discovered(.claude), tall),
+            ("settings-codex-refused", discovered(.codex), tall),
         ]
         for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
             for (file, state, size) in cases {

@@ -14,7 +14,7 @@ struct LaunchOptions {
     static let sliceOptions: Set<String> = ["--disposable-root", "--codex-executable", "--codex-version",
                                             "--codex-sha256", "--codex-home", "--codex-auth",
                                             "--claude-executable", "--claude-version", "--claude-sha256",
-                                            "--claude-home", "--claude-user", "--claude-auth"]
+                                            "--claude-home", "--claude-user", "--claude-auth", "--login-shell"]
 
     static func parse(_ arguments: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -31,6 +31,12 @@ struct LaunchOptions {
             default: i -= 1
             }
             i += 2
+        }
+        // D3: the core asks the user's login shell for PATH; pass the shell this app was
+        // started under unless the launch named one. Only a slice configuration uses it.
+        if o.slice.contains("--disposable-root"), !o.slice.contains("--login-shell"),
+           let shell = ProcessInfo.processInfo.environment["SHELL"], shell.hasPrefix("/") {
+            o.slice += ["--login-shell", shell]
         }
         // Development/packaging default: helper beside the GUI executable.
         if o.helper == nil, let exe = Bundle.main.executableURL {

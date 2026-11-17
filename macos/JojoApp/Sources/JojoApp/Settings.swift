@@ -82,15 +82,18 @@ struct SettingsLaunch: Equatable, Sendable {
     var disposableRoot: String?
     var claude = ProviderLaunch()
     var codex = ProviderLaunch()
+    /// D3: the login shell the core asks for PATH, as the app passed it.
+    var loginShell: String?
 
     init(helper: String? = nil, dataRoot: String? = nil, worktreeRoot: String? = nil, disposableRoot: String? = nil,
-         claude: ProviderLaunch = ProviderLaunch(), codex: ProviderLaunch = ProviderLaunch()) {
+         claude: ProviderLaunch = ProviderLaunch(), codex: ProviderLaunch = ProviderLaunch(), loginShell: String? = nil) {
         self.helper = helper
         self.dataRoot = dataRoot
         self.worktreeRoot = worktreeRoot
         self.disposableRoot = disposableRoot
         self.claude = claude
         self.codex = codex
+        self.loginShell = loginShell
     }
 
     init(_ options: LaunchOptions) {
@@ -102,7 +105,8 @@ struct SettingsLaunch: Equatable, Sendable {
                            digest: passed["--\(name)-sha256"], auth: passed["--\(name)-auth"])
         }
         self.init(helper: options.helper?.path, dataRoot: options.dataRoot, worktreeRoot: options.worktreeRoot,
-                  disposableRoot: passed["--disposable-root"], claude: provider("claude"), codex: provider("codex"))
+                  disposableRoot: passed["--disposable-root"], claude: provider("claude"), codex: provider("codex"),
+                  loginShell: passed["--login-shell"])
     }
 }
 
@@ -149,7 +153,14 @@ struct SettingsPage: Equatable {
         var message: String
     }
 
+    struct Warning: Equatable {
+        var title: String
+        var message: String
+    }
+
     var empty: Empty?
+    /// D3: a provider's executable changed between two runs.
+    var warning: Warning?
     var groups: [SettingsGroup] = []
     /// A sentence in place of groups that have no source right now.
     var notice: String?
@@ -164,6 +175,9 @@ struct SettingsState: Equatable {
     var pid: Int32 = 0
     var hello: HelperHello?
     var launch = SettingsLaunch()
+    /// D3: the `Executables` answer, while the core is connected.
+    var executables: ExecutableList?
+    var executablesLoad = PlanLoad.idle
     var section = SettingsSection.claude
 
     static let notReported = "Not reported"
@@ -190,17 +204,19 @@ struct SettingsState: Equatable {
 
     func page(_ section: SettingsSection) -> SettingsPage {
         switch section {
-        case .claude: return provider("Claude Code", launch.claude)
-        case .codex: return provider("Codex", launch.codex)
+        case .claude: return provider("Claude Code", key: "ClaudeCode", flag: "claude", launch.claude)
+        case .codex: return provider("Codex", key: "Codex", flag: "codex", launch.codex)
         case .core: return core
         case .discovery:
+            let shell = launch.loginShell ?? "/bin/zsh, the core's default"
             return SettingsPage(
                 groups: [SettingsGroup(title: "Executable discovery", lines: [
-                    .missing("Search", "Not built. Each executable is a launch option."),
-                    .missing("Re-check", "Not built. Each executable is a launch option."),
-                    SettingsLine(label: "Changed binary", value: "Refused, not warned: the core runs only the executable whose digest was passed."),
+                    SettingsLine(label: "Search", value: "The PATH of the login shell (\(shell)), looked up by the core. No other directory is searched."),
+                    SettingsLine(label: "Re-check", value: "At core start and before each attempt and lead turn. Version and digest are learned again when the file changed."),
+                    SettingsLine(label: "Changed binary", value: "Warned, not refused (D3): the run records the new version and digest. A pinned executable is refused when it differs."),
+                    SettingsLine(label: "Custom paths", value: "--claude-executable and --codex-executable at launch. With a version and a digest they pin the executable."),
                 ])],
-                footnote: "Decided and not built: Jojo finds the executables itself, records version and digest per run, and warns when a binary changed.")
+                footnote: "There is no switch and no rescan: every run checks again. The Claude Code and Codex sections show what the core found.")
         case .defaults:
             return SettingsPage(
                 groups: [
@@ -284,21 +300,28 @@ struct SettingsState: Equatable {
         }
     }
 
-    private func provider(_ name: String, _ options: ProviderLaunch) -> SettingsPage {
+    private func provider(_ name: String, key: String, flag: String, _ options: ProviderLaunch) -> SettingsPage {
         let confirmed = SettingsGroup(title: "Reported by the core", lines: [slice])
         guard options.passed else {
             return SettingsPage(
                 empty: .init(title: "No \(name) options were passed at launch",
-                             message: "Jojo was started without them. The core reports no provider configuration, so nothing else is known here."),
+                             message: "Jojo was started without them, so the core does not run \(name)."),
                 groups: [confirmed])
         }
+        let executable = reported == nil ? nil : executables?[key]
+        let warning = executable?.change.map { change in
+            SettingsPage.Warning(
+                title: "\(name) changed since an earlier run",
+                message: "\(change.previous.version) at \(change.previous.path) was followed by \(change.current.version) at \(change.current.path) (event \(change.event)). The run was not refused.")
+        }
         return SettingsPage(
+            warning: warning,
             groups: [
+                found(executable, flag: flag),
                 SettingsGroup(title: "Passed to the core at launch", lines: [
-                    .passed("Path", options.executable),
+                    .passed("Path", options.executable, otherwise: "Not passed. The core finds it on the login shell's PATH."),
                     options.version.map { SettingsLine(label: "Version", value: $0) } ?? .missing("Version", "Not passed"),
                     .passed("SHA-256 digest", options.digest),
-                    .missing("Discovery", "Not built. The path is a launch option."),
                 ]),
                 SettingsGroup(title: "Authentication", lines: [
                     options.auth.map { SettingsLine(label: "Sign-in", value: "Attested at launch as \($0). The sign-in itself is not checked.") }
@@ -308,7 +331,47 @@ struct SettingsState: Equatable {
                 ]),
                 confirmed,
             ],
-            footnote: "The core does not report these values back, and it reports no capability, sign-in state, token count or limit of a provider. It hashes the executable itself and refuses one whose digest differs.")
+            footnote: "The core finds the executable, checks it again before each run and records its version and digest with every run. It reports no capability, sign-in state, token count or limit of a provider.")
+    }
+
+    /// D3: the executable as the core knows it now, and the one of its last run.
+    private func found(_ executable: ProviderExecutable?, flag: String) -> SettingsGroup {
+        let title = "Found by the core"
+        guard let executable else {
+            let why: String
+            switch (reported, executablesLoad) {
+            case (nil, _): why = "Unknown: the core is not connected."
+            case (_, .failed(let reason)): why = "Not read: \(reason)"
+            default: why = "Being read…"
+            }
+            return SettingsGroup(title: title, lines: [.missing("Executable", why)])
+        }
+        var lines: [SettingsLine] = []
+        switch executable.source {
+        case .discovered:
+            lines.append(SettingsLine(label: "Found", value: executable.entry.map { "On the login shell's PATH as \($0)" } ?? "On the login shell's PATH"))
+        case .path:
+            lines.append(SettingsLine(label: "Found", value: "Given by --\(flag)-executable; version and digest are learned from the file"))
+        case .pinned:
+            lines.append(SettingsLine(label: "Found", value: "Pinned at launch; refused when its version or digest differs"))
+        case .none:
+            lines.append(.missing("Found", "Not configured in the core"))
+        }
+        switch executable.state {
+        case .checking: lines.append(.missing("State", "Being found and checked. A Start waits for it."))
+        case .refused: lines.append(SettingsLine(label: "State", value: executable.detail, trailing: .evidence(.failed, "Refused")))
+        case .ready, .unconfigured: break
+        }
+        if let path = executable.path { lines.append(SettingsLine(label: "Path", value: path, form: .identifier)) }
+        if let version = executable.version {
+            lines.append(SettingsLine(label: "Version", value: version,
+                                      trailing: executable.profiled == true ? .evidence(.passed, "Profiled") : .note("Not the profiled release")))
+        }
+        if let digest = executable.sha256 { lines.append(SettingsLine(label: "SHA-256 digest", value: digest, form: .identifier)) }
+        lines.append(executable.lastRun.map {
+            SettingsLine(label: "Last run", value: "\($0.version) · \($0.sha256.prefix(12))… · recorded at event \($0.event)")
+        } ?? .missing("Last run", "No run recorded yet"))
+        return SettingsGroup(title: title, lines: lines)
     }
 
     private var core: SettingsPage {
@@ -350,15 +413,24 @@ struct SettingsState: Equatable {
 
 struct SettingsScreen: View {
     @ObservedObject var model: AppModel
+    /// The executables are read only while this destination is the shown one (D3).
+    let visible: Bool
     @State private var section = SettingsSection.claude
 
     var body: some View {
+        let workspace = model.workspace
         SettingsView(
             state: SettingsState(
-                connection: model.client.connection, admission: model.workspace.admission,
+                connection: model.client.connection, admission: workspace.admission,
                 pid: model.client.processIdentifier, hello: model.client.hello,
-                launch: SettingsLaunch(model.options), section: section),
+                launch: SettingsLaunch(model.options), executables: workspace.executables,
+                executablesLoad: workspace.executablesLoad, section: section),
             select: { section = $0 })
+            .onChange(of: visible) {
+                workspace.executablesShown = visible
+                if visible { workspace.loadExecutables() }
+            }
+            .onChange(of: workspace.snapshotSeq) { if visible { workspace.loadExecutables() } }
     }
 }
 
@@ -427,6 +499,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func page(_ page: SettingsPage) -> some View {
+        if let warning = page.warning { Banner(.warning, title: warning.title, message: warning.message) }
         if let empty = page.empty {
             StateBlock(symbol: state.section.symbol, title: empty.title, message: empty.message).frame(height: 180)
         }

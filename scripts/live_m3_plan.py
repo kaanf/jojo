@@ -83,13 +83,20 @@ def open_helper(root, a):
     return helper
 
 
+def pinned(name, executable, version):
+    """D3: an executable given here is pinned; without one the helper discovers it."""
+    if not executable:
+        return []
+    path = Path(executable)
+    return [f'--{name}-executable', path, f'--{name}-version', version, f'--{name}-sha256', digest(path)]
+
+
 def app_command(root, a):
-    claude, codex = Path(a.claude_executable), Path(a.codex_executable)
     options = ['--helper', a.helper, '--data-root', root / 'data', '--worktree-root', root / 'worktrees',
                '--disposable-root', root / 'disposable',
-               '--claude-executable', claude, '--claude-version', CLAUDE_VERSION, '--claude-sha256', digest(claude),
+               *pinned('claude', a.claude_executable, CLAUDE_VERSION),
                '--claude-home', Path.home(), '--claude-user', getpass.getuser(), '--claude-auth', 'native-subscription',
-               '--codex-executable', codex, '--codex-version', CODEX_VERSION, '--codex-sha256', digest(codex),
+               *pinned('codex', a.codex_executable, CODEX_VERSION),
                '--codex-home', Path.home() / '.codex', '--codex-auth', 'native-subscription']
     return ' '.join([str(a.app)] + [f"'{o}'" if ' ' in str(o) else str(o) for o in options])
 
@@ -165,8 +172,11 @@ def collect(root, a):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('phase', choices=['prepare', 'plan', 'collect'])
-    for name in ['--helper', '--fixture', '--root', '--app', '--claude-executable', '--codex-executable']:
+    for name in ['--helper', '--fixture', '--root', '--app']:
         parser.add_argument(name, required=True)
+    # D3: optional; an executable named here is pinned, one left out is discovered.
+    for name in ['--claude-executable', '--codex-executable']:
+        parser.add_argument(name)
     a = parser.parse_args()
     a.helper, a.fixture, a.app = (Path(p).resolve() for p in (a.helper, a.fixture, a.app))
     root = sample.check_disposable_root(a.root)

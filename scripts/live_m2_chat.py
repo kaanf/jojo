@@ -62,26 +62,37 @@ def wait_for_result(helper, turn, seconds):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    for name in ['--helper', '--root', '--claude-executable', '--codex-executable']:
+    for name in ['--helper', '--root']:
         parser.add_argument(name, required=True)
+    # D3: optional; an executable named here is pinned, one left out is discovered.
+    for name in ['--claude-executable', '--codex-executable']:
+        parser.add_argument(name)
     parser.add_argument('--rounds', type=int, default=2, help='live turns at most (each is one provider run)')
     parser.add_argument('--timeout', type=int, default=600)
     a = parser.parse_args()
     root = sample.check_disposable_root(a.root)
-    claude, codex = Path(a.claude_executable), Path(a.codex_executable)
-    for executable in (claude, codex):
-        if executable.resolve() != executable:
+    pins = {'claude': (a.claude_executable, CLAUDE_VERSION), 'codex': (a.codex_executable, CODEX_VERSION)}
+    for executable, _ in pins.values():
+        if executable and Path(executable).resolve() != Path(executable):
             raise SystemExit(f'{executable} must be the fully resolved native binary')
     disposable = root / 'disposable'
     disposable.mkdir(mode=0o700)
     made = sample.generate_repository(disposable)
     before = sample.repository_state(made['repository'])
-    options = ['--claude-executable', claude, '--claude-version', CLAUDE_VERSION, '--claude-sha256', digest(claude),
+
+    def pinned(name):
+        executable, version = pins[name]
+        if not executable:
+            return []
+        return [f'--{name}-executable', executable, f'--{name}-version', version, f'--{name}-sha256', digest(executable)]
+
+    options = [*pinned('claude'),
                '--claude-home', Path.home(), '--claude-user', getpass.getuser(), '--claude-auth', 'native-subscription',
-               '--codex-executable', codex, '--codex-version', CODEX_VERSION, '--codex-sha256', digest(codex),
+               *pinned('codex'),
                '--codex-home', Path.home() / '.codex', '--codex-auth', 'native-subscription']
-    result = {'claude': {'version': CLAUDE_VERSION, 'sha256': digest(claude)},
-              'codex': {'version': CODEX_VERSION, 'sha256': digest(codex)}, 'rounds': []}
+    result = {name: {'version': version, 'sha256': digest(executable)} if executable else 'discovered by the helper'
+              for name, (executable, version) in pins.items()}
+    result['rounds'] = []
     with open(root / 'helper-stderr.txt', 'wb') as stderr:
         helper = Helper(a.helper, root / 'data', root / 'worktrees', disposable, options, stderr)
         try:

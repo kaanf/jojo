@@ -25,7 +25,7 @@ struct MainView: View {
                         shown(.featureChat) { FeatureChatScreen(model: model, visible: screen == .featureChat, open: { screen = $0 }) }
                         shown(.executionPlan) { ExecutionPlanScreen(model: model, visible: screen == .executionPlan, open: { screen = $0 }) }
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
-                        shown(.settings) { SettingsScreen(model: model) }
+                        shown(.settings) { SettingsScreen(model: model, visible: screen == .settings) }
                         shown(.sourceControl) { SourceControlScreen(model: model, open: { screen = $0 }) }
                         shown(.specifications) { SpecificationsScreen(model: model, open: { screen = $0 }) }
                         shown(.verification) { VerificationScreen(model: model, open: { screen = $0 }) }
