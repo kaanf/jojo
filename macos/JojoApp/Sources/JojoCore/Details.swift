@@ -464,31 +464,50 @@ extension WorkspaceModel {
         documentKey = key
         documentLoad = .loading
         onChange?()
-        readDocument(id, revision: revision, key: key, offset: 0, partial: nil)
+        readDocument(id, revision: revision, key: key, offset: 0, partial: nil, comparing: false)
     }
 
-    private func readDocument(_ id: String, revision: Int64?, key: String, offset: Int64, partial: DocumentDetail?) {
+    /// Protocol 1.9: another revision of a document, for Compare on Specifications.
+    public func loadComparison(_ id: String, revision: Int64) {
+        let key = "\(id)#\(revision)"
+        guard comparisonKey != key || comparisonLoad != .loading else { return }
+        comparisonKey = key
+        comparisonLoad = .loading
+        onChange?()
+        readDocument(id, revision: revision, key: key, offset: 0, partial: nil, comparing: true)
+    }
+
+    private func settle(_ detail: DocumentDetail?, _ load: PlanLoad, comparing: Bool) {
+        if comparing {
+            (comparison, comparisonLoad) = (detail, load)
+        } else {
+            (document, documentLoad) = (detail, load)
+        }
+    }
+
+    private func readDocument(_ id: String, revision: Int64?, key: String, offset: Int64, partial: DocumentDetail?,
+                              comparing: Bool) {
         client.query(.Document, ["document": .text(id), "revision": revision.map(JSON.int) ?? .null,
                                  "offset": .int(offset)]) { [weak self] reply in
-            guard let self, self.documentKey == key else { return }
+            guard let self, (comparing ? self.comparisonKey : self.documentKey) == key else { return }
             switch reply {
             case .response(let p):
                 guard var page = DocumentDetail(p), let next = p["next"]?.integer else {
-                    (self.document, self.documentLoad) = (nil, .failed("malformed document"))
+                    self.settle(nil, .failed("malformed document"), comparing: comparing)
                     break
                 }
                 if let partial { page.text = partial.text + page.text }
                 if !page.complete && page.text.count < documentTextLimit && next > offset {
-                    self.readDocument(id, revision: revision, key: key, offset: next, partial: page)
+                    self.readDocument(id, revision: revision, key: key, offset: next, partial: page, comparing: comparing)
                     return
                 }
-                (self.document, self.documentLoad) = (page, .loaded)
+                self.settle(page, .loaded, comparing: comparing)
             case .null:
-                (self.document, self.documentLoad) = (nil, .failed("This core has no such document."))
+                self.settle(nil, .failed("This core has no such document."), comparing: comparing)
             case .error(let reason), .unanswered(let reason):
-                (self.document, self.documentLoad) = (nil, .failed(reason))
+                self.settle(nil, .failed(reason), comparing: comparing)
             default:
-                (self.document, self.documentLoad) = (nil, .failed("unexpected answer"))
+                self.settle(nil, .failed("unexpected answer"), comparing: comparing)
             }
             self.onChange?()
         }

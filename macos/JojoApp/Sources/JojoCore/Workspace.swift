@@ -368,6 +368,12 @@ public final class WorkspaceModel {
     public internal(set) var document: DocumentDetail?
     public internal(set) var documentLoad = PlanLoad.idle
     var documentKey = ""
+    /// Protocol 1.9: an earlier revision of that document, for Compare.
+    public internal(set) var comparison: DocumentDetail?
+    public internal(set) var comparisonLoad = PlanLoad.idle
+    var comparisonKey = ""
+    /// A note another screen prepared for Feature Chat's composer ("Request Changes").
+    public var chatDraft: String?
     /// Protocol 1.9: the newest decisions on documents (the Approval Inbox).
     public internal(set) var decisions: [DecisionSummary] = []
     public internal(set) var decisionsLoad = PlanLoad.idle

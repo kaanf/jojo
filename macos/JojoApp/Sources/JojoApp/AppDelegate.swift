@@ -130,6 +130,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // The human's decision (2026-11-17): the app is light, as the canvas's boards are;
+        // the dark tokens stay for the snapshot renders and a later Settings › Appearance.
+        NSApp.appearance = NSAppearance(named: .aqua)
         // Never let the OS silently kill Jojo while a helper session may own agents.
         ProcessInfo.processInfo.disableSuddenTermination()
         ProcessInfo.processInfo.disableAutomaticTermination("Jojo helper session")

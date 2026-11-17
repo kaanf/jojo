@@ -1,100 +1,235 @@
 import JojoCore
 import SwiftUI
 
-// Approval Inbox (docs/design/screens/APPROVAL_INBOX.md): the one review the workspace holds,
-// its decision, and the documents the snapshot knows. It has no load or query of its own.
+// Approval Inbox (docs/design/screens/APPROVAL_INBOX.md), from `ApprovalInboxMac.dc.html`:
+// what waits for the human (pending documents and candidates whose host validation
+// passed), one request in detail, the approval policy and the newest decisions. A document
+// is decided here with `decide` for the review the workspace holds; a candidate is accepted
+// on Verification & Evidence. Push and pull request approvals belong to M5.
 
-/// What the screen shows. Every field is the helper's answer; nothing is inferred here
-/// except the kind of a document, which the bundle shows (`kind`).
+/// Pending or All, the list's segmented control.
+enum InboxFilter: String, CaseIterable, Identifiable, Sendable {
+    case pending = "Pending", all = "All"
+    var id: String { rawValue }
+}
+
+/// The type menu of the list.
+enum InboxType: String, CaseIterable, Identifiable, Sendable {
+    case all = "All types", specs = "Specs", plans = "Plans", candidates = "Candidates", external = "External"
+    var id: String { rawValue }
+}
+
+/// One request of the list: a document or a candidate.
+struct InboxItem: Identifiable, Equatable {
+    enum Subject: Equatable {
+        case document(DocumentSummary)
+        case candidate(PendingCandidate)
+    }
+    let subject: Subject
+
+    var id: String {
+        switch subject {
+        case .document(let d): return d.id
+        case .candidate(let c): return c.id
+        }
+    }
+
+    var kind: String {
+        switch subject {
+        case .document(let d): return d.kindName
+        case .candidate: return "Candidate"
+        }
+    }
+
+    var dot: RGBA {
+        switch subject {
+        case .document(let d): return documentTile(d.kind).1
+        case .candidate: return Palette.green
+        }
+    }
+
+    var title: String {
+        switch subject {
+        case .document(let d): return "\(d.title ?? documentCode(d.kind)) rev \(d.revision)"
+        case .candidate(let c): return [c.key, c.title].compactMap { $0 }.joined(separator: " · ").nonEmpty ?? "Candidate"
+        }
+    }
+
+    var waiting: Bool {
+        switch subject {
+        case .document(let d): return d.approval == "Pending"
+        case .candidate: return true
+        }
+    }
+
+    var date: Date? {
+        switch subject {
+        case .document(let d): return d.created
+        case .candidate(let c): return c.validated
+        }
+    }
+
+    var featureName: String? {
+        switch subject {
+        case .document(let d): return d.featureName
+        case .candidate(let c): return c.featureName
+        }
+    }
+
+    func matches(_ type: InboxType) -> Bool {
+        switch (type, subject) {
+        case (.all, _): return true
+        case (.specs, .document(let d)): return ["Prd", "Adr"].contains(d.kind)
+        case (.plans, .document(let d)): return ["ExecutionPlan", "ValidationPlan"].contains(d.kind)
+        case (.candidates, .candidate): return true
+        default: return false
+        }
+    }
+}
+
+/// What the screen shows. Every value is the helper's answer.
 struct ApprovalInboxState: Equatable {
     var connection: HelperConnection
     var admission: String
-    /// The snapshot rows; the documents among them are listed.
-    var rows: [SnapshotRow]
+    /// Protocol 1.6: the documents, the candidates that wait and how many things wait.
+    var list: DocumentList?
+    /// The review the workspace holds; a decision is sent for it.
     var review: ReviewBundle?
-    /// A decision was sent or refused for the loaded review; it must be loaded again.
-    var reviewStale: Bool
-    /// A decision is on its way to the core and has no answer yet.
-    var decisionOutstanding: Bool
-    /// The loaded attempt result, read-only here; its decision is on Verification & Evidence.
-    var candidate: CandidateReview?
-    /// Protocol 1.6: documents with names and approval states, and the candidates that
-    /// wait; nil from an older helper, which leaves the snapshot's list.
-    var list: DocumentList? = nil
-    /// The time ages are counted from.
+    var reviewStale = false
+    var decisionOutstanding = false
+    /// The chosen request.
+    var selected: String?
+    /// Protocol 1.9: the chosen document's revisions and decisions.
+    var detail: DocumentDetail?
+    /// Protocol 1.9: the newest decisions.
+    var decisions: [DecisionSummary] = []
+    var decisionsLoad = PlanLoad.idle
+    /// The features (1.7), for a request's project and code.
+    var features: FeatureList?
+    var filter = InboxFilter.pending
+    var type = InboxType.all
+    var reportsDetail = true
     var now = Date()
 
-    /// One document the snapshot knows. Its approval state is not reported.
-    struct Document: Identifiable, Equatable {
-        let id: String
-        /// The kind of its snapshot row: `artifact` or `review_document`.
-        let row: String
-        let record: String
+    var link: RecoveryCenterState.Link { coreLink(connection) }
 
-        var kind: String { row == "artifact" ? "Specification" : "Decision or plan" }
-        var symbol: String { row == "artifact" ? "doc.text" : "doc.on.doc" }
+    var items: [InboxItem] {
+        let documents = (list?.documents ?? []).map { InboxItem(subject: .document($0)) }
+        let candidates = (list?.candidates ?? []).map { InboxItem(subject: .candidate($0)) }
+        let all = (documents + candidates).filter { $0.matches(type) }
+        let shown = filter == .pending ? all.filter(\.waiting) : all
+        return shown.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
     }
 
-    static let documentKinds: Set<String> = ["artifact", "review_document"]
+    var chosen: InboxItem? {
+        let all = items
+        return all.first { $0.id == selected } ?? all.first
+    }
 
-    /// The snapshot's document rows, in its order.
-    static func documents(in rows: [SnapshotRow]) -> [Document] {
-        var seen = Set<String>()
-        return rows.filter { documentKinds.contains($0.kind) && seen.insert($0.subject).inserted }.map {
-            Document(id: $0.subject, row: $0.kind, record: $0.value)
+    var pending: Int64 { list?.pending ?? 0 }
+
+    /// "Sample · FT-3": the project and code of a request's feature.
+    func place(_ item: InboxItem) -> String {
+        let summary = features?.features.first { f in
+            switch item.subject {
+            case .document(let d): return f.id == d.feature
+            case .candidate(let c): return f.name != nil && f.name == c.featureName
+            }
         }
+        return [summary?.projectName, summary?.code ?? item.featureName].compactMap { $0 }.joined(separator: " · ")
+            .nonEmpty ?? "Workspace"
     }
 
-    var documents: [Document] { Self.documents(in: rows) }
-
-    /// What the core reports about the loaded document.
-    var summary: DocumentSummary? { review.flatMap { list?[$0.subject] } }
-
-    /// The tag of a document's approval state.
-    static func tag(_ d: DocumentSummary) -> (DocumentStatus, String?) {
-        switch d.approval {
-        case "Pending": return d.stale ? (.stale, nil) : (.proposed, "Needs approval")
-        case "Approved": return (.approved, nil)
-        case "Rejected": return (.invalidated, "Rejected")
-        case "Revoked": return (.invalidated, "Revoked")
-        case "NotReady": return (.superseded, "Has findings")
-        default: return (.superseded, "Waiting")
-        }
+    /// "18m", "1h", "1d": how long a request has waited.
+    func age(_ item: InboxItem) -> String {
+        if case .document(let d) = item.subject, d.stale { return "Stale" }
+        guard let date = item.date else { return "" }
+        let s = max(0, Int(now.timeIntervalSince(date)))
+        if s < 3600 { return "\(max(1, s / 60))m" }
+        if s < 86_400 { return "\(s / 3600)h" }
+        return "\(s / 86_400)d"
     }
 
-    static func symbol(_ kind: String) -> String {
-        switch kind {
-        case "Prd": return "doc.text"
-        case "Adr": return "building.columns"
-        default: return "list.bullet.indent"
+    /// The loaded review is the chosen document's, current and not on its way.
+    var decidable: Bool {
+        guard case .document(let d)? = chosen?.subject, let review else { return false }
+        return review.subject == d.id && review.revision == d.revision
+    }
+
+    /// Why Approve, Reject and Revoke are disabled; nil when they can be sent. Which of them
+    /// the core accepts for a document is the core's rule.
+    var decideBlocked: String? {
+        guard case .document(let d)? = chosen?.subject else { return "No document chosen." }
+        if link != .connected { return "Unavailable: the core is not connected." }
+        if decisionOutstanding { return "Unavailable while a decision awaits the core." }
+        if d.approval == "Waiting" { return "Waits for the documents it was drafted on." }
+        if d.approval == "NotReady" { return "The requirements have findings; the core does not accept an approval yet." }
+        if !decidable || reviewStale { return "Loading the review of this revision." }
+        return nil
+    }
+
+    /// The pill in the detail's head.
+    var status: (String, Tone) {
+        guard let chosen else { return ("", .neutral) }
+        switch chosen.subject {
+        case .candidate: return ("Awaiting your decision", .info)
+        case .document(let d):
+            if d.stale { return ("Stale", .warn) }
+            if decisionOutstanding { return ("Requested", .review) }
+            return d.approval == "Pending" ? ("Awaiting approval", .info) : approvalPill(d.approval)
         }
     }
 
     struct Kind: Equatable {
         let name: String
-        let approval: String
-        let symbol: String
         let why: String
         /// "Approve Revision", or "Approve Plan".
         let approve: String
     }
 
-    /// The helper sends no word for the kind. A specification binds no upstream approval, an
-    /// architecture decision its PRD's, a plan its PRD's and its architecture decision's.
-    static func kind(_ bundle: ReviewBundle) -> Kind {
-        switch bundle.upstream.count {
-        case 0:
-            return Kind(name: "Specification", approval: "Spec approval", symbol: "doc.text",
-                        why: "Requirements bind planning for the feature. An approval does not carry over to changed content.",
+    static func kind(_ kind: String) -> Kind {
+        switch kind {
+        case "Prd":
+            return Kind(name: "Specification", why: "Requirements bind planning for the feature. An approval does not carry over to changed content.",
                         approve: "Approve Revision")
-        case 1:
-            return Kind(name: "Architecture decision", approval: "Spec approval", symbol: "building.columns",
-                        why: "Architecture decisions bind every plan that builds on them. An approval does not carry over to changed content.",
+        case "Adr":
+            return Kind(name: "Architecture decision", why: "Architecture decisions bind every plan that builds on them. An approval does not carry over to changed content.",
                         approve: "Approve Revision")
-        default:
-            return Kind(name: "Execution plan", approval: "Plan approval", symbol: "list.bullet.indent",
-                        why: "Only approved plans can admit tasks. Approving does not start anything.",
+        case "ValidationPlan":
+            return Kind(name: "Validation plan", why: "Host validation checks every candidate of the plan against it. Approving does not start anything.",
                         approve: "Approve Plan")
+        default:
+            return Kind(name: "Execution plan", why: "Only approved plans can admit tasks. Approving does not start anything.",
+                        approve: "Approve Plan")
+        }
+    }
+
+    /// "Approve PRD rev 2 of Slugify from the shell."
+    static func action(_ d: DocumentSummary) -> String {
+        let of = d.featureName.map { " of \($0)" } ?? ""
+        switch d.kind {
+        case "ExecutionPlan": return "Approve plan rev \(d.revision)\(of). Its steps may then be admitted; nothing starts by itself."
+        case "ValidationPlan": return "Approve validation plan rev \(d.revision)\(of): the checks each step's candidate must pass."
+        default: return "Approve this exact revision: \(documentCode(d.kind)) rev \(d.revision)\(of)."
+        }
+    }
+
+    /// What a decision on this document affects, from what was drafted on it.
+    func affected(_ d: DocumentSummary) -> String {
+        guard let detail, detail.id == d.id else { return "" }
+        if !detail.downstream.isEmpty {
+            return detail.downstream.map { "\(documentCode($0.kind)) rev \($0.revision ?? 1)" }.joined(separator: " · ")
+        }
+        if !detail.upstream.isEmpty {
+            return "Drafted on " + detail.upstream.map { "\(documentCode($0.kind)) rev \($0.revision ?? 1)" }.joined(separator: " · ")
+        }
+        return d.kind == "Prd" ? "Planning for \(d.featureName ?? "the feature")" : ""
+    }
+
+    func repository(_ item: InboxItem) -> String? {
+        switch item.subject {
+        case .document(let d): return features?.features.first { $0.id == d.feature }?.repositoryName
+        case .candidate(let c): return features?.features.first { $0.name == c.featureName }?.repositoryName
         }
     }
 
@@ -102,70 +237,24 @@ struct ApprovalInboxState: Equatable {
         String(identity.prefix(12))
     }
 
-    static func title(_ bundle: ReviewBundle, _ summary: DocumentSummary? = nil) -> String {
-        guard let summary else { return "\(short(bundle.subject)) rev \(bundle.revision)" }
-        return "\(summary.name) rev \(bundle.revision)"
+    static let documentKinds: Set<String> = ["artifact", "review_document"]
+
+    /// One document the snapshot knows (Activity & Audit's "Go to").
+    struct SnapshotDocument: Identifiable, Equatable {
+        let id: String
     }
 
-    static func upstream(_ bundle: ReviewBundle) -> String {
-        switch bundle.upstream.count {
-        case 0: return "None"
-        case 1: return "event \(bundle.upstream[0])"
-        default: return "events " + bundle.upstream.map(String.init).joined(separator: ", ")
+    /// The snapshot's document rows, in its order.
+    static func documents(in rows: [SnapshotRow]) -> [SnapshotDocument] {
+        var seen = Set<String>()
+        return rows.filter { documentKinds.contains($0.kind) && seen.insert($0.subject).inserted }.map {
+            SnapshotDocument(id: $0.subject)
         }
     }
 
-    /// The bundle names the event of the latest decision; since 1.6 the core also says
-    /// what it was when it applies to this revision.
-    static func latestDecision(_ bundle: ReviewBundle, _ summary: DocumentSummary? = nil, now: Date = Date()) -> String {
-        guard let event = bundle.priorDecision else { return "None recorded" }
-        guard let summary else { return "event \(event) · the action is not reported" }
-        let when = clockTime(summary.decided, now: now, seconds: false).map { " · \($0)" } ?? ""
-        switch summary.approval {
-        case "Approved", "Rejected", "Revoked": return "\(summary.approval) · event \(event)\(when)"
-        default: return "event \(event) · on an earlier revision"
-        }
-    }
-
-    var link: RecoveryCenterState.Link {
-        switch connection {
-        case .ready: return .connected
-        case .notStarted, .handshaking: return .starting
-        case .incompatible: return .incompatible
-        case .launchFailed, .channelLost, .ended: return .lost
-        }
-    }
-
-    var admissionClosed: Bool { link == .connected && !admission.isEmpty && admission != "Open" }
-
-    /// The decision is on its way: shown as Requested, never as recorded.
-    var requested: Bool { review != nil && reviewStale && decisionOutstanding }
-
-    /// The stale banner: the review cannot be decided and nothing is on its way.
-    var stale: Bool { review != nil && reviewStale && !decisionOutstanding }
-
-    /// Why Approve, Reject and Revoke are disabled; `nil` when they can be sent. Which of them
-    /// the core accepts for a document is the core's rule.
-    var decideBlocked: String? {
-        guard review != nil else { return "No document loaded." }
-        if link != .connected { return "Unavailable: the core is not connected." }
-        if requested { return "Unavailable while a decision awaits the core." }
-        if reviewStale { return "Unavailable: this review is stale. Reload the document." }
-        return nil
-    }
-
-    /// Where the canvas's "Approval History" link goes, here and on Specifications: the event
-    /// journal as it is. Nothing filters it to a document, and the link reads nothing.
-    static let historyScreen = Screen.activity
-
-    /// What the link named `button` opens, said beside it: the journal is not a decision history.
-    static func historyNote(_ button: String) -> String {
-        "\"\(button)\" opens \(historyScreen.title), the core's event journal: every loaded event, not one document's decisions. A decision is an event of type HumanDecision."
-    }
-
-    static func confirmation(_ action: DecisionAction, _ bundle: ReviewBundle)
+    static func confirmation(_ action: DecisionAction, _ d: DocumentSummary)
         -> (title: String, message: String, confirm: String, keep: String)? {
-        let object = "revision \(bundle.revision) of document \(short(bundle.subject))"
+        let object = "\(documentCode(d.kind)) rev \(d.revision)\(d.featureName.map { " of \($0)" } ?? "")"
         let kept = " A recorded decision is not removed from this app."
         switch action {
         case .Approve:
@@ -180,51 +269,90 @@ struct ApprovalInboxState: Equatable {
                     "Revoke Approval", "Keep Approval")
         }
     }
-}
 
-/// Where the loaded review stands: a decision on its way, stale, or whether the bundle
-/// names an earlier decision. What was decided is not reported. Also on Specifications.
-struct ReviewMark: View {
-    let state: ApprovalInboxState
-    let bundle: ReviewBundle
-
-    var body: some View {
-        if state.requested {
-            OperationalPill(.requested, standalone: true)
-        } else if state.stale {
-            DocumentTag(.stale)
-        } else if bundle.priorDecision == nil {
-            OperationalPill(.awaitingApproval, label: "No decision yet", standalone: true)
-        } else {
-            OperationalPill(.idle, label: "Decision recorded", standalone: true)
-        }
+    /// "Approved", "Rejected", "Revoked", or "Invalidated" for an approval that no longer
+    /// applies.
+    static func decisionPill(_ d: DecisionSummary) -> (String, Tone) {
+        if d.decision == "Approved" && !d.applies { return ("Invalidated", .danger) }
+        return approvalPill(d.decision)
     }
 }
 
 struct ApprovalInboxActions {
-    var load: (String) -> Void = { _ in }
+    var select: (InboxItem) -> Void = { _ in }
     var decide: (DecisionAction) -> Void = { _ in }
     var open: (Screen) -> Void = { _ in }
-    /// Loads a waiting candidate and opens Verification & Evidence, where it is decided.
+    /// Opens Specifications comparing the chosen document's two newest revisions.
+    var compare: (String) -> Void = { _ in }
+    /// Opens Feature Chat with a note to the lead about the chosen document.
+    var requestChanges: (DocumentSummary) -> Void = { _ in }
+    /// Loads a candidate and opens Verification & Evidence, where it is decided.
     var candidate: (String) -> Void = { _ in }
+    var filter: (InboxFilter) -> Void = { _ in }
+    var type: (InboxType) -> Void = { _ in }
 }
 
 struct ApprovalInboxScreen: View {
     @ObservedObject var model: AppModel
+    let visible: Bool
     let open: (Screen) -> Void
+    /// Opens Specifications in Compare.
+    let compare: (String) -> Void
+    @State private var selected: String?
+    @State private var filter = InboxFilter.pending
+    @State private var type = InboxType.all
 
     var body: some View {
+        ApprovalInboxView(state: state, actions: actions)
+            .onAppear { if visible { read() } }
+            .onChange(of: visible) { if visible { read() } }
+            .onChange(of: model.workspace.snapshotSeq) { if visible { read() } }
+            .onChange(of: selected) { if visible { read() } }
+            .onChange(of: model.workspace.documents) { if visible { read() } }
+    }
+
+    private var state: ApprovalInboxState {
         let workspace = model.workspace
-        ApprovalInboxView(
-            state: ApprovalInboxState(connection: model.client.connection, admission: workspace.admission,
-                                      rows: workspace.rows, review: workspace.review, reviewStale: workspace.reviewStale,
-                                      decisionOutstanding: model.client.outstandingCommands.values.contains("HumanDecision"),
-                                      candidate: workspace.candidate, list: workspace.documents),
-            actions: ApprovalInboxActions(load: { workspace.loadReview($0) }, decide: { workspace.decide($0) }, open: open,
-                                          candidate: { attempt in
-                                              workspace.loadCandidate(attempt)
-                                              open(.verification)
-                                          }))
+        return ApprovalInboxState(
+            connection: model.client.connection, admission: workspace.admission, list: workspace.documents,
+            review: workspace.review, reviewStale: workspace.reviewStale,
+            decisionOutstanding: model.client.outstandingCommands.values.contains("HumanDecision"),
+            selected: selected ?? workspace.review?.subject, detail: workspace.document, decisions: workspace.decisions,
+            decisionsLoad: workspace.decisionsLoad, features: workspace.features, filter: filter, type: type,
+            reportsDetail: model.client.hello.map { $0.queries.contains("Decisions") } ?? true)
+    }
+
+    /// The decisions, the features and the chosen document's review and revisions.
+    private func read() {
+        let workspace = model.workspace
+        workspace.loadDecisions()
+        workspace.loadFeatures()
+        guard case .document(let d)? = state.chosen?.subject else { return }
+        if workspace.review?.subject != d.id || workspace.review?.revision != d.revision
+            || (workspace.reviewStale && !state.decisionOutstanding) {
+            workspace.loadReview(d.id)
+        }
+        workspace.loadDocument(d.id)
+    }
+
+    private var actions: ApprovalInboxActions {
+        let workspace = model.workspace
+        return ApprovalInboxActions(
+            select: { selected = $0.id },
+            decide: { workspace.decide($0) },
+            open: open,
+            compare: compare,
+            requestChanges: { d in
+                if let feature = d.feature { workspace.openChat(feature) }
+                workspace.chatDraft = "Changes requested on \(documentCode(d.kind)) rev \(d.revision): "
+                open(.featureChat)
+            },
+            candidate: { attempt in
+                workspace.loadCandidate(attempt)
+                open(.verification)
+            },
+            filter: { filter = $0 },
+            type: { type = $0 })
     }
 }
 
@@ -232,47 +360,28 @@ struct ApprovalInboxView: View {
     @Environment(\.theme) private var theme
     let state: ApprovalInboxState
     var actions = ApprovalInboxActions()
-    @State private var identity: String
     /// The decision the confirmation dialog asks about: Reject or Revoke.
     @State private var confirming: DecisionAction?
 
-    init(state: ApprovalInboxState, actions: ApprovalInboxActions = ApprovalInboxActions()) {
-        self.state = state
-        self.actions = actions
-        _identity = State(initialValue: state.review?.subject ?? "")
-    }
-
     var body: some View {
         GeometryReader { geometry in
-            // The main column keeps at least 460 beside each panel.
-            let columns = geometry.size.width >= 1030 ? 3 : geometry.size.width >= 730 ? 2 : 1
-            HStack(spacing: 0) {
-                if columns > 1 { panel(edge: .trailing, width: 270) { leading } }
-                Scrolling {
-                    VStack(alignment: .leading, spacing: 18) {
-                        banners
-                        if columns == 1 { Card(.panelList) { leading } }
-                        if let bundle = state.review {
-                            head(bundle)
-                            facts(bundle)
-                            evidence
-                            decision(bundle)
-                        } else {
-                            placeholder.frame(minHeight: 260)
+            let beside = geometry.size.width >= 760
+            Scrolling {
+                VStack(alignment: .leading, spacing: 14) {
+                    CoreBanners(connection: state.connection,
+                                missing: state.reportsDetail ? nil : ("Decisions", "decisions"))
+                    if beside {
+                        HStack(alignment: .top, spacing: 14) {
+                            leading.frame(width: min(340, max(280, geometry.size.width * 0.3)))
+                            detail
                         }
-                        if columns < 3 { trailing.padding(.top, 6) }
+                    } else {
+                        leading
+                        detail
                     }
-                    .padding(EdgeInsets(top: 18, leading: 22, bottom: 24, trailing: 22))
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                if columns == 3 { panel(edge: .leading, width: 300) { trailing.padding(14) } }
+                .padding(EdgeInsets(top: 6, leading: 10, bottom: 14, trailing: 12))
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        // The field names the loaded document, also when a row loaded it.
-        .onChange(of: state.review?.subject) { _, subject in
-            if let subject { identity = subject }
         }
         .confirmationDialog(dialog?.title ?? "", isPresented: Binding(get: { dialog != nil }, set: { if !$0 { confirming = nil } }),
                             titleVisibility: .visible) {
@@ -286,315 +395,241 @@ struct ApprovalInboxView: View {
     }
 
     private var dialog: (title: String, message: String, confirm: String, keep: String)? {
-        guard let confirming, let bundle = state.review else { return nil }
-        return ApprovalInboxState.confirmation(confirming, bundle)
+        guard let confirming, case .document(let d)? = state.chosen?.subject else { return nil }
+        return ApprovalInboxState.confirmation(confirming, d)
     }
 
-    private func panel(edge: Alignment, width: CGFloat, @ViewBuilder _ content: @escaping () -> some View) -> some View {
-        Scrolling(content: content)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(theme.sidebar)
-            .overlay(alignment: edge) { Rectangle().fill(theme.sidebarEdge).frame(width: 1) }
-            .frame(width: width)
-    }
+    // MARK: Leading column
 
-    @ViewBuilder
-    private var banners: some View {
-        switch state.link {
-        case .lost:
-            Banner(.danger, title: "Jojo core isn't responding",
-                   message: "Showing the last known state, read-only. No actions can be requested.")
-        case .incompatible:
-            Banner(.danger, title: "Jojo core speaks another protocol version",
-                   message: "Read-only. No actions can be requested.")
-        case .connected, .starting:
-            EmptyView()
-        }
-        if state.admissionClosed {
-            Banner(.danger, title: "Execution admission is closed",
-                   message: "No new attempt starts until you review the inspection. Documents can still be decided.") {
-                Button("Open Recovery Center") { actions.open(.recoveryCenter) }.buttonStyle(.jojo(.secondary, compact: true))
-            }
-        }
-    }
-
-    private var placeholder: some View {
-        StateBlock(symbol: "tray", title: "No document loaded",
-                   message: "Choose a document in the list, or load one by its identity. Its review bundle is shown here, and you approve, reject or revoke exactly that revision.")
-    }
-
-    // MARK: Leading panel
-
-    @ViewBuilder
     private var leading: some View {
-        if let list = state.list { reported(list) } else { snapshotList }
-    }
-
-    /// Protocol 1.6: what waits for the human first, then every other document.
-    private func reported(_ list: DocumentList) -> some View {
-        let others = list.documents.filter { $0.approval != "Pending" }
-        return VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Waiting for you · \(list.pending)")
-                HStack(spacing: 6) {
-                    InputField(prompt: "Document identity (32 hex)", text: $identity, mono: true, submit: { actions.load(identity) })
-                    Button("Load") { actions.load(identity) }.buttonStyle(.jojo(.secondary, compact: true))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                ChoiceCapsule(options: [(InboxFilter.pending.rawValue, "Pending \(state.pending)"), (InboxFilter.all.rawValue, "All")],
+                              selection: state.filter.rawValue, label: "Status") {
+                    actions.filter(InboxFilter(rawValue: $0) ?? .pending)
                 }
-            }
-            .padding(EdgeInsets(top: 12, leading: 16, bottom: 8, trailing: 12))
-            if list.pending == 0 {
-                Text("Nothing waits for your decision.").textStyle(.secondary).foregroundStyle(theme.text3)
-                    .padding(.horizontal, 18).padding(.bottom, 6)
-            }
-            VStack(spacing: 2) {
-                ForEach(list.waiting) { document in item(document) }
-                ForEach(list.candidates) { candidate in item(candidate) }
-            }
-            if !others.isEmpty {
-                SectionHeading("Documents · \(others.count)")
-                    .padding(EdgeInsets(top: 14, leading: 16, bottom: 6, trailing: 12))
-                VStack(spacing: 2) {
-                    ForEach(others) { document in item(document) }
+                Spacer(minLength: 0)
+                Menu {
+                    ForEach(InboxType.allCases) { t in Button(t.rawValue) { actions.type(t) } }
+                } label: {
+                    Text(state.type.rawValue).font(.system(size: 12, weight: .medium))
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(theme.glassStrong, in: Capsule())
+                .accessibilityLabel("Filter by type")
             }
-            VStack(alignment: .leading, spacing: 8) {
-                Footnote("Approvals are type-specific. There is no approve-all.")
-                if list.more { Footnote("Only the newest documents are listed; load an older one by its identity.") }
-                Footnote("A candidate is accepted or rejected on Verification & Evidence.")
-            }
-            .padding(.vertical, 14)
-            .padding(.horizontal, 16)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func item(_ document: DocumentSummary) -> some View {
-        let loaded = document.id == state.review?.subject
-        let (status, label) = ApprovalInboxState.tag(document)
-        return Button { actions.load(document.id) } label: {
-            RequestRow(kind: document.kindName, age: shortAge(document.created, now: state.now),
-                       title: document.title ?? document.featureName ?? document.kindName, detail: "rev \(document.revision)", status: loaded && state.stale ? .stale : status,
-                       statusLabel: loaded && state.stale ? nil : label, symbol: ApprovalInboxState.symbol(document.kind),
-                       awaiting: document.approval == "Pending", selected: loaded)
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .help("Document \(document.id)")
-        .accessibilityAddTraits(loaded ? .isSelected : [])
-    }
-
-    private func item(_ candidate: PendingCandidate) -> some View {
-        Button { actions.candidate(candidate.id) } label: {
-            RequestRow(kind: "Candidate", age: shortAge(candidate.validated, now: state.now),
-                       title: candidate.title ?? candidate.key ?? ApprovalInboxState.short(candidate.id),
-                       detail: candidate.featureName ?? "host validation passed", status: .proposed,
-                       statusLabel: "Needs decision", symbol: "checkmark.seal", awaiting: true)
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .help("Attempt \(candidate.id): open it on Verification & Evidence")
-    }
-
-    /// An older helper: the snapshot's documents, by identity.
-    private var snapshotList: some View {
-        let documents = state.documents
-        return VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Documents · \(documents.count)")
-                HStack(spacing: 6) {
-                    InputField(prompt: "Document identity (32 hex)", text: $identity, mono: true, submit: { actions.load(identity) })
-                    Button("Load") { actions.load(identity) }.buttonStyle(.jojo(.secondary, compact: true))
-                }
-            }
-            .padding(EdgeInsets(top: 12, leading: 16, bottom: 8, trailing: 12))
-            if documents.isEmpty {
-                Text("The snapshot lists no documents.").textStyle(.secondary).foregroundStyle(theme.text3)
-                    .padding(.horizontal, 18)
-            } else {
-                VStack(spacing: 2) {
-                    ForEach(documents) { document in item(document) }
-                }
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Footnote("Approvals are type-specific. There is no approve-all.")
-                Footnote("The core does not report which documents wait for approval, nor their names, places or ages. Documents are listed by identity.")
-            }
-            .padding(.vertical, 14)
-            .padding(.horizontal, 16)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func item(_ document: ApprovalInboxState.Document) -> some View {
-        let loaded = document.id == state.review?.subject
-        return Button { actions.load(document.id) } label: {
-            RequestRow(kind: document.kind, title: ApprovalInboxState.short(document.id), mono: true,
-                       detail: "record \(ApprovalInboxState.short(document.record))",
-                       status: loaded && state.stale ? .stale : nil, symbol: document.symbol, selected: loaded)
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .help("Document \(document.id). The core's record: \(document.record)")
-        .accessibilityAddTraits(loaded ? .isSelected : [])
-    }
-
-    // MARK: Main column
-
-    private func head(_ bundle: ReviewBundle) -> some View {
-        let kind = ApprovalInboxState.kind(bundle)
-        return VStack(alignment: .leading, spacing: 6) {
-            WrappingRow(spacing: 8, lineSpacing: 6) {
-                RequestTile(symbol: kind.symbol, awaiting: bundle.priorDecision == nil, size: 22)
-                Text("\(state.summary?.kindName ?? kind.name) · \(kind.approval)").textStyle(.secondary).foregroundStyle(theme.text2)
-                ReviewMark(state: state, bundle: bundle)
-            }
-            Text(ApprovalInboxState.title(bundle, state.summary)).font(.system(size: 20, weight: .bold)).tracking(-0.4)
-                .foregroundStyle(theme.textStrong).help("Document \(bundle.subject)")
-            Text("bundle \(ApprovalInboxState.short(bundle.hash))").textStyle(.mono).foregroundStyle(theme.text3)
-                .help("Bundle digest \(bundle.hash)")
+            list
+            policy
+            recent
         }
     }
 
-    private func facts(_ bundle: ReviewBundle) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Card(.panelList) {
-                VStack(spacing: 0) {
-                    FactLine("Requested action",
-                             "Approve, reject or revoke exactly this revision. A decision binds every digest below; the core refuses it if any of them changed.")
-                    FactLine("Why approval", ApprovalInboxState.kind(bundle).why)
-                    if let summary = state.summary {
-                        FactLine("Feature", summary.featureName ?? "Not reported")
-                        FactLine("Requested", clockTime(summary.created, now: state.now) ?? "Not reported")
-                        if let author = summary.author { FactLine("Written by", author == "Model" ? "The lead agent" : "A human") }
-                    }
-                    FactLine("Revision", "\(bundle.revision)")
-                    FactLine("Content") { digest(bundle.contentHash) }
-                    FactLine("Displayed") { digest(bundle.displayedHash) }
-                    FactLine("Context") { digest(bundle.contextHash) }
-                    FactLine("Upstream approvals", ApprovalInboxState.upstream(bundle))
-                    FactLine("Latest decision", ApprovalInboxState.latestDecision(bundle, state.summary, now: state.now))
-                    FactLine("Staleness", last: true) {
+    @ViewBuilder
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if state.type == .external {
+                NotReported("Push and pull request approvals are not available yet: they arrive with M5.")
+                    .padding(10)
+            } else if state.list == nil {
+                NotReported("This core does not list what waits.").padding(10)
+            } else if state.items.isEmpty {
+                QuietCard(state.filter == .pending ? "Nothing waits for you." : "No requests yet.")
+            }
+            ForEach(state.items) { item in
+                SelectableRow(selected: item.id == state.chosen?.id, action: { actions.select(item) }) {
+                    Circle().fill(item.dot.color).frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 8) {
-                            if state.requested {
-                                OperationalPill(.requested)
-                                Text("a decision was sent · waiting for the core").foregroundStyle(theme.text3)
-                            } else if state.stale {
-                                DocumentTag(.stale)
-                                Text("a decision was sent or refused · reload before deciding again").foregroundStyle(theme.text3)
-                            } else {
-                                EvidencePill(.passed, label: "Current")
-                                Text("as loaded · the core checks again when you decide").foregroundStyle(theme.text3)
-                            }
+                            Text(item.kind).textStyle(.secondary).foregroundStyle(theme.text3).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(state.age(item)).textStyle(.secondary).foregroundStyle(theme.text3)
                         }
+                        Text(item.title).textStyle(.bodyStrong).lineLimit(1)
+                        Text(state.place(item)).textStyle(.secondary).foregroundStyle(theme.text2).lineLimit(1)
                     }
                 }
             }
-            Footnote(state.summary == nil
-                     ? "Not reported: the document's name and text, its feature and repository, what it affects, its risks, and the time of the request."
-                     : "Not reported: the document's text, its repository, what it affects and its risks.")
-                .padding(.horizontal, 2)
         }
     }
 
-    private func digest(_ value: String) -> some View {
-        Text(value).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+    /// The decisions in force, as the board's card states them.
+    private var policy: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            GroupLabel("Approval policy")
+            HStack { Text("Push and PR").textStyle(.body); Spacer(); OperationalPill("Separate approvals", tone: .neutral) }
+            HStack { Text("Approvals expire").textStyle(.body); Spacer(); OperationalPill("On content change", tone: .neutral) }
+            HStack { Text("Approve all").textStyle(.body); Spacer(); OperationalPill("Never", tone: .neutral) }
+        }
+        .padding(12)
+        .cardElevation(radius: 14)
     }
 
-    private var evidence: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Supporting evidence")
-            NoticeWell("No supporting evidence is reported. The core gives the digests of the document, not its text, a comparison with the earlier revision or its validation.")
+    private var recent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                GroupLabel("Recently decided")
+                Spacer()
+                TextLink("History") { actions.open(.activity) }.font(.system(size: 12))
+            }
+            .padding(EdgeInsets(top: 10, leading: 12, bottom: 4, trailing: 12))
+            if state.decisions.isEmpty {
+                NotReported(state.decisionsLoad == .loading ? "Reading…" : "No decision recorded yet.").padding(12)
+            }
+            ForEach(state.decisions.prefix(6)) { d in
+                HStack(spacing: 8) {
+                    Text("\(documentCode(d.kind)) rev \(d.revision)\(d.featureName.map { " · \($0)" } ?? "")")
+                        .textStyle(.body).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    let pill = ApprovalInboxState.decisionPill(d)
+                    OperationalPill(pill.0, tone: pill.1)
+                    Text(d.at.map { $0.formatted(.dateTime.month(.abbreviated).day()) } ?? "")
+                        .textStyle(.secondary).foregroundStyle(theme.text3).frame(width: 46, alignment: .trailing)
+                }
+                .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+            }
+        }
+        .cardElevation(radius: 14)
+    }
+
+    // MARK: Detail
+
+    @ViewBuilder
+    private var detail: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            switch state.chosen?.subject {
+            case .document(let d)?: document(d)
+            case .candidate(let c)?: candidate(c)
+            case nil:
+                Placeholder(symbol: "tray", tile: Palette.purple, title: "Nothing waits for you",
+                            message: "Requirements, decisions, plans and candidates appear here when they need your decision.") { EmptyView() }
+            }
+        }
+        .padding(EdgeInsets(top: 24, leading: 28, bottom: 28, trailing: 28))
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .cardElevation(radius: 18)
+    }
+
+    private func head(sub: String, title: String, mono: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(sub).textStyle(.secondary).foregroundStyle(theme.text2)
+                Text(title).font(.system(size: 26, weight: .bold)).tracking(-0.5)
+                Text(mono).textStyle(.mono).foregroundStyle(theme.text2).textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            OperationalPill(state.status.0, tone: state.status.1)
         }
     }
 
-    private func decision(_ bundle: ReviewBundle) -> some View {
+    private func document(_ d: DocumentSummary) -> some View {
+        let kind = ApprovalInboxState.kind(d.kind)
+        let item = InboxItem(subject: .document(d))
+        let digest = state.detail?.id == d.id ? state.detail?.revisions.first { $0.revision == d.revision }?.digest : nil
+        let previous = state.detail?.id == d.id ? state.detail?.previous : nil
+        return VStack(alignment: .leading, spacing: 20) {
+            head(sub: "\(kind.name) · \(state.place(item))", title: item.title,
+                 mono: digest.map { "sha256 \(SpecificationsView.shortDigest($0))" } ?? "document \(ApprovalInboxState.short(d.id))")
+            if d.stale {
+                TintedNotice(tone: .warn, title: "This request is stale",
+                             message: "An earlier revision was decided; rev \(d.revision) is the one to review now.") { EmptyView() }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                GroupLabel("Requested action").padding(.horizontal, -4)
+                Text(ApprovalInboxState.action(d)).font(.system(size: 16, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+            }
+            DefinitionCard(rows: [
+                Definition(key: "Why approval", value: kind.why),
+                Definition(key: "Affected", value: state.affected(d), mono: true,
+                           pill: state.repository(item).map { ($0, .neutral) }),
+                Definition(key: "Risk and side effects", value: "Not reported"),
+                Definition(key: "Staleness", value: d.stale ? "an earlier revision was decided" : "checked by core \(boardTime(state.now, now: state.now) ?? "")",
+                           pill: d.stale ? ("Stale", .warn) : ("Current", .ok)),
+            ], keyWidth: 130)
+            VStack(alignment: .leading, spacing: 6) {
+                GroupLabel("Supporting evidence").padding(.horizontal, -4)
+                VStack(spacing: 0) {
+                    if let previous {
+                        evidenceRow("Diff rev \(previous.revision) → \(d.revision)") { actions.compare(d.id) }
+                    }
+                    if d.kind == "Prd" {
+                        let findings = state.detail?.id == d.id ? state.detail?.findings?.count ?? 0 : 0
+                        evidenceRow(findings == 0 ? "Validation: no findings" : "Validation: \(findings) findings") { actions.open(.specifications) }
+                    }
+                    evidenceRow("The document in Specifications") { actions.open(.specifications) }
+                    evidenceRow("Questions and answers in Feature Chat") { actions.open(.featureChat) }
+                }
+                .cardElevation(radius: 14)
+            }
+            decisionBar(d, kind: kind, previous: previous)
+        }
+    }
+
+    private func evidenceRow(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.text.magnifyingglass").foregroundStyle(theme.text2)
+                Text(title).textStyle(.body).frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(theme.text3)
+            }
+            .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func decisionBar(_ d: DocumentSummary, kind: ApprovalInboxState.Kind, previous: DocumentRevision?) -> some View {
         let blocked = state.decideBlocked
-        return VStack(alignment: .leading, spacing: 10) {
-            if state.stale {
-                Banner(.warning, title: "This review is stale",
-                       message: "A decision was sent or refused for this revision. Reload the document before deciding again; nothing is resent.") {
-                    Button("Reload") { actions.load(bundle.subject) }.buttonStyle(.jojo(.secondary, compact: true))
-                        .disabled(state.link != .connected)
-                }
+        return FlowRow(spacing: 10) {
+            if d.approval == "Approved" {
+                Button("Revoke…") { confirming = .Revoke }.buttonStyle(.jojo(.secondary))
+                    .disabled(blocked != nil).help(blocked ?? "Records that this revision is no longer approved.")
+            } else {
+                Button(kind.approve) { actions.decide(.Approve) }.buttonStyle(.jojo(.primary))
+                    .disabled(blocked != nil).help(blocked ?? "Records your approval of this exact revision.")
+                Button("Request Changes") { actions.requestChanges(d) }.buttonStyle(.jojo(.secondary))
+                    .disabled(d.feature == nil)
+                Button("Reject…") { confirming = .Reject }.buttonStyle(.jojo(.ghost))
+                    .disabled(blocked != nil).help(blocked ?? "Records your decision to reject this revision.")
             }
-            WrappingRow(spacing: 8, lineSpacing: 8) {
-                Button(ApprovalInboxState.kind(bundle).approve) { actions.decide(.Approve) }.buttonStyle(.jojo(.primary))
-                Button("Reject…") { confirming = .Reject }.buttonStyle(.jojo(.destructive))
-                Button("Revoke Approval…") { confirming = .Revoke }.buttonStyle(.jojo(.destructive))
+            if previous != nil {
+                TextLink("Compare Revisions") { actions.compare(d.id) }
             }
-            .disabled(blocked != nil)
-            if state.requested {
-                RequestedNotice(text: "Sent to core · waiting for confirmation. Nothing is shown as approved until the core records it.")
-            } else if let blocked {
-                DisabledReason(blocked).fixedSize(horizontal: false, vertical: true)
-            }
+            Text(state.decisionOutstanding ? "Sent to core · waiting for confirmation. Nothing is shown as approved until the core records it."
+                 : "Approving sends a request. The core checks validity again before recording it.")
+                .font(.system(size: 11)).foregroundStyle(theme.text2).frame(maxWidth: 260, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassPanel(radius: 18)
     }
 
-    // MARK: Trailing panel
-
-    private var trailing: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Approval policy")
-                Card(.panelList) {
-                    VStack(spacing: 0) {
-                        ValueLine("Approval kinds", "Spec, plan, push, PR")
-                        ValueLine("Approve all", "None")
-                        ValueLine("Approvals expire", "On content change")
-                        ValueLine("Push", "Not available yet")
-                        ValueLine("Pull request", "Not available yet", last: true)
-                    }
-                }
-                Footnote("Push and pull request approvals belong to milestone M5. The core has no such command and reports no such request.")
-                    .padding(.horizontal, 2)
+    private func candidate(_ c: PendingCandidate) -> some View {
+        let item = InboxItem(subject: .candidate(c))
+        return VStack(alignment: .leading, spacing: 20) {
+            head(sub: "Candidate · \(state.place(item))", title: item.title,
+                 mono: "attempt \(ApprovalInboxState.short(c.id)) · receipt event \(c.receipt)")
+            VStack(alignment: .leading, spacing: 6) {
+                GroupLabel("Requested action").padding(.horizontal, -4)
+                Text("Accept this candidate so the plan can integrate it, or reject it.")
+                    .font(.system(size: 16, weight: .medium)).fixedSize(horizontal: false, vertical: true)
             }
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Candidate decision")
-                Card(.panel) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Accept and reject of a candidate are on Verification & Evidence.")
-                            .textStyle(.body).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
-                        if let c = state.candidate {
-                            FactGrid {
-                                Fact("Attempt") { identifier(c.attempt) }
-                                Fact("Candidate") {
-                                    if let digest = c.candidate { identifier(digest) } else { missing("None") }
-                                }
-                                Fact("Validation") { EvidencePill(VerificationState.evidence(c.validation)) }
-                                Fact("Decision", VerificationState.decision(c))
-                            }
-                        } else {
-                            missing("No attempt result is loaded.")
-                        }
-                        Button("Open Verification & Evidence") { actions.open(.verification) }
-                            .buttonStyle(.jojo(.secondary, compact: true))
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
+            DefinitionCard(rows: [
+                Definition(key: "Why approval", value: "Host validation passed. Only a person accepts a candidate; Jojo never does."),
+                Definition(key: "Affected", value: "", pill: state.repository(item).map { ($0, .neutral) } ?? ("Repository not reported", .neutral)),
+                Definition(key: "Risk and side effects", value: "Not reported"),
+                Definition(key: "Validated", value: boardTime(c.validated, now: state.now) ?? "Not reported", pill: ("Passed", .ok)),
+            ], keyWidth: 130)
+            FlowRow(spacing: 10) {
+                Button("Open in Verification") { actions.candidate(c.id) }.buttonStyle(.jojo(.primary))
+                Text("Accept and Reject are on Verification & Evidence, beside the validation they rest on.")
+                    .font(.system(size: 11)).foregroundStyle(theme.text2).frame(maxWidth: 300, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Recently decided") {
-                    Button("Approval History") { actions.open(ApprovalInboxState.historyScreen) }
-                        .buttonStyle(.jojo(.secondary, compact: true))
-                }
-                Group {
-                    Footnote("Decisions already made are not listed: the core reports only the event of the latest decision on the loaded document.")
-                    Footnote(ApprovalInboxState.historyNote("Approval History"))
-                }
-                .padding(.horizontal, 2)
-            }
-            Footnote("Approving sends a request. The core checks validity again before recording it.")
-                .padding(.horizontal, 2)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassPanel(radius: 18)
         }
-    }
-
-    private func identifier(_ identity: String) -> some View {
-        Text(ApprovalInboxState.short(identity)).textStyle(.mono).foregroundStyle(theme.text).help(identity)
-    }
-
-    private func missing(_ words: String) -> some View {
-        Text(words).textStyle(.meta).foregroundStyle(theme.text3)
     }
 }

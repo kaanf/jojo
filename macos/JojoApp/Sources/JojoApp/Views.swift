@@ -10,13 +10,14 @@ struct MainView: View {
     @State private var range = DashboardRange.today
     @State private var newFeatureProject: String?
     @State private var exportingTranscript = false
+    @State private var specificationMode = SpecificationMode.document
 
     var body: some View {
         Themed {
             AppShell(model: model, screen: $screen, showInspector: { delegate.showAuxiliary() },
                      controls: controls,
                      primary: screen == .dashboard ? AnyView(NewFeatureButton(newFeature: newFeature)) : nil,
-                     heading: featureHeading) {
+                     heading: featureHeading ?? screenHeading) {
                 VStack(alignment: .leading, spacing: 8) {
                     QuitBanner(model: model).padding(EdgeInsets(top: 20, leading: 20, bottom: 0, trailing: 20))
                     ZStack(alignment: .topLeading) {
@@ -28,7 +29,14 @@ struct MainView: View {
                         shown(.dashboard) { DashboardScreen(model: model, visible: screen == .dashboard, range: range, open: { screen = $0 }) }
                         shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
                         shown(.agentRuns) { AgentRunsScreen(model: model, visible: screen == .agentRuns, open: { screen = $0 }) }
-                        shown(.approvalInbox) { ApprovalInboxScreen(model: model, open: { screen = $0 }) }
+                        shown(.approvalInbox) {
+                            ApprovalInboxScreen(model: model, visible: screen == .approvalInbox, open: { screen = $0 },
+                                                compare: { document in
+                                                    specificationMode = .compare
+                                                    model.workspace.loadReview(document)
+                                                    screen = .specifications
+                                                })
+                        }
                         shown(.featureChat) {
                             FeatureChatScreen(model: model, visible: screen == .featureChat, project: $newFeatureProject,
                                               exporting: $exportingTranscript, open: { screen = $0 })
@@ -37,7 +45,10 @@ struct MainView: View {
                         shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
                         shown(.settings) { SettingsScreen(model: model, visible: screen == .settings) }
                         shown(.sourceControl) { SourceControlScreen(model: model, open: { screen = $0 }) }
-                        shown(.specifications) { SpecificationsScreen(model: model, open: { screen = $0 }) }
+                        shown(.specifications) {
+                            SpecificationsScreen(model: model, visible: screen == .specifications, mode: $specificationMode,
+                                                 open: { screen = $0 })
+                        }
                         shown(.verification) { VerificationScreen(model: model, open: { screen = $0 }) }
                         shown(.projects) { ProjectsScreen(model: model, visible: screen == .projects) }
                     }
@@ -73,9 +84,43 @@ struct MainView: View {
                                         turns: workspace.chat?.feature == feature ? workspace.chat?.turns ?? [] : [])
     }
 
+    /// The feature screens of step 4 name the held feature in their sub line
+    /// ("Sample › FT-3 Slugify › Specifications"); Specifications is titled by its document.
+    private var screenHeading: (title: String, subtitle: String)? {
+        let workspace = model.workspace
+        let scope = FeatureScope(workspace: workspace)
+        switch screen {
+        case .specifications:
+            let state = SpecificationsState(connection: model.client.connection, admission: workspace.admission,
+                                            scope: scope, documents: workspace.documents, detail: workspace.document)
+            return (state.title, scope.place("Specifications"))
+        case .approvalInbox:
+            let pending = workspace.documents?.pending ?? 0
+            return (screen.title, "\(pending) pending · no approve-all")
+        case .executionPlan, .verification:
+            return (screen.title, scope.place(nil))
+        case .agentRuns:
+            return (screen.title, scope.place("attempts"))
+        case .sourceControl:
+            return (screen.title, scope.place(workspace.attemptDetail?.key))
+        default:
+            return nil
+        }
+    }
+
     /// The shown screen's header controls: the Dashboard's time range, a chat's spike and
-    /// export buttons.
+    /// export buttons, a feature screen's buttons.
     private var controls: AnyView? {
+        if screen == .specifications {
+            return AnyView(HStack(spacing: 10) {
+                SegmentedCapsule(selection: $specificationMode, label: "View")
+                HeaderButtons(buttons: [HeaderButton(title: "Approval History") { screen = .approvalInbox },
+                                        HeaderButton(title: "Affected Tasks") { screen = .executionPlan }])
+            })
+        }
+        if screen == .approvalInbox {
+            return AnyView(HeaderButtons(buttons: [HeaderButton(title: "Approval History") { screen = .activity }]))
+        }
         if screen == .dashboard { return AnyView(SegmentedCapsule(selection: $range, label: "Time range")) }
         if screen == .featureChat, model.workspace.chatFeature != nil {
             return AnyView(ChatHeaderActions(export: { exportingTranscript = true }))

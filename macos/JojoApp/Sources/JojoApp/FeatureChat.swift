@@ -328,6 +328,12 @@ struct FeatureChatScreen: View {
         }
         .onAppear { if visible { read() } }
         .onChange(of: visible) { read(); if visible { workspace.loadChat() } }
+        // "Request Changes" on Specifications prepares a note for the lead.
+        .onChange(of: workspace.chatDraft) {
+            guard let draft = workspace.chatDraft else { return }
+            message = draft
+            workspace.chatDraft = nil
+        }
         .onChange(of: workspace.snapshotSeq) { if visible { read(); workspace.loadChat() } }
         .onChange(of: workspace.chatFeature) {
             read()
@@ -502,23 +508,8 @@ struct FeatureChatView: View {
 
     // MARK: Lifecycle
 
-    /// The lifecycle card of COMPONENTS.md, section 2.1, from the core's stages (1.7), with
-    /// the feature's counts after it.
-    private var lifecycle: some View {
-        HStack(spacing: 14) {
-            LifecycleStepper(stages: state.summary?.stages)
-            if let s = state.summary {
-                HStack(spacing: 6) {
-                    if s.running > 0 { OperationalPill("\(s.running) running", tone: .info) }
-                    if s.blocked > 0 { OperationalPill("\(s.blocked) blocked", tone: .danger) }
-                    if s.awaiting > 0 { OperationalPill("\(s.awaiting) awaiting approval", tone: .warn) }
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
-        .cardElevation(radius: 14)
-    }
+    /// The lifecycle card of COMPONENTS.md, section 2.1 (`LifecycleCard`, section 28).
+    private var lifecycle: some View { LifecycleCard(summary: state.summary) }
 
     // MARK: Conversation
 
