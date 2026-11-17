@@ -358,6 +358,7 @@ struct ApprovalInboxScreen: View {
 
 struct ApprovalInboxView: View {
     @Environment(\.theme) private var theme
+    @Environment(\.offscreen) private var offscreen
     let state: ApprovalInboxState
     var actions = ApprovalInboxActions()
     /// The decision the confirmation dialog asks about: Reject or Revoke.
@@ -409,13 +410,20 @@ struct ApprovalInboxView: View {
                     actions.filter(InboxFilter(rawValue: $0) ?? .pending)
                 }
                 Spacer(minLength: 0)
-                Menu {
-                    ForEach(InboxType.allCases) { t in Button(t.rawValue) { actions.type(t) } }
-                } label: {
-                    Text(state.type.rawValue).font(.system(size: 12, weight: .medium))
+                // A menu does not draw off screen; its title stands in for it there.
+                Group {
+                    if offscreen {
+                        Text(state.type.rawValue).font(.system(size: 12, weight: .medium))
+                    } else {
+                        Menu {
+                            ForEach(InboxType.allCases) { t in Button(t.rawValue) { actions.type(t) } }
+                        } label: {
+                            Text(state.type.rawValue).font(.system(size: 12, weight: .medium))
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                    }
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
                 .padding(.horizontal, 12)
                 .frame(height: 32)
                 .background(theme.glassStrong, in: Capsule())

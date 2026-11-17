@@ -399,7 +399,8 @@ struct SpecificationsView: View {
                 Text(detail.title ?? detail.featureName.map { "\($0) · \(documentCode(detail.kind))" } ?? documentCode(detail.kind))
                     .font(.system(size: 28, weight: .bold)).tracking(-0.5)
             }
-            ForEach(SpecificationsState.sections(detail.text)) { section in
+            // The text's own title heads the article; an empty section is left out.
+            ForEach(SpecificationsState.sections(detail.text).filter { !$0.lines.isEmpty }) { section in
                 VStack(alignment: .leading, spacing: 6) {
                     GroupLabel(section.heading).padding(.horizontal, -4)
                     ForEach(Array(section.lines.enumerated()), id: \.offset) { _, line in
@@ -485,9 +486,9 @@ struct SpecificationsView: View {
                 Definition(key: "Authorizes", value: scope.yes),
                 Definition(key: "Does not", value: scope.no),
             ], keyWidth: 84)
-            Button("Approve Revision", action: actions.approve).buttonStyle(.jojo(.primary)).frame(maxWidth: .infinity)
+            Button(action: actions.approve) { Text("Approve Revision").frame(maxWidth: .infinity) }.buttonStyle(.jojo(.primary))
                 .disabled(state.approveBlocked != nil).help(state.approveBlocked ?? "Records your approval of this exact revision.")
-            Button("Request Changes", action: actions.requestChanges).buttonStyle(.jojo(.secondary)).frame(maxWidth: .infinity)
+            Button(action: actions.requestChanges) { Text("Request Changes").frame(maxWidth: .infinity) }.buttonStyle(.jojo(.secondary))
                 .disabled(detail.feature == nil).help("Opens Feature Chat with a note to the lead.")
             Text(state.decisionOutstanding ? "Sent to core · waiting for confirmation. Nothing is shown as approved until the core records it."
                  : "Any edit after approval invalidates it. Approval never carries over to new content.")

@@ -340,7 +340,7 @@ struct FeatureColumns<Leading: View, Main: View, Trailing: View>: View {
                     if width >= wide {
                         HStack(alignment: .top, spacing: 14) {
                             leading.frame(width: leadingWidth)
-                            main.frame(maxWidth: .infinity)
+                            main.frame(minWidth: 0, maxWidth: .infinity)
                             trailing.frame(width: trailingWidth)
                         }
                     } else if width >= medium {

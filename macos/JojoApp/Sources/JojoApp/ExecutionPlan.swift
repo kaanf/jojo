@@ -358,10 +358,11 @@ struct ExecutionPlanView: View {
     }
 
     private func check(_ ok: Bool, _ text: String, warn: Bool = false) -> some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Circle().fill(ok ? theme.green : warn ? theme.orange : theme.red).frame(width: 7, height: 7)
             Text(text).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Main column
@@ -418,7 +419,7 @@ struct ExecutionPlanView: View {
     private func grid(_ detail: PlanDetail) -> some View {
         let steps = state.shown
         let waves = state.waves.filter { w in state.filters.wave == nil || state.filters.wave == w }
-        return TableScrolling(width: 640) {
+        return TableScrolling(width: 560) {
             HStack(alignment: .top, spacing: 10) {
                 Text(state.scope.summary?.repositoryName ?? "repository")
                     .font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(theme.text2)
@@ -444,7 +445,7 @@ struct ExecutionPlanView: View {
                 }
             }
             .padding(14)
-            .frame(minWidth: 640, alignment: .leading)
+            .frame(minWidth: 560, alignment: .leading)
         }
         .cardElevation(radius: 16)
     }

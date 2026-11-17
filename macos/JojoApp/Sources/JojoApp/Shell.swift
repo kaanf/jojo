@@ -137,7 +137,8 @@ struct AppShell<Content: View>: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Sidebar(screen: $screen, status: status, counters: counters)
+            Sidebar(screen: $screen, status: status, counters: counters,
+                    feature: FeatureScope(workspace: model.workspace).summary)
             VStack(spacing: 0) {
                 Header(screen: screen, pending: model.workspace.commandPending,
                        refresh: { model.workspace.refresh() }, showInspector: showInspector,
@@ -165,7 +166,10 @@ struct AppShell<Content: View>: View {
         [.recoveryCenter: SidebarCounter(count: model.workspace.recovery.count, tone: .warn),
          .agentRuns: SidebarCounter(count: AgentRunsState.counter(model.workspace.attempts, rows: model.workspace.rows), tone: .neutral),
          .sourceControl: SidebarCounter(count: SourceControlState.violations(in: model.workspace.changedFiles).count, tone: .warn),
-         .approvalInbox: SidebarCounter(count: Int(model.workspace.documents?.pending ?? 0), tone: .review)]
+         .approvalInbox: SidebarCounter(count: Int(model.workspace.documents?.pending ?? 0), tone: .review),
+         .specifications: SidebarCounter(count: SpecificationsState.proposed(model.workspace.documents,
+                                                                               scope: FeatureScope(workspace: model.workspace)),
+                                         tone: .info)]
     }
 }
 
@@ -180,6 +184,8 @@ struct Sidebar: View {
     @Binding var screen: Screen
     let status: ShellStatus
     let counters: [Screen: SidebarCounter]
+    /// The feature Feature Chat holds, which the feature screens show.
+    var feature: FeatureSummary? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -187,7 +193,7 @@ struct Sidebar: View {
             Spacer().frame(height: 32)
             SearchField().padding(.bottom, 14)
             items(.workspace)
-            FeatureHeading().padding(EdgeInsets(top: 14, leading: 9, bottom: 4, trailing: 9))
+            FeatureHeading(feature: feature).padding(EdgeInsets(top: 14, leading: 9, bottom: 4, trailing: 9))
             items(.feature)
             heading("System")
             items(.system)
@@ -278,20 +284,29 @@ private struct SidebarItem: View {
 /// exists in the helper yet, so it says so instead of showing an example.
 private struct FeatureHeading: View {
     @Environment(\.theme) private var theme
+    let feature: FeatureSummary?
 
     var body: some View {
         HStack(spacing: 7) {
-            Text("–")
+            Text(feature?.projectName?.first.map { String($0).uppercased() } ?? "–")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 16, height: 16)
-                .background(Palette.gray.color, in: RoundedRectangle(cornerRadius: 5))
-            Text("No project · No feature selected")
+                .background(feature == nil ? AnyShapeStyle(Palette.gray.color) : AnyShapeStyle(Palette.gradient(Palette.projectBadge)),
+                            in: RoundedRectangle(cornerRadius: 5))
+            Text(title)
                 .textStyle(.sidebarSection)
                 .foregroundStyle(theme.text3)
                 .lineLimit(1)
         }
-        .help("Projects and features are not available yet.")
+        .help(feature == nil ? "No feature is held. Feature Chat holds one; the screens below show it." : title)
+    }
+
+    /// "Sample · FT-3 Slugify from the shell".
+    private var title: String {
+        guard let feature else { return "No feature selected" }
+        let name = [feature.code, feature.name].compactMap { $0 }.joined(separator: " ")
+        return [feature.projectName, name].compactMap { $0 }.joined(separator: " · ")
     }
 }
 

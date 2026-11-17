@@ -88,34 +88,6 @@ final class S2UserFacingDataTests: XCTestCase {
         XCTAssertEqual(model.documentsLoad, .failed("UnknownType"))
     }
 
-    func test_s2_agent_runs_shows_the_reported_state_and_names_newest_first() throws {
-        let page = try XCTUnwrap(AttemptList(["attempts": .list([
-            OverviewRows.attempt(2, state: "Running"),
-            OverviewRows.attempt(1, state: "Succeeded", title: nil, key: "usage", provider: "Codex", ended: OverviewRows.t0 + 75_000),
-        ]), "next": .null]))
-        let rows = [OverviewRows.id(1), OverviewRows.id(2)].map {
-            SnapshotRow(key: "scheduler_attempt:\($0)", value: "RESERVED", detailComplete: true)
-        }
-        let state = AgentRunsState(connection: .ready(epoch: 1), admission: "Open", attempts: AgentRunsState.attempts(in: rows),
-                                   recovery: [], result: nil, log: [], commandPending: false, summaries: page,
-                                   now: helperDate(OverviewRows.t0 + 90_000)!)
-        let runs = state.runs
-        XCTAssertEqual(runs.map(\.id), [OverviewRows.id(2), OverviewRows.id(1)], "newest first")
-        XCTAssertEqual(runs[0].pill.label, "Running")
-        XCTAssertEqual(runs[0].pill.state, .running)
-        XCTAssertEqual(runs[0].title, "Add the entry point")
-        XCTAssertEqual(runs[0].line, "Slugify from the shell · Claude Code")
-        XCTAssertEqual(runs[0].duration(now: state.now), "1m 30s", "a running attempt counts to now")
-        XCTAssertEqual(runs[1].title, "Step usage", "a step without a title is named by its key")
-        XCTAssertEqual(runs[1].pill.label, "Succeeded")
-        XCTAssertEqual(runs[1].duration(now: state.now), "1m 15s")
-        // An older core: no state is derived, as before.
-        let old = AgentRunsState(connection: .ready(epoch: 1), admission: "Open", attempts: AgentRunsState.attempts(in: rows),
-                                 recovery: [], result: nil, log: [], commandPending: false)
-        XCTAssertEqual(old.runs.map(\.pill.label), ["Not loaded", "Not loaded"])
-        XCTAssertEqual(old.runs[0].title, "Attempt \(OverviewRows.id(1).prefix(8))")
-    }
-
     func test_s2_activity_groups_by_day_and_names_the_actor() throws {
         let row: (Int64, Int64, String) -> JSON = { seq, at, actor in
             .object(["seq": .int(seq), "epoch": .int(2), "type": .text("PlanRunStarted"), "aggregate_kind": .null,
@@ -138,43 +110,12 @@ final class S2UserFacingDataTests: XCTestCase {
         XCTAssertEqual(ActivityState(connection: .ready(epoch: 1), admission: "Open", events: [old], load: .loaded).groups.map(\.title), ["Epoch 3"])
     }
 
-    func test_s2_the_inbox_lists_what_waits_and_the_sidebar_counts_it() throws {
-        let list = try XCTUnwrap(DocumentList(OverviewRows.documents))
-        XCTAssertEqual(ApprovalInboxState.tag(list.waiting[0]).1, "Needs approval")
-        XCTAssertEqual(ApprovalInboxState.tag(DocumentSummary(id: "x", kind: "Prd", approval: "Pending", stale: true)).0, .stale)
-        XCTAssertEqual(ApprovalInboxState.tag(DocumentSummary(id: "x", kind: "Adr", approval: "Rejected")).1, "Rejected")
-        XCTAssertEqual(ApprovalInboxState.tag(DocumentSummary(id: "x", kind: "Adr", approval: "Waiting")).1, "Waiting")
-        let bundle = try XCTUnwrap(ReviewBundle(["subject": .text(OverviewRows.id(2)), "revision": .int(1), "hash": .text("h"),
-                                                 "content_hash": .text("c"), "displayed_hash": .text("d"), "context_hash": .text("x"),
-                                                 "upstream": .list([.int(10)]), "prior_decision": .int(20)]))
-        let state = ApprovalInboxState(connection: .ready(epoch: 1), admission: "Open", rows: [], review: bundle, reviewStale: false,
-                                       decisionOutstanding: false, candidate: nil, list: list)
-        XCTAssertEqual(state.summary?.kind, "Adr")
-        XCTAssertEqual(ApprovalInboxState.title(bundle, state.summary), "Slugify from the shell · Architecture decision rev 1")
-        XCTAssertTrue(ApprovalInboxState.latestDecision(bundle, state.summary, now: helperDate(OverviewRows.t0)!)
-            .hasPrefix("Approved · event 20"))
-        XCTAssertEqual(ApprovalInboxState.latestDecision(bundle), "event 20 · the action is not reported", "an older core")
-    }
-
-    /// Review aid: with JOJO_SNAPSHOT_DIR set, writes the screens that show the 1.6 data in
-    /// both appearances. The rows are test data.
+    /// Review aid: with JOJO_SNAPSHOT_DIR set, writes Activity & Audit with the 1.6 data in
+    /// both appearances (Agent Runs and the Approval Inbox are rendered by their step 4 tests). The rows are test data.
     func test_s2_screens_with_reported_data_render_in_both_appearances() throws {
         let model = AppModel(options: LaunchOptions(), trace: Tracer(nil))
         let directory = ProcessInfo.processInfo.environment["JOJO_SNAPSHOT_DIR"]
         let now = helperDate(OverviewRows.t0 + 90_000)!
-        let list = try XCTUnwrap(DocumentList(OverviewRows.documents))
-        let summaries = try XCTUnwrap(AttemptList(["attempts": .list([
-            OverviewRows.attempt(2, state: "Running"),
-            OverviewRows.attempt(1, state: "Succeeded", title: "Describe the usage", key: "usage", provider: "Codex",
-                                 ended: OverviewRows.t0 + 75_000),
-        ]), "next": .null]))
-        let rows = [OverviewRows.id(1), OverviewRows.id(2)].map {
-            SnapshotRow(key: "scheduler_attempt:\($0)", value: "RESERVED", detailComplete: true)
-        }
-        let runs = AgentRunsState(connection: .ready(epoch: 1), admission: "Open", attempts: AgentRunsState.attempts(in: rows),
-                                  recovery: [], result: nil, log: [], commandPending: false, summaries: summaries, now: now)
-        let inbox = ApprovalInboxState(connection: .ready(epoch: 1), admission: "Open", rows: [], review: nil, reviewStale: false,
-                                       decisionOutstanding: false, candidate: nil, list: list, now: now)
         let events = [("Core", "EngineStarted"), ("Human", "PlanRunStarted"), ("ClaudeCode", "ProviderOutput")].enumerated()
             .compactMap { index, pair in
                 JournalEvent(.object(["seq": .int(Int64(index + 1)), "epoch": .int(2), "type": .text(pair.1), "aggregate_kind": .null,
@@ -184,8 +125,6 @@ final class S2UserFacingDataTests: XCTestCase {
         let activity = ActivityState(connection: .ready(epoch: 1), admission: "Open", events: events, load: .loaded, now: now)
         for (name, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
             let screens: [(String, Screen, AnyView)] = [
-                ("s2-agent-runs", .agentRuns, AnyView(AgentRunsView(state: runs))),
-                ("s2-approval-inbox", .approvalInbox, AnyView(ApprovalInboxView(state: inbox))),
                 ("s2-activity", .activity, AnyView(ActivityView(state: activity))),
             ]
             for (file, screen, view) in screens {

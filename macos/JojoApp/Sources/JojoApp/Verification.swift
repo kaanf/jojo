@@ -341,7 +341,7 @@ struct VerificationView: View {
             OperationalPill(pill.0, tone: pill.1).frame(width: 110, alignment: .leading)
             Text("\(state.files.count - outside) / \(state.files.count)").textStyle(.mono).frame(width: 70, alignment: .leading)
             HStack {
-                Text(outside == 0 ? "Every changed path is inside the approved scope." : "\(outside) paths outside the approved scope.")
+                Text(outside == 0 ? "Every changed path is inside the approved scope." : "\(outside) \(outside == 1 ? "path" : "paths") outside the approved scope.")
                     .font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading)
                 Button("View Changes") { actions.open(.sourceControl) }.buttonStyle(.jojo(.secondary, compact: true))
             }

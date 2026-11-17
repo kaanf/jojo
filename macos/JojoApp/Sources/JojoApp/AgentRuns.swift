@@ -476,7 +476,7 @@ struct AgentRunsView: View {
                 LabeledSection(title: "Checkpoints") { NotReported("The core records stream offsets, not checkpoints of the work.") }
                 LabeledSection(title: "Actions") {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Button("Request Safe Stop") {}.buttonStyle(.jojo(.secondary, compact: true)).disabled(true)
                                 .help("Not available yet: the core has no safe stop.")
                             Button("Cancel Attempt…") { cancelling = a }.buttonStyle(.jojo(.ghost, compact: true))
