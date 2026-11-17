@@ -12,6 +12,7 @@ struct MainView: View {
     @State private var exportingTranscript = false
     @State private var specificationMode = SpecificationMode.document
     @State private var chosenPlan: String?
+    @State private var attemptTab = AttemptTab.timeline
 
     var body: some View {
         Themed {
@@ -29,7 +30,9 @@ struct MainView: View {
                         // A redesigned screen fills the content area and sets its own padding.
                         shown(.dashboard) { DashboardScreen(model: model, visible: screen == .dashboard, range: range, open: { screen = $0 }) }
                         shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
-                        shown(.agentRuns) { AgentRunsScreen(model: model, visible: screen == .agentRuns, open: { screen = $0 }) }
+                        shown(.agentRuns) {
+                            AgentRunsScreen(model: model, visible: screen == .agentRuns, tab: $attemptTab, open: { screen = $0 })
+                        }
                         shown(.approvalInbox) {
                             ApprovalInboxScreen(model: model, visible: screen == .approvalInbox, open: { screen = $0 },
                                                 compare: compare)
@@ -131,6 +134,13 @@ struct MainView: View {
                     if let run = state.run { workspace.controlPlan(run.plan, run.state == "PAUSED" ? "Resume" : "Pause") }
                 },
             ]))
+        }
+        if screen == .agentRuns {
+            return AnyView(HStack(spacing: 10) {
+                HeaderButtons(buttons: [HeaderButton(title: "View Logs") { attemptTab = .logs },
+                                        HeaderButton(title: "Inspect Attempt") { attemptTab = .timeline }])
+                Button("Inspect Recovery") { screen = .recoveryCenter }.buttonStyle(.jojo(.secondary))
+            })
         }
         if screen == .approvalInbox {
             return AnyView(HeaderButtons(buttons: [HeaderButton(title: "Approval History") { screen = .activity }]))

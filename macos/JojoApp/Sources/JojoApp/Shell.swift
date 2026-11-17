@@ -163,7 +163,7 @@ struct AppShell<Content: View>: View {
     /// loaded attempt's changed paths outside the write scope.
     private var counters: [Screen: SidebarCounter] {
         [.recoveryCenter: SidebarCounter(count: model.workspace.recovery.count, tone: .warn),
-         .agentRuns: SidebarCounter(count: AgentRunsState.attempts(in: model.workspace.rows).count, tone: .neutral),
+         .agentRuns: SidebarCounter(count: AgentRunsState.counter(model.workspace.attempts, rows: model.workspace.rows), tone: .neutral),
          .sourceControl: SidebarCounter(count: SourceControlState.violations(in: model.workspace.changedFiles).count, tone: .warn),
          .approvalInbox: SidebarCounter(count: Int(model.workspace.documents?.pending ?? 0), tone: .review)]
     }

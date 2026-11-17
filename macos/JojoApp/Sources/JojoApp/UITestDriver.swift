@@ -155,9 +155,11 @@ final class UITestDriver {
                 // What Agent Runs lists, through the same state it renders.
                 let w = model.workspace
                 let state = AgentRunsState(connection: model.client.connection, admission: w.admission,
-                                           attempts: AgentRunsState.attempts(in: w.rows), recovery: w.recovery,
-                                           result: nil, log: [], commandPending: w.commandPending, repairs: w.repairs)
-                let rows = state.runs.map { "\($0.short)|\($0.pill.label)|\($0.line)|\($0.verdict?.text ?? "-")|\($0.repair?.hold ?? "-")" }
+                                           summaries: w.attempts, snapshot: AgentRunsState.attempts(in: w.rows),
+                                           recovery: w.recovery, repairs: w.repairs, commandPending: w.commandPending)
+                let rows = state.listed.map { a in
+                    "\(a.id.prefix(8))|\(state.pill(a).0)|\(state.line(a))|\(w.repairs?[a.id]?.review?.verdict ?? "-")|\(w.repairs?[a.id]?.hold ?? "-")"
+                }
                 trace("repairs-state load=\(w.repairsLoad) rows=\(rows.joined(separator: " || "))")
             case "sleep": break
             default:

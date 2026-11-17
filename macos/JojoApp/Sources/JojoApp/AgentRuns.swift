@@ -1,253 +1,244 @@
 import JojoCore
 import SwiftUI
 
-// Agent Runs: docs/design/screens/AGENT_RUNS.md. The screen draws only what the helper
-// reports; a part without a source says so.
+// Agent Runs (docs/design/screens/AGENT_RUNS.md), from `AgentRunsMac.dc.html`: the held
+// feature's attempts grouped by task, one attempt's facts, timeline, terminal output,
+// evidence and claims, and in the inspector its session, supervision, workspace,
+// continuation, repair and review, claims and actions. Protocol 1.6 and 1.7 (`Attempts`),
+// 1.5 (`Repairs`) and 1.9 (`AttemptDetail`); the log is `Log` through `loadCandidate`.
 
-/// One attempt as the snapshot reports it: its identity and the core's record texts.
-struct AttemptRecord: Identifiable, Equatable {
-    let id: String
-    var record: String
-    var recordComplete = true
-    /// The worktree record of the same identity, when the snapshot has one.
-    var worktree: String?
+/// Timeline, Logs, Evidence or Claims: the detail's segmented control.
+enum AttemptTab: String, CaseIterable, Identifiable, Sendable {
+    case timeline = "Timeline", logs = "Logs", evidence = "Evidence", claims = "Claims"
+    var id: String { rawValue }
 }
 
-/// Everything the screen reads, as plain values.
+/// What the screen shows. Every value is the helper's answer.
 struct AgentRunsState: Equatable {
     var connection: HelperConnection
     var admission: String
-    /// nil until a snapshot has arrived.
-    var attempts: [AttemptRecord]?
-    var recovery: [RecoveryRow]
-    /// The one result the workspace has loaded; it belongs to the attempt it names.
+    var scope = FeatureScope()
+    /// Protocol 1.6 (1.7): the newest attempts; nil from an older helper.
+    var summaries: AttemptList?
+    /// The snapshot's attempt identities, for an older helper.
+    var snapshot: [String] = []
+    var recovery: [RecoveryRow] = []
+    /// M4: repairs, holds and reviews of plan steps.
+    var repairs: RepairList?
+    /// The chosen attempt.
+    var selected: String?
+    /// Protocol 1.9: the chosen attempt beyond `Attempts`.
+    var detail: AttemptDetail?
+    var detailLoad = PlanLoad.idle
+    /// The loaded result and its log, when they are the chosen attempt's.
     var result: CandidateReview?
-    var log: [String]
-    var commandPending: Bool
-    /// M4: repairs, holds and reviews of plan steps (`Repairs`), while the screen is shown.
-    var repairs: RepairList? = nil
-    /// Protocol 1.6: names, live state and times of the newest attempts (`Attempts`), while
-    /// the screen is shown; nil from an older helper.
-    var summaries: AttemptList? = nil
-    /// The time a running attempt's duration is counted to.
+    var log: [String] = []
+    var commandPending = false
+    var tab = AttemptTab.timeline
+    var search = ""
+    var reportsDetail = true
     var now = Date()
 
-    /// Log records the workspace reads for a loaded result.
     static let logLimit: Int64 = 64
     static let attemptKinds: Set<String> = ["scheduler_attempt", "attempt"]
 
-    /// The snapshot's attempt rows, in its order, each with its worktree record.
-    static func attempts(in rows: [SnapshotRow]) -> [AttemptRecord] {
-        let worktrees = Dictionary(rows.filter { $0.kind == "worktree_admin" }.map { ($0.subject, $0.value) },
-                                   uniquingKeysWith: { first, _ in first })
+    /// The snapshot's attempt identities, in its order.
+    static func attempts(in rows: [SnapshotRow]) -> [String] {
         var seen = Set<String>()
-        return rows.filter { attemptKinds.contains($0.kind) && seen.insert($0.subject).inserted }.map {
-            AttemptRecord(id: $0.subject, record: $0.value, recordComplete: $0.detailComplete, worktree: worktrees[$0.subject])
+        return rows.filter { attemptKinds.contains($0.kind) && seen.insert($0.subject).inserted }.map(\.subject)
+    }
+
+    /// The sidebar counter: live attempts when the core reports them, else the snapshot's.
+    static func counter(_ summaries: AttemptList?, rows: [SnapshotRow]) -> Int {
+        guard let summaries else { return attempts(in: rows).count }
+        return summaries.attempts.filter(\.live).count
+    }
+
+    var link: RecoveryCenterState.Link { coreLink(connection) }
+
+    /// The held feature's attempts, newest first.
+    var listed: [AttemptSummary] {
+        guard let summaries else { return snapshot.map { AttemptSummary(id: $0, state: "Not reported") } }
+        return summaries.attempts.filter { scope.holds($0.feature) }
+    }
+
+    /// The attempts grouped by task, the newest task first, each newest attempt first.
+    var groups: [(task: String, attempts: [AttemptSummary])] {
+        var order: [String] = []
+        var groups: [String: [AttemptSummary]] = [:]
+        for a in listed {
+            let task = Self.task(a)
+            if groups[task] == nil { order.append(task) }
+            groups[task, default: []].append(a)
+        }
+        return order.map { ($0, groups[$0] ?? []) }
+    }
+
+    /// "api · Invite endpoint": a task's key and title.
+    static func task(_ a: AttemptSummary) -> String {
+        [a.key, a.title].compactMap { $0 }.joined(separator: " · ").nonEmpty ?? "A step"
+    }
+
+    var chosen: AttemptSummary? { listed.first { $0.id == selected } ?? listed.first }
+
+    func held(_ id: String) -> RecoveryRow? { recovery.first { $0.attempt == id } }
+
+    /// The attempt's pill: a recovery hold, the step's M4 state, else its lifecycle state.
+    func pill(_ a: AttemptSummary) -> (String, Tone) {
+        if let row = held(a.id) { return row.structured?.processAbsent == true ? ("Confirmed dead", .warn) : ("Unknown", .warn) }
+        switch repairs?[a.id]?.state {
+        case "Repairing": return ("Repairing", .info)
+        case "Reviewing": return ("Reviewing", .info)
+        case "NeedsHuman": return ("Needs human", .danger)
+        default: break
+        }
+        switch a.state {
+        case "Running", "Launching", "Preparing", "Settling", "Reserved": return (a.state, .info)
+        case "Stopping": return ("Stopping", .warn)
+        case "Held", "Unsupervised": return (a.state, .warn)
+        case "Interrupted": return ("Interrupted", .neutral)
+        case "Succeeded": return ("Completed", .ok)
+        case "Failed": return ("Failed", .danger)
+        case "Cancelled": return ("Cancelled", .neutral)
+        // A snapshot attempt of an older helper: nothing about it was read.
+        case "Not reported": return ("Not loaded", .neutral)
+        default: return (a.state, .neutral)
         }
     }
 
-    var link: RecoveryCenterState.Link {
-        switch connection {
-        case .ready: return .connected
-        case .notStarted, .handshaking: return .starting
-        case .incompatible: return .incompatible
-        case .launchFailed, .channelLost, .ended: return .lost
+    /// The second line of a list row: provider and duration, or what settled it.
+    func line(_ a: AttemptSummary) -> String {
+        if held(a.id) != nil { return "Held in Recovery Center" }
+        if let repair = repairs?[a.id] { return [a.featureName, repair.key, repair.counter].compactMap { $0 }.joined(separator: " · ") }
+        if a.live { return [a.provider.map(providerName), elapsedText(from: a.started, to: now)].compactMap { $0 }.joined(separator: " · ") }
+        let validation = a.validation.map { v in v.state == "Passed" ? "validated" : v.state == "Failed" ? "validation failed" : "not validated" }
+        return [a.provider.map(providerName), validation].compactMap { $0 }.joined(separator: " · ").nonEmpty ?? a.state
+    }
+
+    /// "Running · supervised", "Exited · confirmed": the process fact.
+    func process(_ a: AttemptSummary) -> String {
+        if held(a.id) != nil { return "Held · unsupervised" }
+        switch a.state {
+        case "Running": return "Running · supervised"
+        case "Launching", "Preparing", "Reserved": return "\(a.state) · supervised"
+        case "Unsupervised": return "Unsupervised"
+        case "Stopping", "Settling": return "\(a.state)"
+        default: return a.ended == nil ? a.state : "Exited · sealed"
         }
     }
 
-    /// Admission is stated only while the helper is connected and has reported it.
-    var admissionClosed: Bool { link == .connected && !admission.isEmpty && admission != "Open" }
-
-    var loading: Bool { attempts == nil && (link == .connected || link == .starting) }
-
-    /// The snapshot's attempts; newest first when the core reports their order.
-    var runs: [AttemptRun] {
-        let runs = (attempts ?? []).map { record in
-            AttemptRun(record: record, held: recovery.first { $0.attempt == record.id },
-                       result: result?.attempt == record.id ? result : nil, repair: repairs?[record.id],
-                       summary: summaries?[record.id])
-        }
-        guard summaries != nil else { return runs }
-        return runs.enumerated().sorted { a, b in
-            switch (a.element.summary?.order, b.element.summary?.order) {
-            case let (x?, y?): return x > y
-            case (.some, nil): return true
-            case (nil, .some): return false
-            case (nil, nil): return a.offset < b.offset
-            }
-        }.map(\.element)
-    }
-
-    /// Why "Cancel Attempt" cannot be sent, or nil when it can.
-    func cancelBlocked(_ run: AttemptRun) -> String? {
+    func cancelBlocked(_ a: AttemptSummary) -> String? {
         if link != .connected { return "Unavailable: the core is not connected." }
-        if run.held != nil { return "On hold: resolve it in Recovery Center first." }
-        if run.result?.sealed == true { return "The result is already sealed." }
+        if held(a.id) != nil { return "On hold: resolve it in Recovery Center first." }
+        if !a.live { return "The result is already sealed." }
         if commandPending { return "Unavailable while a command awaits the core." }
         return nil
     }
 
-    /// The loaded log of an attempt as console lines; says so when there is none.
-    func console(_ run: AttemptRun) -> [ConsoleLine] {
-        guard let result = run.result else { return [ConsoleLine(id: 0, text: "Not loaded.")] }
+    /// The loaded log as lines, filtered by the search; says so when there is none.
+    var console: [ConsoleLine] {
+        guard let result, result.attempt == chosen?.id else { return [ConsoleLine(id: 0, text: "Reading the log…")] }
         if result.logRecords == 0 { return [ConsoleLine(id: 0, text: "No log records.")] }
-        if log.isEmpty { return [ConsoleLine(id: 0, text: "Reading the log records…")] }
-        var lines = log.enumerated().map { ConsoleLine(id: $0.offset, text: $0.element) }
+        let needle = search.trimmingCharacters(in: .whitespaces).lowercased()
+        var lines = log.enumerated().filter { needle.isEmpty || $0.element.lowercased().contains(needle) }
+            .map { ConsoleLine(id: $0.offset, text: $0.element) }
         if result.logRecords > Self.logLimit {
-            lines.append(ConsoleLine(id: lines.count, text: "… (\(result.logRecords - Self.logLimit) later records are not loaded)",
+            lines.append(ConsoleLine(id: log.count, text: "… (\(result.logRecords - Self.logLimit) later records are not loaded)",
                                      kind: .status(.warn)))
         }
         return lines
     }
-}
 
-/// One attempt with what else is known about it: a recovery hold, a loaded result.
-struct AttemptRun: Identifiable, Equatable {
-    let record: AttemptRecord
-    let held: RecoveryRow?
-    let result: CandidateReview?
-    /// M4: the attempt as a plan step's attempt, when the repairs answer lists it.
-    var repair: AttemptRepair? = nil
-    /// Protocol 1.6: what the core reports about the attempt.
-    var summary: AttemptSummary? = nil
-
-    var id: String { record.id }
-    /// The first eight characters of the identity.
-    var short: String { String(record.id.prefix(8)) }
-    /// The task's title, else its key, else the identity.
-    var title: String { summary?.title ?? summary?.key.map { "Step \($0)" } ?? "Attempt \(short)" }
-
-    /// How long it ran: to its end, or to `now` while it runs.
-    func duration(now: Date) -> String? {
-        guard let started = summary?.started else { return nil }
-        let end = summary?.ended ?? (summary?.live == true ? now : nil)
-        guard let end else { return nil }
-        let seconds = Int(max(0, end.timeIntervalSince(started)))
-        return seconds < 60 ? "\(seconds)s" : seconds < 3600 ? "\(seconds / 60)m \(seconds % 60)s"
-            : "\(seconds / 3600)h \(seconds / 60 % 60)m"
-    }
-    var processGone: Bool { held?.structured?.processAbsent == true }
-    var recordText: String { record.record + (record.recordComplete ? "" : " … (partial)") }
-
-    /// Since 1.6 the core reports the lifecycle state of an attempt. From an older helper
-    /// "Running" is never derived: an attempt without a sealed result may be running,
-    /// starting or stopped.
-    var pill: (state: OperationalState, label: String) {
-        if held != nil { return (.recoveryRequired, processGone ? "Confirmed dead" : "Unknown") }
-        // M4: the step's state, as the core derives it, for the step's newest attempt.
-        switch repair?.state {
-        case "Repairing": return (.repairing, "Repairing")
-        case "Reviewing": return (.running, "Reviewing")
-        case "NeedsHuman": return (.blocked, "Needs human")
-        default: break
-        }
-        if let summary {
-            switch summary.state {
-            case "Running", "Launching", "Preparing", "Settling": return (.running, summary.state)
-            case "Reserved": return (.waiting, "Reserved")
-            case "Stopping": return (.paused, "Stopping")
-            case "Held", "Unsupervised", "Interrupted": return (.recoveryRequired, summary.state)
-            case "Succeeded": return (.completed, "Succeeded")
-            case "Failed": return (.failed, "Failed")
-            default: return (.idle, summary.state)
-            }
-        }
-        guard let result else { return (.idle, "Not loaded") }
-        guard result.sealed else { return (.idle, "Not sealed") }
-        switch result.outcome {
-        case "Succeeded": return (.completed, "Succeeded")
-        case "Failed": return (.failed, "Failed")
-        case "Interrupted": return (.recoveryRequired, "Interrupted")
-        default: return (.idle, result.outcome.isEmpty ? "Sealed" : result.outcome)
-        }
+    /// The tone of a timeline event's dot.
+    static func tone(_ e: AttemptEvent) -> Tone {
+        let kind = e.kind
+        if kind.contains("Failed") || kind.contains("Refused") || kind.contains("Lost") || kind.contains("Rejected") { return .danger }
+        if kind.contains("Hold") || kind.contains("Unknown") || kind.contains("Stop") { return .warn }
+        return .ok
     }
 
-    /// Second line of the list item.
-    var line: String {
-        if held != nil { return "Held in Recovery Center" }
-        if let repair { return [summary?.featureName, repair.key, repair.counter].compactMap { $0 }.joined(separator: " · ") }
-        if let summary {
-            return [summary.featureName, summary.provider.map(providerName)].compactMap { $0 }.joined(separator: " · ")
+    /// Where the attempt came from: a recovery continuation, a repair, or a fresh start.
+    var provenance: String {
+        guard let detail else { return "Not reported" }
+        if let from = detail.continues { return "Fresh continuation of attempt \(ApprovalInboxState.short(from)) after a recovery. History not replayed." }
+        if let repair = chosen.flatMap({ repairs?[$0.id] }), let ordinal = repair.ordinal {
+            return "Repair \(ordinal) of \(repair.limit ?? 2): a new attempt whose prompt carries the failure."
         }
-        guard let result else { return "Scheduler record: \(record.record)" }
-        guard result.sealed else { return "No sealed result yet" }
-        return result.reason.isEmpty ? "No reason recorded" : result.reason
-    }
-
-    /// The records the app holds for the attempt, in lifecycle order. They carry no times.
-    var facts: [TimelineEntry] {
-        var entries = [TimelineEntry(text: "Scheduler record: \(recordText)")]
-        if let worktree = record.worktree { entries.append(TimelineEntry(text: "Worktree record: \(worktree)")) }
-        if held != nil {
-            entries.append(TimelineEntry(text: "Held for recovery: " + (processGone ? "every process proven gone" : "process state unknown"),
-                                         tone: .danger))
-        }
-        guard let result else { return entries }
-        guard result.sealed else { return entries + [TimelineEntry(text: "No sealed result yet", tone: .neutral)] }
-        let tone: Tone = result.outcome == "Succeeded" ? .ok : ["Failed", "Interrupted"].contains(result.outcome) ? .danger : .neutral
-        entries.append(TimelineEntry(text: "Result sealed: \(result.outcome)" + (result.reason.isEmpty ? "" : " · \(result.reason)"), tone: tone))
-        if result.validation != .notRun {
-            entries.append(TimelineEntry(text: "Validation: \(result.validation.label)",
-                                         tone: result.validation == .pass ? .ok : result.validation == .fail ? .danger : .neutral))
-        }
-        if result.decision != "NONE" { entries.append(TimelineEntry(text: "Decision: \(result.decision)", tone: .neutral)) }
-        return entries
-    }
-
-    /// M4: the review verdict line and its tone.
-    var verdict: (text: String, tone: Tone)? {
-        guard let review = repair?.review else { return nil }
-        let tone: Tone = switch review.state {
-        case "APPROVED": .ok
-        case "REJECTED": .danger
-        case "RUNNING": .info
-        default: .warn
-        }
-        return (review.verdict, tone)
-    }
-
-    var recoveryStatus: String {
-        guard held != nil else { return "None reported by the last inspection." }
-        return "Held in Recovery Center · " + (processGone ? "every process proven gone" : "process state unknown")
+        if let by = detail.continuedBy { return "Continued by attempt \(ApprovalInboxState.short(by))." }
+        return "A fresh attempt."
     }
 }
 
 struct AgentRunsActions {
-    var load: (String) -> Void = { _ in }
+    var select: (String) -> Void = { _ in }
+    var tab: (AttemptTab) -> Void = { _ in }
+    var search: (String) -> Void = { _ in }
     var cancel: (String) -> Void = { _ in }
     var open: (Screen) -> Void = { _ in }
+    var evidence: (String) -> Void = { _ in }
 }
 
 /// The Agent Runs destination, bound to the app model.
 struct AgentRunsScreen: View {
     @ObservedObject var model: AppModel
-    /// M4: repairs and reviews are read only while this destination is the shown one.
+    /// Attempts, repairs and the chosen attempt are read only while this destination is shown.
     let visible: Bool
+    @Binding var tab: AttemptTab
     let open: (Screen) -> Void
+    @State private var selected: String?
+    @State private var search = ""
 
     var body: some View {
-        let workspace = model.workspace
-        AgentRunsView(
-            state: AgentRunsState(connection: model.client.connection, admission: workspace.admission,
-                                  attempts: workspace.snapshotSeq == nil && workspace.rows.isEmpty
-                                      ? nil : AgentRunsState.attempts(in: workspace.rows),
-                                  recovery: workspace.recovery, result: workspace.candidate, log: workspace.agentLog,
-                                  commandPending: workspace.commandPending, repairs: workspace.repairs,
-                                  summaries: workspace.attempts),
-            actions: AgentRunsActions(load: { workspace.loadCandidate($0) }, cancel: { workspace.cancelAttempt($0) }, open: open))
+        AgentRunsView(state: state, actions: actions)
+            .onAppear { if visible { read() } }
             .onChange(of: visible) {
-                workspace.repairsShown = visible
-                if visible {
-                    workspace.loadRepairs()
-                    workspace.loadAttempts()
-                }
+                model.workspace.repairsShown = visible
+                if visible { read() }
             }
-            .onChange(of: workspace.snapshotSeq) {
-                if visible {
-                    workspace.loadRepairs()
-                    workspace.loadAttempts()
-                }
+            .onChange(of: model.workspace.snapshotSeq) { if visible { read() } }
+            .onChange(of: selected) { if visible { read() } }
+            .onChange(of: model.workspace.focusAttempt) {
+                if let focus = model.workspace.focusAttempt { selected = focus; model.workspace.focusAttempt = nil }
             }
+            .onChange(of: model.workspace.attempts) { if visible { read() } }
+    }
+
+    private var state: AgentRunsState {
+        let workspace = model.workspace
+        let chosen = selected ?? workspace.focusAttempt
+        return AgentRunsState(
+            connection: model.client.connection, admission: workspace.admission, scope: FeatureScope(workspace: workspace),
+            summaries: workspace.attempts, snapshot: AgentRunsState.attempts(in: workspace.rows), recovery: workspace.recovery,
+            repairs: workspace.repairs, selected: chosen, detail: workspace.attemptDetail, detailLoad: workspace.attemptDetailLoad,
+            result: workspace.candidate, log: workspace.agentLog, commandPending: workspace.commandPending, tab: tab,
+            search: search, reportsDetail: model.client.hello.map { $0.queries.contains("AttemptDetail") } ?? true)
+    }
+
+    /// The attempts and repairs; the chosen attempt's detail and, when it changes, its result
+    /// and log.
+    private func read() {
+        let workspace = model.workspace
+        workspace.repairsShown = true
+        workspace.loadFeatures()
+        workspace.loadRepairs()
+        workspace.loadAttempts()
+        guard let chosen = state.chosen, Identity.valid(chosen.id) else { return }
+        workspace.loadAttemptDetail(chosen.id)
+        if workspace.candidate?.attempt != chosen.id || chosen.live { workspace.loadCandidate(chosen.id) }
+    }
+
+    private var actions: AgentRunsActions {
+        let workspace = model.workspace
+        return AgentRunsActions(
+            select: { selected = $0 },
+            tab: { tab = $0 },
+            search: { search = $0 },
+            cancel: { workspace.cancelAttempt($0) },
+            open: open,
+            evidence: { attempt in
+                workspace.loadCandidate(attempt)
+                open(.verification)
+            })
     }
 }
 
@@ -255,30 +246,28 @@ struct AgentRunsView: View {
     @Environment(\.theme) private var theme
     let state: AgentRunsState
     var actions = AgentRunsActions()
-    @State private var selected: String?
-    @State private var cancelling: AttemptRun?
+    @State private var cancelling: AttemptSummary?
 
-    init(state: AgentRunsState, actions: AgentRunsActions = AgentRunsActions(), selected: String? = nil) {
-        self.state = state
-        self.actions = actions
-        _selected = State(initialValue: selected)
-    }
+    static let cancelSentence =
+        "Asks the core to stop the attempt and record it as cancelled. It counts as cancelled only after the core seals a result."
 
     var body: some View {
-        let runs = state.runs
-        Group {
-            if let current = runs.first(where: { $0.id == selected }) ?? runs.first {
-                columns(runs, current)
-            } else {
-                VStack(alignment: .leading, spacing: 16) {
-                    banners
-                    placeholder.frame(minHeight: 260)
-                }
-                .padding(EdgeInsets(top: 14, leading: 18, bottom: 18, trailing: 18))
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
+                CoreBanners(connection: state.connection, missing: state.reportsDetail ? nil : ("AttemptDetail", "attempt details"))
+                LifecycleCard(summary: state.scope.summary)
+            }
+            .padding(.horizontal, 10)
+            FeatureColumns(leadingWidth: 240, trailingWidth: 310, wide: 1040, medium: 760) {
+                list
+            } main: {
+                detail
+            } trailing: {
+                inspector
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .confirmationDialog(cancelling.map { "Cancel \($0.title)?" } ?? "",
+        .padding(.top, 6)
+        .confirmationDialog(cancelling.map { "Cancel \(AgentRunsState.task($0))?" } ?? "",
                             isPresented: Binding(get: { cancelling != nil }, set: { if !$0 { cancelling = nil } }),
                             titleVisibility: .visible) {
             if let cancelling {
@@ -290,322 +279,219 @@ struct AgentRunsView: View {
         }
     }
 
-    static let cancelSentence =
-        "Asks the core to stop the attempt and record it as cancelled. It counts as cancelled only after the core seals a result."
-
-    private func columns(_ runs: [AttemptRun], _ current: AttemptRun) -> some View {
-        GeometryReader { geometry in
-            // Three columns only while the detail keeps at least 440.
-            let wide = geometry.size.width >= 960
-            HStack(spacing: 0) {
-                panel(edge: .trailing) { list(runs, current) }.frame(width: 240)
-                Scrolling {
-                    VStack(alignment: .leading, spacing: 16) {
-                        banners
-                        detail(current)
-                        if !wide { Card(.panelList) { inspector(current) } }
-                    }
-                    .padding(EdgeInsets(top: 14, leading: 18, bottom: 18, trailing: 18))
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                if wide {
-                    InspectorPanel(width: 280) { Scrolling { inspector(current) } }
-                        .padding(EdgeInsets(top: 0, leading: 4, bottom: 8, trailing: 8))
-                }
-            }
-        }
-    }
-
-    private func panel(edge: Alignment, @ViewBuilder _ content: () -> some View) -> some View {
-        content()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(theme.sidebar)
-            .overlay(alignment: edge) { Rectangle().fill(theme.sidebarEdge).frame(width: 1) }
-    }
-
-    @ViewBuilder
-    private var banners: some View {
-        switch state.link {
-        case .lost:
-            Banner(.danger, title: "Jojo core isn't responding",
-                   message: "Showing the last known state, read-only. No actions can be requested.")
-        case .incompatible:
-            Banner(.danger, title: "Jojo core speaks another protocol version",
-                   message: "Read-only. No actions can be requested.")
-        case .connected, .starting:
-            EmptyView()
-        }
-        if state.admissionClosed {
-            Banner(.danger, title: "Execution admission is closed",
-                   message: "No new attempt starts until you review the inspection.") {
-                Button("Open Recovery Center") { actions.open(.recoveryCenter) }.buttonStyle(.jojo(.secondary, compact: true))
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var placeholder: some View {
-        if state.loading {
-            LoadingBlock("Loading attempts…")
-        } else if state.attempts == nil {
-            StateBlock(symbol: "play.circle", title: "No snapshot was loaded",
-                       message: "The core stopped answering before it reported its attempts.")
-        } else {
-            StateBlock(symbol: "play.circle", title: "No attempts yet",
-                       message: "An attempt appears here when an approved plan step is started.") {
-                Button("Open Execution Plan") { actions.open(.executionPlan) }.buttonStyle(.jojo(.secondary, compact: true))
-            }
-        }
-    }
-
     // MARK: List
 
-    private func list(_ runs: [AttemptRun], _ current: AttemptRun) -> some View {
-        Scrolling {
-            VStack(alignment: .leading, spacing: 0) {
-                SectionHeading("Attempts · \(runs.count)")
-                    .padding(EdgeInsets(top: 14, leading: 16, bottom: 4, trailing: 14))
-                VStack(spacing: 2) {
-                    ForEach(runs) { run in item(run, selected: run.id == current.id) }
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            GroupLabel(state.scope.summary.map { "Attempts · \($0.code)" } ?? "Attempts").padding(.horizontal, 6)
+            if state.listed.isEmpty {
+                NotReported(state.summaries == nil && state.snapshot.isEmpty ? "Reading…" : "No attempts yet.").padding(10)
+            }
+            ForEach(state.groups, id: \.task) { group in
+                Text(group.task).textStyle(.label).foregroundStyle(theme.text3).lineLimit(1)
+                    .padding(EdgeInsets(top: 8, leading: 10, bottom: 2, trailing: 10))
+                ForEach(group.attempts) { a in
+                    SelectableRow(selected: a.id == state.chosen?.id, action: { actions.select(a.id) }) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text("Attempt \(a.ordinal ?? 1)").textStyle(.bodyStrong).frame(maxWidth: .infinity, alignment: .leading)
+                                let pill = state.pill(a)
+                                OperationalPill(pill.0, tone: pill.1)
+                            }
+                            Text(state.line(a)).textStyle(.secondary).foregroundStyle(theme.text2).lineLimit(1)
+                        }
+                    }
                 }
-                Footnote(state.summaries == nil
-                         ? "Tasks, features and lifecycle stages are not reported by this core. Attempts are listed by identity."
-                         : "Attempts newest first, named by their plan step. An imported plan's steps have no names.")
-                    .padding(EdgeInsets(top: 12, leading: 18, bottom: 14, trailing: 16))
             }
         }
-    }
-
-    private func item(_ run: AttemptRun, selected isSelected: Bool) -> some View {
-        Button { selected = run.id } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Text(run.summary == nil ? run.short : run.title).textStyle(.controlStrong).foregroundStyle(theme.text)
-                        .lineLimit(1).truncationMode(.tail)
-                    Spacer(minLength: 0)
-                    OperationalPill(run.pill.state, label: run.pill.label)
-                }
-                Text(run.line).textStyle(.meta).foregroundStyle(theme.text3).lineLimit(1)
-            }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? theme.accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(isSelected ? theme.info.opacity(0.4) : .clear, lineWidth: 1))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     // MARK: Detail
 
     @ViewBuilder
-    private func detail(_ run: AttemptRun) -> some View {
-        Text(run.title).font(.system(size: 17, weight: .semibold)).tracking(-0.17).foregroundStyle(theme.textStrong)
-        VStack(alignment: .leading, spacing: 8) {
-            Card(.panel) {
-                WrappingRow(spacing: 28, lineSpacing: 14) {
-                    LabeledField("Attempt") { identifier(run.id) }
-                    LabeledField("State") { OperationalPill(run.pill.state, label: run.pill.label) }
-                    if let summary = run.summary {
-                        LabeledField("Feature") { value(summary.featureName ?? "None", known: summary.featureName != nil) }
-                        LabeledField("Provider") {
-                            value(summary.provider.map(providerName) ?? "Not started", known: summary.provider != nil)
-                        }
-                        LabeledField("Started") {
-                            value(clockTime(summary.started, now: state.now) ?? "Not started", known: summary.started != nil)
-                        }
-                        LabeledField("Duration") {
-                            value(run.duration(now: state.now) ?? "—", known: run.duration(now: state.now) != nil)
-                        }
+    private var detail: some View {
+        if let a = state.chosen {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(a.key ?? "Step") · Attempt \(a.ordinal ?? 1)").textStyle(.secondary).foregroundStyle(theme.text2)
+                        Text(a.title ?? "A step").font(.system(size: 22, weight: .bold)).fixedSize(horizontal: false, vertical: true)
                     }
-                    LabeledField("Scheduler record") { value(run.recordText) }
-                    LabeledField("Worktree record") { value(run.record.worktree ?? "None reported", known: run.record.worktree != nil) }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    let pill = state.pill(a)
+                    OperationalPill(pill.0, tone: pill.1)
+                }
+                SegmentedCapsule(selection: Binding(get: { state.tab }, set: { actions.tab($0) }), label: "Attempt view")
+                FactStrip(facts: [
+                    ("Attempt", ApprovalInboxState.short(a.id), true),
+                    ("Process", state.process(a), false),
+                    ("Started", boardTime(a.started, now: state.now) ?? "Not started", false),
+                    ("Duration", elapsedText(from: a.started, to: a.ended ?? (a.live ? state.now : nil)) ?? "—", false),
+                    ("Base commit", state.detail?.base.map { String($0.prefix(7)) } ?? "Not reported", true),
+                ])
+                switch state.tab {
+                case .timeline:
+                    timeline
+                    terminal(lines: 8)
+                case .logs: terminal(lines: nil)
+                case .evidence: evidence(a)
+                case .claims: claims
                 }
             }
-            Footnote(run.summary == nil ? "Start time, duration and base commit are not reported by this core."
-                                        : "The base commit is not reported yet.")
-        }
-        if let repair = run.repair { planStep(repair, verdict: run.verdict) }
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Recorded facts")
-            Card(CardShape(radius: 10, vertical: 8, horizontal: 14)) { Timeline(run.facts) }
-            Footnote("Events and their times are not reported per attempt yet. These are the core's records in lifecycle order.")
-        }
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Terminal output") {
-                if let result = run.result, result.logRecords > 0 {
-                    Text("\(state.log.count) of \(result.logRecords) records").textStyle(.meta).foregroundStyle(theme.text3)
-                }
+            .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .cardElevation(radius: 18)
+        } else {
+            Placeholder(symbol: "play.rectangle", tile: Palette.blue, title: "No attempts yet",
+                        message: "An attempt appears here when a plan step starts.") {
+                Button("Open Execution Plan") { actions.open(.executionPlan) }.buttonStyle(.jojo(.secondary, compact: true))
             }
-            Console(state.console(run))
+            .frame(maxWidth: .infinity)
+            .padding(24)
+            .cardElevation(radius: 18)
         }
     }
 
-    /// M4: the attempt as a step of a plan run: its repair counter, review and hold.
-    private func planStep(_ repair: AttemptRepair, verdict: (text: String, tone: Tone)?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Plan step")
-            Card(.panel) {
-                VStack(alignment: .leading, spacing: 12) {
-                    WrappingRow(spacing: 28, lineSpacing: 14) {
-                        LabeledField("Step") { value(repair.key) }
-                        LabeledField("Repair") { value(repair.counter.prefix(1).uppercased() + repair.counter.dropFirst()) }
-                        LabeledField("Review") {
-                            if let verdict {
-                                Text(verdict.text).textStyle(.control).foregroundStyle(theme.foreground(verdict.tone))
-                            } else {
-                                value("Not reviewed", known: false)
-                            }
+    @ViewBuilder
+    private var timeline: some View {
+        LabeledSection(title: "Event timeline") {
+            if let events = state.detail?.events, !events.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(events.enumerated()), id: \.offset) { index, e in
+                        HStack(spacing: 10) {
+                            Circle().fill(index == events.count - 1 && state.chosen?.live == true ? theme.accent
+                                          : theme.foreground(AgentRunsState.tone(e))).frame(width: 8, height: 8)
+                            Text(e.summary).font(.system(size: 13)).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(e.at.map { $0.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).second(.twoDigits)) } ?? "")
+                                .textStyle(.mono).foregroundStyle(theme.text2)
                         }
-                    }
-                    if let failure = repair.failure {
-                        LabeledField("Why it was repaired") { value(failure) }
-                    }
-                    if let notes = repair.review?.notes, !notes.isEmpty {
-                        LabeledField("Reviewer's notes") { value(notes) }
-                    }
-                    if let objection = repair.review?.objection {
-                        LabeledField("Strongest objection") { value(objection) }
-                    }
-                    if let hold = repair.hold {
-                        NoticeWell("Waits for you: \(hold)")
+                        .padding(.vertical, 7)
+                        .overlay(alignment: .top) { if index > 0 { Rectangle().fill(theme.sep).frame(height: 0.5) } }
                     }
                 }
+                .padding(.horizontal, 14).padding(.vertical, 4)
+                .cardElevation(radius: 14)
+            } else {
+                NotReported(state.detailLoad == .loading ? "Reading…" : "No events recorded about this attempt.")
             }
-            Footnote("A failed step is repaired at most twice, then waits for you. A review approves nothing; you accept or reject on Verification & Evidence.")
         }
     }
 
-    private func identifier(_ text: String) -> some View {
-        Text(text).textStyle(.mono).foregroundStyle(theme.text).textSelection(.enabled)
+    private func terminal(lines: Int?) -> some View {
+        let all = state.console
+        let shown = lines.map { Array(all.suffix($0)) } ?? all
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                GroupLabel("Terminal output")
+                Spacer()
+                LineField(prompt: "Search output", size: 12, text: Binding(get: { state.search }, set: { actions.search($0) }))
+                    .frame(width: 160, height: 26)
+                    .padding(.horizontal, 10)
+                    .background(theme.glassStrong, in: Capsule())
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(shown) { line in
+                    Text(line.text).font(.system(size: 12, design: .monospaced)).foregroundStyle(RGBA(0xD6D9E4).color)
+                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                }
+            }
+            .padding(EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16))
+            .background(RGBA(0x15161B).color, in: RoundedRectangle(cornerRadius: 14))
+        }
     }
 
-    private func value(_ text: String, known: Bool = true) -> some View {
-        Text(text).textStyle(.control).foregroundStyle(known ? theme.text : theme.text3)
+    @ViewBuilder
+    private func evidence(_ a: AttemptSummary) -> some View {
+        LabeledSection(title: "Host validation runs", link: ("View Evidence", { actions.evidence(a.id) })) {
+            if let runs = state.detail?.validations, !runs.isEmpty {
+                DefinitionCard(rows: runs.map { r in
+                    Definition(key: "V-\(r.ordinal)", value: boardTime(r.at, now: state.now) ?? "",
+                               pill: r.passed ? ("Passed", .ok) : ("Failed", .danger))
+                }, keyWidth: 60)
+            } else {
+                NotReported("No host validation of this attempt yet.")
+            }
+            Text("Evidence records: \(state.detail?.evidenceRecords ?? 0)").textStyle(.secondary).foregroundStyle(theme.text2)
+        }
+    }
+
+    @ViewBuilder
+    private var claims: some View {
+        LabeledSection(title: "Resource claims") {
+            if let claims = state.detail?.claims, !claims.isEmpty {
+                DefinitionCard(rows: claims.map { Definition(key: $0.mode.lowercased(), value: $0.resource, mono: true,
+                                                             pill: ($0.state.capitalized, $0.state == "ACTIVE" ? .info : .neutral)) },
+                               keyWidth: 70)
+            } else {
+                NotReported("No claims recorded for this attempt.")
+            }
+        }
     }
 
     // MARK: Inspector
 
-    private func inspector(_ run: AttemptRun) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Agent attempt").font(.system(size: 11, weight: .medium)).foregroundStyle(theme.text3)
-                Text(run.title).textStyle(.inspectorTitle).foregroundStyle(theme.textStrong)
-                OperationalPill(run.pill.state, label: run.pill.label, standalone: true)
-            }
-            .padding(EdgeInsets(top: 14, leading: 16, bottom: 12, trailing: 16))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .bottom) { Rectangle().fill(theme.hairline).frame(height: 1) }
-            InspectorSection("Supervision") {
-                FactGrid {
-                    Fact("State") { OperationalPill(run.pill.state, label: run.pill.label) }
-                    if let summary = run.summary {
-                        Fact("Provider", summary.provider.map(providerName) ?? "Not started")
-                        Fact("Started", clockTime(summary.started, now: state.now) ?? "Not started")
-                        if let ended = clockTime(summary.ended, now: state.now) { Fact("Ended", ended) }
+    private var inspector: some View {
+        GlassInspector {
+            if let a = state.chosen {
+                let d = state.detail
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Agent attempt · \(a.key ?? "step")").textStyle(.secondary).foregroundStyle(theme.text2)
+                    Text(a.id).font(.system(size: 13, weight: .bold, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                LabeledSection(title: "Provider session") {
+                    DefinitionCard(rows: [
+                        Definition(key: "Provider", value: a.provider.map(providerName) ?? "Not launched"),
+                        Definition(key: "Session", value: d?.session ?? "Not reported", mono: d?.session != nil),
+                        Definition(key: "Resumable", value: "No: each attempt is a fresh run"),
+                        Definition(key: "Executable", value: d?.executableVersion ?? "Not reported"),
+                    ], keyWidth: 86)
+                }
+                LabeledSection(title: "Process supervision") {
+                    DefinitionCard(rows: [
+                        Definition(key: "State", value: state.process(a)),
+                        Definition(key: "PID", value: d?.pid.map(String.init) ?? "Not reported", mono: d?.pid != nil),
+                        Definition(key: "Process group", value: d?.pgid.map(String.init) ?? "Not reported", mono: d?.pgid != nil),
+                        Definition(key: "Liveness", value: d?.heartbeat.map { "Heartbeat \(boardTime($0, now: state.now) ?? "")" } ?? "Not reported"),
+                    ], keyWidth: 86)
+                }
+                LabeledSection(title: "Workspace") {
+                    DefinitionCard(rows: [
+                        Definition(key: "Worktree", value: d?.worktree ?? "Not reported", mono: d?.worktree != nil),
+                        Definition(key: "Repository", value: a.repositoryName ?? "Not reported"),
+                    ], keyWidth: 86)
+                }
+                LabeledSection(title: "Continuation") {
+                    DefinitionCard(rows: [Definition(key: "Provenance", value: state.provenance)], keyWidth: 86)
+                }
+                if let repair = state.repairs?[a.id] {
+                    LabeledSection(title: "Repair and review") {
+                        DefinitionCard(rows: [
+                            Definition(key: "Repairs", value: repair.counter),
+                            Definition(key: "Review", value: repair.review?.verdict ?? "None"),
+                            Definition(key: "Hold", value: repair.hold ?? "None"),
+                        ], keyWidth: 86)
                     }
-                    if let repair = run.repair { Fact("Repair", repair.counter) }
-                    if let verdict = run.verdict { Fact("Review", verdict.text) }
-                    Fact("Scheduler record", run.recordText)
-                    Fact("Worktree record", run.record.worktree ?? "None reported")
                 }
-            }
-            InspectorSection("Execution evidence") { evidence(run) }
-            InspectorSection("Recovery status") {
-                Text(run.recoveryStatus).textStyle(.control).foregroundStyle(theme.text2)
-                    .fixedSize(horizontal: false, vertical: true)
-                if run.held != nil {
-                    Button("Inspect Recovery") { actions.open(.recoveryCenter) }.buttonStyle(.jojo(.secondary, compact: true))
+                LabeledSection(title: "Checkpoints") { NotReported("The core records stream offsets, not checkpoints of the work.") }
+                LabeledSection(title: "Actions") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Button("Request Safe Stop") {}.buttonStyle(.jojo(.secondary, compact: true)).disabled(true)
+                                .help("Not available yet: the core has no safe stop.")
+                            Button("Cancel Attempt…") { cancelling = a }.buttonStyle(.jojo(.ghost, compact: true))
+                                .disabled(state.cancelBlocked(a) != nil).help(state.cancelBlocked(a) ?? Self.cancelSentence)
+                        }
+                        Text("Safe stop is not available yet. Cancel stops the whole process group and keeps the worktree.")
+                            .font(.system(size: 11)).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+                    .cardElevation(radius: 12)
+                    Text("A stopped process is not a successful attempt. Exit is recorded only when the OS confirms it.")
+                        .font(.system(size: 11)).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            InspectorSection("Actions") { stop(run) }
-            InspectorSection("Not reported yet", last: true) {
-                Text(run.summary == nil
-                     ? "Provider and session, PID and process group, liveness, start and stop times, worktree path, branch, base commit, continuation, resource claims and checkpoints."
-                     : "Session, PID and process group, worktree path, branch, base commit, continuation, resource claims and checkpoints.")
-                    .textStyle(.meta).foregroundStyle(theme.text3).lineSpacing(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func evidence(_ run: AttemptRun) -> some View {
-        if let result = run.result {
-            FactGrid {
-                Fact("Result") { resultPill(result) }
-                Fact("Provider said", result.providerTerminal.isEmpty ? "Nothing" : result.providerTerminal)
-                Fact("Log", "\(result.logRecords) records")
-                Fact("Candidate") {
-                    if let digest = result.candidate { identifier(String(digest.prefix(12))) } else { Text("None").font(.system(size: 12.5)) }
-                }
-                Fact("Validation") { validationPill(result.validation) }
-                Fact("Decision", result.decision)
-            }
-            HStack(spacing: 6) {
-                Button("View Evidence") { actions.open(.verification) }.buttonStyle(.jojo(.secondary, compact: true))
-                    .help("Opens Verification & Evidence, which shows this loaded attempt.")
-                Button("Reload") { actions.load(run.id) }.buttonStyle(.jojo(.ghost, compact: true))
-                    .disabled(state.link != .connected)
-            }
-        } else {
-            Text("The result of this attempt is not loaded. One result is loaded at a time; Verification & Evidence shows the same one.")
-                .textStyle(.meta).foregroundStyle(theme.text2).lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-            Button { actions.load(run.id) } label: { Label("Load Result", systemImage: "arrow.down.circle") }
-                .buttonStyle(.jojo(.secondary, compact: true))
-                .disabled(state.link != .connected)
-                .help("Reads the sealed result, the validation and the first log records of this attempt.")
-        }
-    }
-
-    @ViewBuilder
-    private func resultPill(_ result: CandidateReview) -> some View {
-        if !result.sealed {
-            EvidencePill(.notRun, label: "Not sealed")
-        } else {
-            switch result.outcome {
-            case "Succeeded": EvidencePill(.passed, label: "Succeeded")
-            case "Failed": EvidencePill(.failed, label: "Failed")
-            case "Interrupted": EvidencePill(.incomplete, label: "Interrupted")
-            default: EvidencePill(.notRun, label: result.outcome.isEmpty ? "Sealed" : result.outcome)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func validationPill(_ verdict: ValidationVerdict) -> some View {
-        switch verdict {
-        case .pass: EvidencePill(.passed)
-        case .fail: EvidencePill(.failed)
-        case .notRun: EvidencePill(.notRun)
-        case .unknown: EvidencePill(.unknown)
-        }
-    }
-
-    @ViewBuilder
-    private func stop(_ run: AttemptRun) -> some View {
-        let blocked = state.cancelBlocked(run)
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Button {} label: { Label("Request Safe Stop", systemImage: "stop.circle") }
-                    .buttonStyle(.jojo(.secondary))
-                    .disabled(true)
-                DisabledReason("The core has no safe-stop command yet.")
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                Button { cancelling = run } label: { Label("Cancel Attempt…", systemImage: "xmark.circle") }
-                    .buttonStyle(.jojo(.destructive))
-                    .disabled(blocked != nil)
-                    .help(blocked ?? Self.cancelSentence)
-                if let blocked { DisabledReason(blocked) } else { Footnote(Self.cancelSentence) }
-            }
-            if blocked == nil {
-                NoticeWell("A stopped process is not a successful attempt. Exit is recorded only when the OS confirms it.")
+            } else {
+                NotReported("Choose an attempt.")
             }
         }
     }
