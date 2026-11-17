@@ -51,12 +51,13 @@ final class S2UserFacingDataTests: XCTestCase {
     }
 
     func test_s2_the_new_queries_and_the_attributed_events_are_sent_at_1_6_and_nothing_else_moves() {
-        // Since 1.7 attempts and attributed events are read at 7, where they carry more.
-        XCTAssertEqual(Request.allCases.filter { $0.minor == 6 }, [.ChatIndex, .Documents])
+        // Since 1.7 attempts and attributed events are read at 7, where they carry more; since
+        // 1.10 (M5) the documents at 10, where they list the external requests that wait.
+        XCTAssertEqual(Request.allCases.filter { $0.minor == 6 }, [.ChatIndex])
         XCTAssertEqual(Request.Attempts.fields, ["before"])
         let (h, model) = ready()
         XCTAssertEqual(h.fake.last("Snapshot")?.minor, 1)
-        XCTAssertEqual(h.fake.last("Documents")?.minor, 6, "every snapshot reads the documents for the sidebar counter")
+        XCTAssertEqual(h.fake.last("Documents")?.minor, 10, "every snapshot reads the documents for the sidebar counter")
         XCTAssertEqual(h.fake.last("Documents")?.payload, ["before": .null])
         model.pollEvents()
         XCTAssertEqual(h.fake.last("Events")?.minor, 1, "polling keeps its 1.1 frame")

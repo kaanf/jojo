@@ -202,11 +202,12 @@ public struct PendingCandidate: Equatable, Sendable, Identifiable {
     }
 }
 
-/// The answer of `Documents`: documents newest first, the candidates that wait, and how
-/// many things wait for the human in all.
+/// The answer of `Documents`: documents newest first, the candidates that wait, the push
+/// and pull request requests that wait (1.10), and how many things wait for the human.
 public struct DocumentList: Equatable, Sendable {
     public let documents: [DocumentSummary]
     public let candidates: [PendingCandidate]
+    public let external: [PendingExternal]
     public let pending: Int64
     public let more: Bool
 
@@ -215,15 +216,19 @@ public struct DocumentList: Equatable, Sendable {
               let pending = p["pending"]?.integer else { return nil }
         let documents = items.compactMap(DocumentSummary.init)
         let candidates = waiting.compactMap(PendingCandidate.init)
-        guard documents.count == items.count, candidates.count == waiting.count else { return nil }
-        (self.documents, self.candidates, self.pending) = (documents, candidates, pending)
+        let requests = p["external"]?.items ?? []
+        let external = requests.compactMap(PendingExternal.init)
+        guard documents.count == items.count, candidates.count == waiting.count,
+              external.count == requests.count else { return nil }
+        (self.documents, self.candidates, self.external, self.pending) = (documents, candidates, external, pending)
         more = p["next"]?.integer != nil
     }
 
-    public init(documents: [DocumentSummary], candidates: [PendingCandidate] = [], pending: Int64? = nil,
-                more: Bool = false) {
-        (self.documents, self.candidates, self.more) = (documents, candidates, more)
-        self.pending = pending ?? Int64(documents.filter { $0.approval == "Pending" }.count + candidates.count)
+    public init(documents: [DocumentSummary], candidates: [PendingCandidate] = [],
+                external: [PendingExternal] = [], pending: Int64? = nil, more: Bool = false) {
+        (self.documents, self.candidates, self.external, self.more) = (documents, candidates, external, more)
+        self.pending = pending ?? Int64(documents.filter { $0.approval == "Pending" }.count + candidates.count
+                                        + external.count)
     }
 
     public subscript(document: String) -> DocumentSummary? { documents.first { $0.id == document } }

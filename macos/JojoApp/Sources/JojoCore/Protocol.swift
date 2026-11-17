@@ -18,6 +18,7 @@ public enum Request: String, CaseIterable, Sendable {
     case Attempts, Documents
     case Features
     case Document, Decisions, PlanDetail, AttemptDetail
+    case ExternalActions, RequestExternal, AuthorizeExternal, InspectExternal, ResolveExternal
 
     public var fields: [String] {
         switch self {
@@ -65,6 +66,11 @@ public enum Request: String, CaseIterable, Sendable {
         case .Decisions: return ["before"]
         case .PlanDetail: return ["plan"]
         case .AttemptDetail: return ["attempt"]
+        case .ExternalActions: return ["plan"]
+        case .RequestExternal: return ["plan", "kind"]
+        case .AuthorizeExternal: return ["action", "digest", "decision"]
+        case .InspectExternal: return ["action"]
+        case .ResolveExternal: return ["action"]
         }
     }
 
@@ -79,13 +85,19 @@ public enum Request: String, CaseIterable, Sendable {
     /// its ordinal, repository, validation and newest activity, so attempts are read there.
     /// At 1.8 a feature chat dates its turns and lists the assumptions, so it is read there.
     /// The document, decisions, plan detail and attempt detail queries exist only from 1.9.
+    /// M5's external actions query and its four commands exist only from 1.10, and at 1.10
+    /// the documents answer lists the push and pull request requests that wait, so the
+    /// documents are read there (after every snapshot, for the sidebar counter).
     public var minor: Int64 {
         let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText]
         let runner: [Request] = [.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun]
+        let external: [Request] = [.ExternalActions, .RequestExternal, .AuthorizeExternal, .InspectExternal,
+                                   .ResolveExternal, .Documents]
+        if external.contains(self) { return 10 }
         if [.Document, .Decisions, .PlanDetail, .AttemptDetail].contains(self) { return 9 }
         if self == .FeatureChat { return 8 }
         if [.Features, .Attempts].contains(self) { return 7 }
-        if [.Documents, .ChatIndex].contains(self) { return 6 }
+        if self == .ChatIndex { return 6 }
         if self == .Repairs { return 5 }
         if self == .Executables { return 4 }
         if runner.contains(self) { return 3 }

@@ -2,7 +2,9 @@ import JojoCore
 import SwiftUI
 
 // Recovery Center and launch review: docs/design/screens/RECOVERY_CENTER.md. The screen
-// draws only what the helper reports; a part without a source says so.
+// draws only what the helper reports; a part without a source says so. M5: a push or pull
+// request whose outcome is unknown is held here until the human inspects the remote and
+// decides; it is never sent again.
 
 /// Everything the screen reads, as plain values.
 struct RecoveryCenterState: Equatable {
@@ -19,6 +21,8 @@ struct RecoveryCenterState: Equatable {
     var rows: [RecoveryRow]
     var digest: String
     var commandPending: Bool
+    /// M5 (1.10): issued external actions whose outcome is not known.
+    var external: [ExternalAction] = []
 
     var link: Link {
         switch connection {
@@ -144,20 +148,32 @@ struct RecoveryActions {
     var inspect: () -> Void = {}
     var resolve: (String, RecoveryChoice) -> Void = { _, _ in }
     var start: () -> Void = {}
+    /// M5: reads the remote again for an action; sends nothing.
+    var inspectExternal: (String) -> Void = { _ in }
+    /// M5: marks an inspected action as not performed.
+    var resolveExternal: (String) -> Void = { _ in }
 }
 
 /// The Recovery Center destination, bound to the app model.
 struct RecoveryCenterScreen: View {
     @ObservedObject var model: AppModel
+    /// The external actions (protocol 1.10) are read only while this is the shown screen.
+    var visible = false
 
     var body: some View {
         RecoveryCenterView(
             state: RecoveryCenterState(connection: model.client.connection, admission: model.workspace.admission,
                                        rows: model.workspace.recovery, digest: model.workspace.recoveryDigest,
-                                       commandPending: model.workspace.commandPending),
+                                       commandPending: model.workspace.commandPending,
+                                       external: model.workspace.external?.unresolved ?? []),
             actions: RecoveryActions(inspect: { model.workspace.inspectRecovery() },
                                      resolve: { model.workspace.resolveRecovery($0, $1) },
-                                     start: { model.workspace.startAfterRecovery() }))
+                                     start: { model.workspace.startAfterRecovery() },
+                                     inspectExternal: { model.workspace.inspectExternal($0) },
+                                     resolveExternal: { model.workspace.resolveExternal($0) }))
+            .onAppear { if visible { model.workspace.loadExternalActions() } }
+            .onChange(of: visible) { if visible { model.workspace.loadExternalActions() } }
+            .onChange(of: model.workspace.snapshotSeq) { if visible { model.workspace.loadExternalActions() } }
     }
 }
 
@@ -175,6 +191,8 @@ struct RecoveryCenterView: View {
     /// Findings marked reviewed, and the inspection they were marked on.
     @State private var marks: (digest: String, attempts: Set<String>) = ("", [])
     @State private var confirmation: Confirmation?
+    /// M5: the external action "Mark Not Performed" asks about.
+    @State private var notPerformed: ExternalAction?
 
     init(state: RecoveryCenterState, actions: RecoveryActions = RecoveryActions(), reviewing: Bool = false) {
         self.state = state
@@ -204,6 +222,15 @@ struct RecoveryCenterView: View {
         } message: {
             Text((confirmation?.choice.sentence ?? "") + " The core checks eligibility again.")
         }
+        .alert("Mark this \(notPerformed?.kind == .Push ? "push" : "pull request") as not performed?",
+               isPresented: Binding(get: { notPerformed != nil }, set: { if !$0 { notPerformed = nil } })) {
+            if let action = notPerformed {
+                Button("Mark Not Performed", role: .destructive) { actions.resolveExternal(action.id) }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: {
+            Text("Records that it did not happen, on the strength of your inspection of the remote. A new request can follow; it needs its own authorization.")
+        }
     }
 
     // MARK: Center
@@ -217,6 +244,7 @@ struct RecoveryCenterView: View {
                 Scrolling {
                     VStack(alignment: .leading, spacing: 16) {
                         banners(openReview: true)
+                        if !state.external.isEmpty { externalHeld }
                         detail
                         if !wide { aside }
                     }
@@ -229,6 +257,44 @@ struct RecoveryCenterView: View {
                 }
             }
         }
+    }
+
+    /// M5: issued pushes and pull requests whose outcome is unknown.
+    private var externalHeld: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeading("External actions · \(state.external.count) with unknown outcome")
+            ForEach(state.external) { a in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text(ExternalWords.title(a)).textStyle(.bodyStrong).lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        let pill = ExternalWords.pill(a)
+                        OperationalPill(pill.0, tone: pill.1)
+                    }
+                    DefinitionCard(rows: [
+                        Definition(key: "Remote", value: "\(a.remote) · \(a.url)", mono: true),
+                        Definition(key: "Reference", value: a.kind == .Push ? a.reference : "\(a.branch) → \(a.base ?? "")", mono: true),
+                        Definition(key: "Commit", value: a.commit, mono: true),
+                        Definition(key: "Last seen", value: a.observations.last.map { "\(ExternalWords.observer($0)): \($0.detail)" }
+                                   ?? "Nothing was observed: the helper stopped before the result came back."),
+                    ], keyWidth: 100)
+                    FlowRow(spacing: 10) {
+                        Button("Check Remote") { actions.inspectExternal(a.id) }.buttonStyle(.jojo(.primary, compact: true))
+                            .disabled(!externalActable(a)).help("Reads the remote and records what it shows. Sends nothing.")
+                        Button("Mark Not Performed…") { notPerformed = a }.buttonStyle(.jojo(.secondary, compact: true))
+                            .disabled(!externalActable(a) || !a.observations.contains { $0.observer.hasPrefix("git:ls-remote") || $0.observer.hasPrefix("gh:pr-list") })
+                            .help("Available after the remote was checked.")
+                        Text("Jojo never sends it again by itself.").font(.system(size: 11)).foregroundStyle(theme.text2)
+                    }
+                }
+                .padding(14)
+                .cardElevation(radius: 14)
+            }
+        }
+    }
+
+    private func externalActable(_ a: ExternalAction) -> Bool {
+        state.link == .connected && !state.commandPending && a.state == .Unknown
     }
 
     private func panel(edge: Alignment, @ViewBuilder _ content: () -> some View) -> some View {
@@ -323,6 +389,8 @@ struct RecoveryCenterView: View {
             StateBlock(symbol: "cross.case", title: "No inspection was loaded",
                        message: "The core stopped answering before it reported a recovery inspection.")
                 .frame(minHeight: 260)
+        } else if !state.external.isEmpty {
+            EmptyView()
         } else {
             StateBlock(symbol: "checkmark.circle", title: "Nothing is on hold",
                        message: "The last inspection found no interrupted or unknown work.") {

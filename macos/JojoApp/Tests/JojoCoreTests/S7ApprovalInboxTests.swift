@@ -43,7 +43,7 @@ final class S7ApprovalInboxTests: XCTestCase {
         XCTAssertEqual(state(filter: .all).items.count, 5)
         XCTAssertEqual(state(type: .plans).items.map(\.id), [DetailRows.id(3)])
         XCTAssertEqual(state(type: .specs).items.map(\.id), [DetailRows.id(1), DetailRows.id(8)])
-        XCTAssertTrue(state(type: .external).items.isEmpty, "push and pull request belong to M5")
+        XCTAssertTrue(state(type: .external).items.isEmpty, "these rows hold no push or pull request request (S12 has them)")
         XCTAssertEqual(pending.place(pending.items[1]), "Sample · FT-3")
         XCTAssertEqual(pending.age(pending.items[2]), "Stale")
         XCTAssertEqual(pending.age(pending.items[1]), "5m")

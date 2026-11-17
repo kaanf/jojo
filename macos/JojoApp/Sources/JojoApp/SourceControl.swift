@@ -56,6 +56,10 @@ struct SourceControlState: Equatable {
     /// The chosen file; nil shows the first.
     var chosenFile: String?
     var reportsDetail = true
+    /// M5 (1.10): the plan runs and their push and pull request; the held feature's run.
+    var external: ExternalList?
+    var externalLoad = PlanLoad.idle
+    var commandPending = false
 
     var link: RecoveryCenterState.Link { coreLink(connection) }
 
@@ -154,6 +158,22 @@ struct SourceControlState: Equatable {
     /// The header's last part: the task the candidate belongs to.
     static func placeTail(_ detail: AttemptDetail?) -> String? { detail?.key }
 
+    /// The newest plan run of the held feature (any run when no feature is held).
+    var run: ExternalRun? {
+        external?.runs.first { scope.holds($0.feature) }
+    }
+    var push: ExternalAction? { run.flatMap { external?.newest(.Push, plan: $0.id) } }
+    var pullRequest: ExternalAction? { run.flatMap { external?.newest(.PullRequest, plan: $0.id) } }
+
+    /// Why a request cannot be sent now; nil when it can.
+    func requestBlocked(_ kind: ExternalKind) -> String? {
+        guard external != nil else { return externalLoad == .loading ? "Reading…" : "This core does not report push and pull requests." }
+        guard let run else { return "The feature has no plan run yet. A plan branch is pushed when its run is done." }
+        if link != .connected { return "Unavailable: the core is not connected." }
+        if commandPending { return "Unavailable while a command awaits the core." }
+        return kind == .Push ? run.pushRefusal : run.pullRequestRefusal
+    }
+
     /// Local review, scope, push, pull request and location, as the board's Status card.
     var status: [Definition] {
         let violated = violations.count
@@ -168,9 +188,10 @@ struct SourceControlState: Equatable {
         return [
             Definition(key: "Decision", value: "", pill: review),
             Definition(key: "Scope", value: "", pill: scope),
-            Definition(key: "Push", value: "Not available yet (M5)"),
-            Definition(key: "Pull request", value: "Not available yet (M5)"),
-            Definition(key: "Location", value: "Local candidate only"),
+            Definition(key: "Push", value: push.map { ExternalWords.commit($0.commit) } ?? "", pill: ExternalWords.pill(push)),
+            Definition(key: "Pull request", value: "", pill: pullRequest == nil ? ("None", .neutral) : ExternalWords.pill(pullRequest)),
+            Definition(key: "Location", value: push?.state == .Committed ? "Plan branch on \(push?.remote ?? "origin")"
+                       : run == nil ? "Local candidate only" : "Local plan branch"),
         ]
     }
 
@@ -182,6 +203,8 @@ struct SourceControlActions {
     var open: (Screen) -> Void = { _ in }
     var choose: (String) -> Void = { _ in }
     var chooseFile: (String) -> Void = { _ in }
+    /// M5: asks for the push or the draft pull request of a plan; performs nothing.
+    var request: (String, ExternalKind) -> Void = { _, _ in }
 }
 
 struct SourceControlScreen: View {
@@ -195,7 +218,8 @@ struct SourceControlScreen: View {
         SourceControlView(state: state, actions: SourceControlActions(
             open: open,
             choose: { attempt in chosenFile = nil; model.workspace.loadCandidate(attempt) },
-            chooseFile: { chosenFile = $0 }))
+            chooseFile: { chosenFile = $0 },
+            request: { model.workspace.requestExternal(plan: $0, kind: $1) }))
             .onAppear { if visible { read() } }
             .onChange(of: visible) { if visible { read() } }
             .onChange(of: model.workspace.snapshotSeq) { if visible { read() } }
@@ -211,7 +235,9 @@ struct SourceControlScreen: View {
             candidates: (workspace.attempts?.attempts ?? []).filter { $0.validation != nil && scope.holds($0.feature) },
             result: workspace.candidate, files: workspace.changedFiles, diff: workspace.diff, base: workspace.candidateBase,
             verdict: workspace.scope, detail: detail, layout: layout, chosenFile: chosenFile,
-            reportsDetail: model.client.hello.map { $0.queries.contains("AttemptDetail") } ?? true)
+            reportsDetail: model.client.hello.map { $0.queries.contains("AttemptDetail") } ?? true,
+            external: workspace.external, externalLoad: workspace.externalLoad,
+            commandPending: workspace.commandPending)
     }
 
     /// The candidates; the newest is loaded when none is.
@@ -219,6 +245,7 @@ struct SourceControlScreen: View {
         let workspace = model.workspace
         workspace.loadFeatures()
         workspace.loadAttempts()
+        workspace.loadExternalActions()
         if workspace.candidate == nil, let newest = state.candidates.first { workspace.loadCandidate(newest.id) }
         if let attempt = workspace.candidate?.attempt { workspace.loadAttemptDetail(attempt) }
     }
@@ -426,31 +453,61 @@ struct SourceControlView: View {
                 ], keyWidth: 100)
             }
             LabeledSection(title: "External actions") {
-                actionCard(title: "Push \(state.detail?.key ?? "candidate") @ \(state.detail?.candidateHead.map { String($0.prefix(7)) } ?? "—")",
-                           button: "Authorize Push…", note: "Not available yet: push arrives with M5.")
-                actionCard(title: "Draft pull request", button: "Create Draft PR…",
-                           note: "Not available yet. A separate authorization from push; it requires a confirmed push.")
-                Text("Each external action is authorized on its own, for an exact ref and commit, and recorded with an idempotency key.")
+                actionCard(.Push, title: state.run.map { "Push \(ExternalWords.branch($0.branch))" } ?? "Push the plan branch",
+                           action: state.push)
+                actionCard(.PullRequest, title: state.pullRequest?.title ?? "Draft pull request", action: state.pullRequest)
+                Text("Each external action is requested here and authorized on its own in the Approval Inbox, for an exact ref and commit, recorded with an idempotency key and never retried.")
                     .font(.system(size: 11)).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
             }
             LabeledSection(title: "CI") {
-                DefinitionCard(rows: [Definition(key: "Candidate", value: "", pill: ("Not pushed", .neutral)),
+                DefinitionCard(rows: [Definition(key: "Plan branch", value: "",
+                                                 pill: state.push?.state == .Committed ? ("Pushed", .ok) : ("Not pushed", .neutral)),
                                       Definition(key: "Pipelines", value: "Not reported")], keyWidth: 100)
             }
         }
     }
 
-    private func actionCard(title: String, button: String, note: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    /// One external action: its state from the core, and what the human can do next here.
+    private func actionCard(_ kind: ExternalKind, title: String, action: ExternalAction?) -> some View {
+        let pill = ExternalWords.pill(action)
+        let blocked = state.requestBlocked(kind)
+        let request = kind == .Push ? "Request Push" : "Request Draft PR"
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(title).textStyle(.bodyStrong).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                OperationalPill("Not performed", tone: .neutral)
+                OperationalPill(pill.0, tone: pill.1)
             }
-            Button(button) {}.buttonStyle(.jojo(.secondary, compact: true)).disabled(true).help(note)
-            Text(note).textStyle(.secondary).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
+            switch action?.state {
+            case .Requested?:
+                Button("Authorize in Inbox") { actions.open(.approvalInbox) }.buttonStyle(.jojo(.secondary, compact: true))
+                note("Waits for its own authorization in the Approval Inbox.")
+            case .InFlight?:
+                note(kind == .Push ? "Pushing once; the outcome is recorded when git answers." : "Opening once; the outcome is recorded when gh answers.")
+            case .Unknown?:
+                TextLink("Inspect in Recovery") { actions.open(.recoveryCenter) }.font(.system(size: 12))
+                note("Issued once; its outcome was not observed. Jojo never sends it again.")
+            case .Committed?:
+                if kind == .Push, let a = action {
+                    note("\(a.commit.prefix(12)) is on \(a.remote) as \(ExternalWords.branch(a.branch)).")
+                } else if let url = action?.pullRequestURL {
+                    Text(url).textStyle(.mono).foregroundStyle(theme.text2).textSelection(.enabled).lineLimit(2)
+                }
+            case .Rejected?, .Declined?, nil:
+                if let detail = action?.detail.nonEmpty, action?.state == .Rejected { note(detail) }
+                Button(request) {
+                    if let plan = state.run?.id { actions.request(plan, kind) }
+                }
+                .buttonStyle(.jojo(.secondary, compact: true)).disabled(blocked != nil)
+                .help(blocked ?? "Asks for it; nothing is sent until you authorize it in the Approval Inbox.")
+                if let blocked { note(blocked.prefix(1).uppercased() + blocked.dropFirst() + ".") }
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardElevation(radius: 12)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text).textStyle(.secondary).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
     }
 }

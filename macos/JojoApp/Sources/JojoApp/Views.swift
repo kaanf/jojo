@@ -47,7 +47,7 @@ struct MainView: View {
                             ExecutionPlanScreen(model: model, visible: screen == .executionPlan, chosenPlan: $chosenPlan,
                                                 open: { screen = $0 }, compare: compare)
                         }
-                        shown(.recoveryCenter) { RecoveryCenterScreen(model: model) }
+                        shown(.recoveryCenter) { RecoveryCenterScreen(model: model, visible: screen == .recoveryCenter) }
                         shown(.settings) { SettingsScreen(model: model, visible: screen == .settings) }
                         shown(.sourceControl) {
                             SourceControlScreen(model: model, visible: screen == .sourceControl, layout: $diffLayout,

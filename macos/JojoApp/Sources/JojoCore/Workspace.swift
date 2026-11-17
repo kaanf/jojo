@@ -376,6 +376,10 @@ public final class WorkspaceModel {
     public var chatDraft: String?
     /// The attempt another screen asked Agent Runs to show ("Inspect Attempt").
     public var focusAttempt: String?
+    /// M5 (protocol 1.10): plan runs and their push and pull request (Source Control, the
+    /// Approval Inbox, the Recovery Center).
+    public internal(set) var external: ExternalList?
+    public internal(set) var externalLoad = PlanLoad.idle
     /// Protocol 1.9: the newest decisions on documents (the Approval Inbox).
     public internal(set) var decisions: [DecisionSummary] = []
     public internal(set) var decisionsLoad = PlanLoad.idle

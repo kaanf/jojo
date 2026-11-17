@@ -5,7 +5,9 @@ import SwiftUI
 // what waits for the human (pending documents and candidates whose host validation
 // passed), one request in detail, the approval policy and the newest decisions. A document
 // is decided here with `decide` for the review the workspace holds; a candidate is accepted
-// on Verification & Evidence. Push and pull request approvals belong to M5.
+// on Verification & Evidence. M5: a push or draft pull request request (protocol 1.10) is
+// authorized or declined here, each on its own, after a confirmation that names the exact
+// reference, commit and remote.
 
 /// Pending or All, the list's segmented control.
 enum InboxFilter: String, CaseIterable, Identifiable, Sendable {
@@ -24,6 +26,7 @@ struct InboxItem: Identifiable, Equatable {
     enum Subject: Equatable {
         case document(DocumentSummary)
         case candidate(PendingCandidate)
+        case external(ExternalAction)
     }
     let subject: Subject
 
@@ -31,6 +34,7 @@ struct InboxItem: Identifiable, Equatable {
         switch subject {
         case .document(let d): return d.id
         case .candidate(let c): return c.id
+        case .external(let a): return a.id
         }
     }
 
@@ -38,6 +42,7 @@ struct InboxItem: Identifiable, Equatable {
         switch subject {
         case .document(let d): return d.kindName
         case .candidate: return "Candidate"
+        case .external(let a): return a.kind == .Push ? "Push" : "Pull request"
         }
     }
 
@@ -45,6 +50,7 @@ struct InboxItem: Identifiable, Equatable {
         switch subject {
         case .document(let d): return documentTile(d.kind).1
         case .candidate: return Palette.green
+        case .external: return Palette.orange
         }
     }
 
@@ -52,6 +58,7 @@ struct InboxItem: Identifiable, Equatable {
         switch subject {
         case .document(let d): return "\(d.title ?? documentCode(d.kind)) rev \(d.revision)"
         case .candidate(let c): return [c.key, c.title].compactMap { $0 }.joined(separator: " · ").nonEmpty ?? "Candidate"
+        case .external(let a): return ExternalWords.title(a)
         }
     }
 
@@ -59,6 +66,7 @@ struct InboxItem: Identifiable, Equatable {
         switch subject {
         case .document(let d): return d.approval == "Pending"
         case .candidate: return true
+        case .external(let a): return a.state == .Requested
         }
     }
 
@@ -66,6 +74,7 @@ struct InboxItem: Identifiable, Equatable {
         switch subject {
         case .document(let d): return d.created
         case .candidate(let c): return c.validated
+        case .external(let a): return a.requested
         }
     }
 
@@ -73,6 +82,7 @@ struct InboxItem: Identifiable, Equatable {
         switch subject {
         case .document(let d): return d.featureName
         case .candidate(let c): return c.featureName
+        case .external(let a): return a.featureName
         }
     }
 
@@ -82,6 +92,7 @@ struct InboxItem: Identifiable, Equatable {
         case (.specs, .document(let d)): return ["Prd", "Adr"].contains(d.kind)
         case (.plans, .document(let d)): return ["ExecutionPlan", "ValidationPlan"].contains(d.kind)
         case (.candidates, .candidate): return true
+        case (.external, .external): return true
         default: return false
         }
     }
@@ -106,6 +117,11 @@ struct ApprovalInboxState: Equatable {
     var decisionsLoad = PlanLoad.idle
     /// The features (1.7), for a request's project and code.
     var features: FeatureList?
+    /// M5 (1.10): push and pull request requests with their exact payload, and how git and
+    /// gh are signed in.
+    var external: ExternalList?
+    var externalLoad = PlanLoad.idle
+    var commandPending = false
     var filter = InboxFilter.pending
     var type = InboxType.all
     var reportsDetail = true
@@ -116,7 +132,8 @@ struct ApprovalInboxState: Equatable {
     var items: [InboxItem] {
         let documents = (list?.documents ?? []).map { InboxItem(subject: .document($0)) }
         let candidates = (list?.candidates ?? []).map { InboxItem(subject: .candidate($0)) }
-        let all = (documents + candidates).filter { $0.matches(type) }
+        let requests = (external?.actions ?? []).map { InboxItem(subject: .external($0)) }
+        let all = (documents + candidates + requests).filter { $0.matches(type) }
         let shown = filter == .pending ? all.filter(\.waiting) : all
         return shown.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
     }
@@ -134,6 +151,7 @@ struct ApprovalInboxState: Equatable {
             switch item.subject {
             case .document(let d): return f.id == d.feature
             case .candidate(let c): return f.name != nil && f.name == c.featureName
+            case .external(let a): return f.name != nil && f.name == a.featureName
             }
         }
         return [summary?.projectName, summary?.code ?? item.featureName].compactMap { $0 }.joined(separator: " · ")
@@ -173,6 +191,9 @@ struct ApprovalInboxState: Equatable {
         guard let chosen else { return ("", .neutral) }
         switch chosen.subject {
         case .candidate: return ("Awaiting your decision", .info)
+        case .external(let a):
+            if a.state == .Requested { return commandPending ? ("Requested", .review) : ("Awaiting authorization", .info) }
+            return ExternalWords.pill(a)
         case .document(let d):
             if d.stale { return ("Stale", .warn) }
             if decisionOutstanding { return ("Requested", .review) }
@@ -230,6 +251,7 @@ struct ApprovalInboxState: Equatable {
         switch item.subject {
         case .document(let d): return features?.features.first { $0.id == d.feature }?.repositoryName
         case .candidate(let c): return features?.features.first { $0.name == c.featureName }?.repositoryName
+        case .external(let a): return features?.features.first { $0.name == a.featureName }?.repositoryName
         }
     }
 
@@ -290,6 +312,8 @@ struct ApprovalInboxActions {
     var candidate: (String) -> Void = { _ in }
     var filter: (InboxFilter) -> Void = { _ in }
     var type: (InboxType) -> Void = { _ in }
+    /// M5: authorizes (true) or declines (false) one push or pull request request.
+    var authorize: (ExternalAction, Bool) -> Void = { _, _ in }
 }
 
 struct ApprovalInboxScreen: View {
@@ -318,7 +342,9 @@ struct ApprovalInboxScreen: View {
             review: workspace.review, reviewStale: workspace.reviewStale,
             decisionOutstanding: model.client.outstandingCommands.values.contains("HumanDecision"),
             selected: selected ?? workspace.review?.subject, detail: workspace.document, decisions: workspace.decisions,
-            decisionsLoad: workspace.decisionsLoad, features: workspace.features, filter: filter, type: type,
+            decisionsLoad: workspace.decisionsLoad, features: workspace.features,
+            external: workspace.external, externalLoad: workspace.externalLoad,
+            commandPending: workspace.commandPending, filter: filter, type: type,
             reportsDetail: model.client.hello.map { $0.queries.contains("Decisions") } ?? true)
     }
 
@@ -327,6 +353,7 @@ struct ApprovalInboxScreen: View {
         let workspace = model.workspace
         workspace.loadDecisions()
         workspace.loadFeatures()
+        workspace.loadExternalActions()
         guard case .document(let d)? = state.chosen?.subject else { return }
         if workspace.review?.subject != d.id || workspace.review?.revision != d.revision
             || (workspace.reviewStale && !state.decisionOutstanding) {
@@ -352,7 +379,8 @@ struct ApprovalInboxScreen: View {
                 open(.verification)
             },
             filter: { filter = $0 },
-            type: { type = $0 })
+            type: { type = $0 },
+            authorize: { workspace.decideExternal($0, authorize: $1) })
     }
 }
 
@@ -363,6 +391,8 @@ struct ApprovalInboxView: View {
     var actions = ApprovalInboxActions()
     /// The decision the confirmation dialog asks about: Reject or Revoke.
     @State private var confirming: DecisionAction?
+    /// M5: the push or pull request the authorization dialog asks about.
+    @State private var authorizing: ExternalAction?
 
     var body: some View {
         GeometryReader { geometry in
@@ -438,9 +468,9 @@ struct ApprovalInboxView: View {
     @ViewBuilder
     private var list: some View {
         VStack(alignment: .leading, spacing: 2) {
-            if state.type == .external {
-                NotReported("Push and pull request approvals are not available yet: they arrive with M5.")
-                    .padding(10)
+            if state.type == .external && state.external == nil {
+                NotReported(state.externalLoad == .loading ? "Reading…"
+                            : "This core does not report push and pull request requests.").padding(10)
             } else if state.list == nil {
                 NotReported("This core does not list what waits.").padding(10)
             } else if state.items.isEmpty {
@@ -508,6 +538,7 @@ struct ApprovalInboxView: View {
             switch state.chosen?.subject {
             case .document(let d)?: document(d)
             case .candidate(let c)?: candidate(c)
+            case .external(let a)?: external(a)
             case nil:
                 Placeholder(symbol: "tray", tile: Palette.purple, title: "Nothing waits for you",
                             message: "Requirements, decisions, plans and candidates appear here when they need your decision.") { EmptyView() }
@@ -516,6 +547,16 @@ struct ApprovalInboxView: View {
         .padding(EdgeInsets(top: 24, leading: 28, bottom: 28, trailing: 28))
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .cardElevation(radius: 18)
+        .confirmationDialog(authorizing.map { ExternalWords.confirmation($0).title } ?? "",
+                            isPresented: Binding(get: { authorizing != nil }, set: { if !$0 { authorizing = nil } }),
+                            titleVisibility: .visible) {
+            if let action = authorizing {
+                Button(ExternalWords.confirmation(action).confirm) { actions.authorize(action, true) }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: {
+            Text(authorizing.map { ExternalWords.confirmation($0).message } ?? "")
+        }
     }
 
     private func head(sub: String, title: String, mono: String) -> some View {
@@ -639,5 +680,94 @@ struct ApprovalInboxView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .glassPanel(radius: 18)
         }
+    }
+
+    // MARK: Push and pull request (M5)
+
+    private func external(_ a: ExternalAction) -> some View {
+        let item = InboxItem(subject: .external(a))
+        let signIn = a.kind == .Push ? state.external?.git : state.external?.gh
+        return VStack(alignment: .leading, spacing: 20) {
+            head(sub: "External action · \(state.place(item))", title: item.title, mono: "commit \(a.commit)")
+            if a.state == .Unknown {
+                TintedNotice(tone: .warn, title: "The outcome of this action is unknown",
+                             message: "It was issued once and its result was not observed. Jojo never sends it again; inspect the remote in the Recovery Center.") {
+                    Button("Inspect in Recovery") { actions.open(.recoveryCenter) }.buttonStyle(.jojo(.secondary))
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                GroupLabel("Requested action").padding(.horizontal, -4)
+                Text(ExternalWords.requested(a)).font(.system(size: 16, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+            }
+            DefinitionCard(rows: [
+                Definition(key: "Why approval", value: "It leaves this Mac. Push and pull request are separate approvals, and neither is retried automatically."),
+                Definition(key: "Remote", value: "\(a.remote) · \(a.url)", mono: true,
+                           pill: state.repository(item).map { ($0, .neutral) }),
+                Definition(key: "Reference", value: a.kind == .Push ? a.reference : "\(a.branch) → \(a.base ?? "")", mono: true),
+                Definition(key: "Commit", value: a.commit, mono: true),
+                Definition(key: "Risk and side effects", value: ExternalWords.risk(a)),
+                Definition(key: a.kind == .Push ? "git sign-in" : "gh sign-in", value: signIn?.detail ?? "Not reported",
+                           pill: signIn.map { ExternalWords.signIn($0) }),
+            ], keyWidth: 130)
+            if a.kind == .PullRequest, let body = a.body {
+                VStack(alignment: .leading, spacing: 6) {
+                    GroupLabel("Title and body, exactly as they are sent").padding(.horizontal, -4)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(a.title ?? "").textStyle(.bodyStrong)
+                        Text(body).textStyle(.mono).foregroundStyle(theme.text2).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .cardElevation(radius: 14)
+                }
+            }
+            if !a.observations.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    GroupLabel("What was observed").padding(.horizontal, -4)
+                    VStack(spacing: 0) {
+                        ForEach(Array(a.observations.enumerated()), id: \.offset) { _, o in
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text(ExternalWords.observer(o)).textStyle(.bodyStrong).frame(width: 190, alignment: .leading)
+                                Text(o.detail).textStyle(.body).foregroundStyle(theme.text2)
+                                    .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                                OperationalPill(o.status, tone: o.status == "Committed" ? .ok : o.status == "Rejected" ? .danger : .warn)
+                            }
+                            .padding(EdgeInsets(top: 9, leading: 14, bottom: 9, trailing: 14))
+                        }
+                    }
+                    .cardElevation(radius: 14)
+                }
+            }
+            externalBar(a)
+        }
+    }
+
+    private func externalBar(_ a: ExternalAction) -> some View {
+        let blocked = ExternalWords.blocked(a, list: state.external, connected: state.link == .connected,
+                                            pending: state.commandPending)
+        return FlowRow(spacing: 10) {
+            if a.state == .Requested {
+                Button(ExternalWords.authorize(a.kind)) { authorizing = a }.buttonStyle(.jojo(.primary))
+                    .disabled(blocked != nil).help(blocked ?? "Asks you to confirm, then sends this exact request once.")
+                Button("Decline") { actions.authorize(a, false) }.buttonStyle(.jojo(.secondary))
+                    .disabled(state.link != .connected || state.commandPending)
+                    .help("Records that this request is not performed. Nothing is sent.")
+            } else if a.state == .Unknown || a.state == .InFlight {
+                Button("Inspect in Recovery") { actions.open(.recoveryCenter) }.buttonStyle(.jojo(.primary))
+            }
+            TextLink("Source Control") { actions.open(.sourceControl) }
+            Text(state.commandPending ? "Sent to core · waiting for confirmation. Nothing is shown as pushed until the core records it."
+                 : "Authorizing sends one request. The core checks the branch again and performs it once; it is never retried.")
+                .font(.system(size: 11)).foregroundStyle(theme.text2).frame(maxWidth: 280, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if let blocked, a.state == .Requested {
+                Text(blocked).font(.system(size: 11)).foregroundStyle(theme.text2)
+                    .frame(maxWidth: 280, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassPanel(radius: 18)
     }
 }
