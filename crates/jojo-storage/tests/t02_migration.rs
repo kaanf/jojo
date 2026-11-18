@@ -47,7 +47,7 @@ fn a_fresh_database_is_created_at_the_latest_version_without_a_backup() {
     let dir = TempDir::new("fresh");
     let engine = start(&dir.db());
     let report = &engine.startup_report().migration;
-    assert_eq!((report.from_version, report.to_version), (0, 18));
+    assert_eq!((report.from_version, report.to_version), (0, 19));
     assert_eq!(report.backup, None);
     assert!(engine.startup_report().sqlite_version_number >= 3_037_000);
     assert_eq!(
@@ -58,7 +58,7 @@ fn a_fresh_database_is_created_at_the_latest_version_without_a_backup() {
             .unwrap()
             .session
             .schema_version,
-        18
+        19
     );
 }
 
@@ -83,7 +83,7 @@ fn a_failed_migration_preserves_the_prior_database_and_a_recoverable_backup() {
     else {
         panic!("the broken migration must fail the start");
     };
-    assert_eq!((from_version, failed_version), (18, 19));
+    assert_eq!((from_version, failed_version), (19, 20));
     assert!(cause.message.contains("already exists"), "{cause}");
     let backup = backup.expect("an existing database is backed up before migrating");
     assert!(backup.exists());
@@ -94,7 +94,7 @@ fn a_failed_migration_preserves_the_prior_database_and_a_recoverable_backup() {
     let report = engine.startup_report();
     assert_eq!(
         (report.migration.from_version, report.migration.to_version),
-        (18, 18)
+        (19, 19)
     );
     assert_eq!(report.epoch.epoch, EngineEpoch(2));
     assert_eq!(
@@ -118,13 +118,13 @@ fn a_failed_migration_preserves_the_prior_database_and_a_recoverable_backup() {
     drop(reader);
     engine.shutdown().unwrap();
 
-    // None of the broken step's DDL remained: a correct version 19 that creates the same
+    // None of the broken step's DDL remained: a correct version 20 that creates the same
     // table applies cleanly afterwards (it would fail if `notes` had been left behind).
     let upgraded = start_with(&dir.db(), plan_with(&[GOOD_NEXT])).unwrap();
     let report = upgraded.startup_report();
     assert_eq!(
         (report.migration.from_version, report.migration.to_version),
-        (18, 19)
+        (19, 20)
     );
     let second_backup = report.migration.backup.clone().expect("upgrade backup");
     assert_ne!(
@@ -138,11 +138,11 @@ fn a_failed_migration_preserves_the_prior_database_and_a_recoverable_backup() {
     assert!(events_before_upgrade > 0);
     drop(upgraded);
 
-    // The first backup is a complete, independently usable version-18 database.
+    // The first backup is a complete, independently usable version-19 database.
     let restored = TempDir::new("migration-restore");
     std::fs::copy(&backup, restored.db()).unwrap();
     let from_backup = start(&restored.db());
-    assert_eq!(from_backup.startup_report().migration.from_version, 18);
+    assert_eq!(from_backup.startup_report().migration.from_version, 19);
     assert_eq!(from_backup.epoch(), EngineEpoch(2));
     let restored_snapshot = from_backup.reader().unwrap().snapshot().unwrap();
     assert_eq!(restored_snapshot.aggregates, snapshot.aggregates);
@@ -161,13 +161,13 @@ fn a_multi_step_upgrade_stops_at_the_last_whole_version() {
     assert!(matches!(
         failure,
         Err(StorageError::MigrationFailed {
-            from_version: 19,
-            failed_version: 20,
+            from_version: 20,
+            failed_version: 21,
             backup: Some(_),
             ..
         })
     ));
-    // Version 19 was committed as a whole; a helper that knows version 19 can run.
+    // Version 20 was committed as a whole; a helper that knows version 20 can run.
     let engine = start_with(&dir.db(), plan_with(&[GOOD_NEXT])).unwrap();
     let report = &engine.startup_report().migration;
     assert_eq!(
@@ -176,7 +176,7 @@ fn a_multi_step_upgrade_stops_at_the_last_whole_version() {
             report.to_version,
             report.backup.is_some()
         ),
-        (19, 19, false)
+        (20, 20, false)
     );
 }
 
@@ -191,8 +191,8 @@ fn a_newer_schema_is_refused_untouched() {
     assert!(matches!(
         old_helper,
         Err(StorageError::SchemaTooNew {
-            found: 19,
-            supported: 18
+            found: 20,
+            supported: 19
         })
     ));
     // The refusal created no epoch and released ownership.
@@ -222,7 +222,7 @@ fn migration_plans_must_be_contiguous_from_version_one() {
     ));
     let mut steps = MigrationPlan::production().steps().to_vec();
     steps.push(Migration {
-        version: 20,
+        version: 21,
         name: "gap",
         sql: "",
     });
@@ -230,5 +230,5 @@ fn migration_plans_must_be_contiguous_from_version_one() {
         MigrationPlan::new(steps),
         Err(StorageError::InvalidMigrationPlan(_))
     ));
-    assert_eq!(MigrationPlan::production().latest(), 18);
+    assert_eq!(MigrationPlan::production().latest(), 19);
 }

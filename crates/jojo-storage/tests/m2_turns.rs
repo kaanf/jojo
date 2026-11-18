@@ -224,7 +224,7 @@ impl T {
             during();
             runner.join().unwrap()
         });
-        let outcome = settle_turn(&ctx, spec, &run).unwrap();
+        let outcome = settle_turn(&ctx, spec, &run, SessionMode::Fresh, "").unwrap();
         (run, outcome)
     }
 

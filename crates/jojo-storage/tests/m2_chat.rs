@@ -1269,6 +1269,14 @@ impl H {
     fn git_out(&self, args: &[&str]) -> String {
         git(&self.repository, args).trim().to_owned()
     }
+
+    /// Worktrees of the sample repository under the integration root.
+    fn integration_worktrees(&self) -> usize {
+        self.git_out(&["worktree", "list", "--porcelain"])
+            .lines()
+            .filter(|l| l.starts_with("worktree ") && l.contains("/integration/"))
+            .count()
+    }
 }
 
 #[test]
@@ -1323,6 +1331,29 @@ fn m3_accepted_steps_go_onto_the_plan_branch_and_the_dependent_starts_from_it() 
     // The developer's checkout is untouched: same HEAD, nothing changed.
     assert_eq!(h.git_out(&["rev-parse", "HEAD"]), developer_head);
     assert_eq!(h.git_out(&["status", "--porcelain"]), "");
+    // Follow-ups: no integration worktree outlives its integration.
+    assert_eq!(h.integration_worktrees(), 0);
+}
+
+#[test]
+fn f1_integration_worktrees_left_by_an_earlier_helper_are_swept() {
+    let mut h = H::new();
+    h.ready();
+    let root = jojo_storage::integration_root(&h.s().engine).unwrap();
+    let left = root.join("left-behind");
+    h.git_out(&[
+        "worktree",
+        "add",
+        "--detach",
+        "--quiet",
+        left.to_str().unwrap(),
+        "HEAD",
+    ]);
+    std::fs::create_dir(root.join("unlisted")).unwrap();
+    assert_eq!(h.integration_worktrees(), 1);
+    assert_eq!(jojo_storage::sweep_integrations(&h.s().engine).unwrap(), 2);
+    assert_eq!(h.integration_worktrees(), 0);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
 }
 
 #[test]
@@ -1353,6 +1384,7 @@ fn m3_a_plan_branch_moved_by_someone_else_is_a_conflict_and_nothing_is_merged() 
         h.git_out(&["rev-parse", &format!("refs/heads/{branch}")]),
         foreign
     );
+    assert_eq!(h.integration_worktrees(), 0);
 }
 
 // ---- M4: repair and review ----
@@ -3294,4 +3326,298 @@ fn m6_a_rejected_step_restarts_fresh_and_a_refused_restart_can_be_restarted() {
             "rev · fixture: develop-repaired src/rev.txt will start again on your word"
         ]
     );
+}
+
+// ---- Follow-ups (protocol 1.14) ----
+
+impl H {
+    fn at14(&mut self, kind: &str, payload: Json) -> Envelope {
+        self.at(14, kind, payload)
+    }
+
+    fn ok14(&mut self, kind: &str, payload: Json) -> Json {
+        let r = self.at14(kind, payload);
+        assert_eq!(r.kind, "Response", "{kind}: {:?}", r.payload);
+        r.payload
+    }
+
+    fn refused14(&mut self, kind: &str, payload: Json) -> String {
+        let r = self.at14(kind, payload);
+        assert_eq!(r.kind, "Error", "{kind}: {:?}", r.payload);
+        str_of(&r.payload, &["code"]).to_owned()
+    }
+
+    /// The turns of the feature chat at 1.14.
+    fn turns14(&mut self) -> Vec<Json> {
+        let chat = self.ok14(
+            "FeatureChat",
+            object([
+                ("feature", identity(OpaqueId(FEATURE))),
+                ("after", number(0)),
+            ]),
+        );
+        items(field(&chat, &["turns"])).to_vec()
+    }
+
+    fn answer_all(&mut self, turn: &Json) {
+        for question in items(field(turn, &["questions"])).to_vec() {
+            self.ok(
+                "AnswerQuestion",
+                object([
+                    ("question", field(&question, &["question"]).clone()),
+                    ("revision", field(&question, &["revision"]).clone()),
+                    ("action", text("Answer")),
+                    ("answer", text("As simple as possible.")),
+                ]),
+            );
+        }
+    }
+
+    /// Sends a 1.14 command that launches a turn or a review and waits for it to end.
+    fn launched14(&mut self, request: u128, kind: &str, payload: Json) -> Json {
+        let r = self.frame(request, 14, kind, payload);
+        assert_eq!(r.kind, "Response", "{kind}: {:?}", r.payload);
+        assert_eq!(str_of(&r.payload, &["dispatch"]), "launched");
+        until(|| self.s().workers.reap());
+        assert!(!self.s().workers.failed(), "worker failed");
+        r.payload
+    }
+}
+
+fn texts(list: &[&str]) -> Json {
+    Json::List(list.iter().map(|s| text(*s)).collect())
+}
+
+#[test]
+fn f1_lead_questions_offer_choices_and_the_next_turn_continues_the_session() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h.turn(
+        4001,
+        &repository,
+        "Codex",
+        "slugify should be usable from the shell.\nfixture: lead-choices",
+    );
+    let turns = h.turns14();
+    assert_eq!(
+        field(&turns[0], &["choices"]),
+        &Json::List(vec![
+            texts(&["Arguments", "Standard input", "Both"]),
+            texts(&[])
+        ])
+    );
+    assert_eq!(str_of(&turns[0], &["session"]), "Fresh");
+    assert_eq!(field(&turns[0], &["repairable"]), &Json::Bool(false));
+    assert_eq!(field(&turns[0], &["repairs"]), &Json::Null);
+    // Before 1.14 a turn carries none of it.
+    let old = h.chat(0);
+    assert!(get(&items(field(&old, &["turns"]))[0], "choices").is_err());
+    // The documents answer counts the open questions of the feature at 1.14 only.
+    let documents = h.ok14("Documents", object([("before", Json::Null)]));
+    assert_eq!(
+        field(&documents, &["open_questions"]),
+        &Json::List(vec![object([
+            ("feature", identity(OpaqueId(FEATURE))),
+            ("count", number(2)),
+        ])])
+    );
+    assert_eq!(field(&documents, &["steps_waiting"]), &number(0));
+    assert!(get(&h.documents(), "open_questions").is_err());
+    h.answer_all(&turns[0]);
+    let documents = h.ok14("Documents", object([("before", Json::Null)]));
+    assert_eq!(field(&documents, &["open_questions"]), &Json::List(vec![]));
+    // The next turn on the same provider continues the session the first one reported.
+    h.turn(4002, &repository, "Codex", "fixture: lead");
+    let turns = h.turns14();
+    assert_eq!(str_of(&turns[1], &["state"]), "Replied");
+    assert_eq!(str_of(&turns[1], &["session"]), "Continued");
+    // A continuation the CLI cannot resume runs again in a new session.
+    h.turn(4003, &repository, "Codex", "fixture: lead-resume-fails");
+    let turns = h.turns14();
+    assert_eq!(str_of(&turns[2], &["state"]), "Replied");
+    assert_eq!(str_of(&turns[2], &["session"]), "Fallback");
+    // Another provider never continues a session it did not start.
+    h.turn(4004, &repository, "ClaudeCode", "fixture: lead");
+    let turns = h.turns14();
+    assert_eq!(str_of(&turns[3], &["session"]), "Fresh");
+    // Both runs of the fallback turn were spawned; every other turn once.
+    assert_eq!(h.spawned(), 5);
+}
+
+#[test]
+fn f1_a_failed_turn_is_repaired_on_the_humans_word_and_told_why_it_failed() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h.turn(
+        4001,
+        &repository,
+        "Codex",
+        "slugify should be usable from the shell.\nfixture: lead-prose",
+    );
+    let turns = h.turns14();
+    assert_eq!(str_of(&turns[0], &["state"]), "Failed");
+    assert_eq!(field(&turns[0], &["repairable"]), &Json::Bool(true));
+    // Not before 1.14.
+    let r = h.at(13, "RepairTurn", object([]));
+    assert_eq!(str_of(&r.payload, &["code"]), "UnknownType");
+    let payload = h.launched14(
+        4002,
+        "RepairTurn",
+        object([
+            ("turn", identity(OpaqueId(4001))),
+            ("note", text("fixture: lead")),
+        ]),
+    );
+    assert_eq!(field(&payload, &["turn"]), &identity(OpaqueId(4002)));
+    let turns = h.turns14();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(str_of(&turns[1], &["state"]), "Replied");
+    assert_eq!(str_of(&turns[1], &["kind"]), "Discover");
+    assert_eq!(field(&turns[1], &["repairs"]), &identity(OpaqueId(4001)));
+    assert_eq!(
+        field(&turns[0], &["repaired_by"]),
+        &identity(OpaqueId(4002))
+    );
+    assert_eq!(field(&turns[0], &["repairable"]), &Json::Bool(false));
+    let prompt = h.read(|v| v.turn_prompt(OpaqueId(4002))).unwrap();
+    assert!(
+        prompt.contains(
+            "# Your previous attempt at this turn failed\nthe last message is not a reply"
+        )
+    );
+    assert!(prompt.contains("about the failure:\nfixture: lead\n"));
+    // A first turn's message is its objective, carried once.
+    assert_eq!(prompt.matches("slugify should be usable").count(), 1);
+    // A turn is repaired once; a turn that replied is not repaired.
+    for turn in [4001, 4002] {
+        let code = h.refused14(
+            "RepairTurn",
+            object([("turn", identity(OpaqueId(turn))), ("note", text(""))]),
+        );
+        assert!(code.starts_with("RepairRefused"), "{code}");
+    }
+}
+
+#[test]
+fn f1_waiting_steps_are_counted_and_a_drafted_document_is_reviewed_by_the_other_provider() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let plan = h.approved_one_step(&repository, "lead-never", 0, false);
+    let documents = h.ok14("Documents", object([("before", Json::Null)]));
+    assert_eq!(field(&documents, &["steps_waiting"]), &number(0));
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.run_until(&plan, |s| s[0] == "NeedsHuman");
+    let documents = h.ok14("Documents", object([("before", Json::Null)]));
+    assert_eq!(field(&documents, &["steps_waiting"]), &number(1));
+    // A plan run reviews its own steps; the human asks only for a step started by hand.
+    let attempt = h.step_attempt(&plan);
+    let candidate = h
+        .read(|v| v.attempt_result(attempt))
+        .unwrap()
+        .candidate
+        .unwrap();
+    let detail = h.ok14("AttemptDetail", object([("attempt", identity(attempt))]));
+    assert_eq!(
+        field(&detail, &["advisory", "available"]),
+        &Json::Bool(false)
+    );
+    let code = h.refused14(
+        "ReviewAttempt",
+        object([
+            ("attempt", identity(attempt)),
+            ("candidate", text(&candidate)),
+        ]),
+    );
+    assert!(code.starts_with("ReviewRefused: a plan run"), "{code}");
+    // The requirements document was drafted on Claude Code: Codex reviews it.
+    let turns = h.turns14();
+    let prd = field(&turns[1], &["prd"]).clone();
+    let (document, revision) = (
+        field(&prd, &["document"]).clone(),
+        field(&prd, &["revision"]).clone(),
+    );
+    let query = object([
+        ("document", document.clone()),
+        ("revision", revision.clone()),
+        ("offset", number(0)),
+    ]);
+    let before = h.ok14("Document", query.clone());
+    assert_eq!(field(&before, &["advisory", "review"]), &Json::Null);
+    assert_eq!(
+        field(&before, &["advisory", "available"]),
+        &Json::Bool(true)
+    );
+    assert_eq!(str_of(&before, &["advisory", "reviewer"]), "Codex");
+    assert!(get(&h.document(&document), "advisory").is_err());
+    h.launched14(
+        6001,
+        "ReviewDocument",
+        object([("document", document), ("revision", revision)]),
+    );
+    let after = h.ok14("Document", query);
+    let review = field(&after, &["advisory", "review"]);
+    assert_eq!(field(review, &["review"]), &identity(OpaqueId(6001)));
+    assert_eq!(str_of(review, &["state"]), "Approved");
+    assert_eq!(str_of(review, &["provider"]), "Codex");
+    assert!(!str_of(review, &["notes"]).is_empty());
+    // An advisory verdict moves nothing: the document stays approved, the step held.
+    assert_eq!(h.step_states(&plan), ["NeedsHuman"]);
+}
+
+#[test]
+fn f1_a_step_started_by_hand_is_reviewed_on_request_by_the_other_provider() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h.approved_one_step(&repository, "lead-never", 0, false);
+    let turns = h.turns14();
+    let prd = field(&turns[1], &["prd", "document"]).clone();
+    let drafted = field(turns.last().unwrap(), &["plan"]).clone();
+    let step = field(&items(field(&drafted, &["steps"]))[0], &["step"]).clone();
+    let r = h.frame(
+        5001,
+        1,
+        "Start",
+        object([
+            ("prd", prd),
+            ("adr", field(&drafted, &["adr"]).clone()),
+            ("plan", field(&drafted, &["plan"]).clone()),
+            ("validation", field(&drafted, &["validation"]).clone()),
+            ("step", step),
+        ]),
+    );
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    until(|| h.s().workers.reap());
+    let attempt = OpaqueId(5001);
+    let candidate = h
+        .read(|v| v.attempt_result(attempt))
+        .unwrap()
+        .candidate
+        .unwrap();
+    let detail = h.ok14("AttemptDetail", object([("attempt", identity(attempt))]));
+    assert_eq!(
+        field(&detail, &["advisory", "available"]),
+        &Json::Bool(true)
+    );
+    assert_eq!(str_of(&detail, &["advisory", "reviewer"]), "ClaudeCode");
+    let code = h.refused14(
+        "ReviewAttempt",
+        object([("attempt", identity(attempt)), ("candidate", text("other"))]),
+    );
+    assert!(code.starts_with("ReviewRefused"), "{code}");
+    h.launched14(
+        6002,
+        "ReviewAttempt",
+        object([
+            ("attempt", identity(attempt)),
+            ("candidate", text(&candidate)),
+        ]),
+    );
+    let detail = h.ok14("AttemptDetail", object([("attempt", identity(attempt))]));
+    let review = field(&detail, &["advisory", "review"]);
+    assert_eq!(str_of(review, &["state"]), "Approved");
+    assert_eq!(str_of(review, &["provider"]), "ClaudeCode");
+    // The executable of the review is recorded like a step review's.
+    assert!(h.read(|v| v.run_executable(OpaqueId(6002))).is_some());
+    // Nothing was decided: the candidate waits for the human.
+    assert!(h.read(|v| v.candidate_acceptance(attempt)).is_none());
 }

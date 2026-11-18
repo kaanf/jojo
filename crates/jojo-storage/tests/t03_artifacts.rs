@@ -794,7 +794,7 @@ fn a_version_1_database_upgrades_with_a_backup_and_keeps_its_history() {
     }
     let engine = start(&dir.db());
     let report = &engine.startup_report().migration;
-    assert_eq!((report.from_version, report.to_version), (1, 18));
+    assert_eq!((report.from_version, report.to_version), (1, 19));
     assert!(report.backup.as_ref().is_some_and(|backup| backup.exists()));
     assert_eq!(
         engine

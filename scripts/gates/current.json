@@ -1,9 +1,9 @@
 {
-  "artifact": "gate-m6",
-  "scope": "Tree after M6: a held, refused or conflicting plan step starts again on the human's word (RetryPlanStep: Repair or Restart, with a note; a failed retry is held again), protocol 1.13 (RetryPlanStep; at 1.13 a PlanDetail step carries its retry actions), schema 18 (plan_step_retries, plan_step_retry_refusals); Execution Plan follows a running step's log live, decides a step in review and offers the core's retries.",
+  "artifact": "gate-f1",
+  "scope": "Tree after the follow-ups step (F1): integration worktrees removed after each integration and swept at helper start; sidebar counters for Execution Plan (steps waiting for the human) and Feature Chat (open questions); choice answers; session continuation of chat turns with a fresh fallback; the human's repair of a failed lead turn; advisory reviews by the other provider of a candidate started by hand and of a drafted document. Protocol 1.14 (RepairTurn, ReviewAttempt, ReviewDocument; Documents, FeatureChat, Document and AttemptDetail carry the new fields at 14), schema 19.",
   "boundary_tests_min": 109,
   "rust": {
-    "passed_min": 506,
+    "passed_min": 516,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -113,7 +113,17 @@
       "s7_a_brief_turn_is_refused_beside_another_lead_turn_and_the_workspace_lists_repositories",
       "m6_a_held_step_is_repaired_on_the_humans_word_and_held_again_when_that_fails",
       "m6_a_rejected_step_restarts_fresh_and_a_refused_restart_can_be_restarted",
-      "m6_a_retry_tells_a_repair_its_failure_and_either_retry_the_humans_note"
+      "m6_a_retry_tells_a_repair_its_failure_and_either_retry_the_humans_note",
+      "f1_integration_worktrees_left_by_an_earlier_helper_are_swept",
+      "f1_lead_questions_offer_choices_and_the_next_turn_continues_the_session",
+      "f1_a_failed_turn_is_repaired_on_the_humans_word_and_told_why_it_failed",
+      "f1_waiting_steps_are_counted_and_a_drafted_document_is_reviewed_by_the_other_provider",
+      "f1_a_step_started_by_hand_is_reviewed_on_request_by_the_other_provider",
+      "f1_a_question_offers_none_or_two_to_four_distinct_choices",
+      "f1_a_chat_turn_keeps_its_session_and_the_next_one_resumes_it_exactly",
+      "f1_a_continued_prompt_asks_to_read_again_only_what_is_needed_and_keeps_the_state",
+      "f1_a_repaired_turn_is_told_why_the_failed_one_failed_before_its_instructions",
+      "f1_a_document_review_asks_for_the_step_review_verdict_and_cuts_a_long_document"
     ],
     "ignored": [
       "child_fixture",
@@ -131,7 +141,7 @@
     ]
   },
   "swift": {
-    "tests_min": 153
+    "tests_min": 161
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,
