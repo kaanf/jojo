@@ -65,9 +65,10 @@ fn capacity_left(c: &Connection, what: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    // M4: a running review takes one unit too.
+    // M4: a running review takes one unit too; step 7: so does a running brief turn.
     let turns = active_turns(c).map_err(|e| e.to_string())?
-        + crate::repairs::active_reviews(c).map_err(|e| e.to_string())?;
+        + crate::repairs::active_reviews(c).map_err(|e| e.to_string())?
+        + crate::briefs::active_briefs(c).map_err(|e| e.to_string())?;
     let capacity = config(c).map_err(|e| e.to_string())?.capacity("global");
     if attempts + turns >= capacity {
         return Err(format!(

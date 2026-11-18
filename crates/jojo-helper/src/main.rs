@@ -32,6 +32,13 @@ fn main() -> ExitCode {
         Ok(invocation @ (Invocation::Serve(_) | Invocation::ServeSlice(..))) => {
             let (roots, config, claude, discovered, remote) = match invocation {
                 Invocation::ServeSlice(roots, options) => {
+                    // Step 7: the workspace folder Onboarding chose is created private when
+                    // it does not exist yet; an existing one is never changed.
+                    if let Err(why) =
+                        jojo_storage::prepare_disposable_root(&options.disposable_root)
+                    {
+                        eprintln!("jojo-helper: {why}");
+                    }
                     let claude = options.claude.clone();
                     // D3: the login shell gets the helper's own HOME and nothing else.
                     let found =

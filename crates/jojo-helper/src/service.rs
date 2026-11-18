@@ -168,6 +168,35 @@ impl Workers {
         self.handles.push((Work::Turn, handle));
         Ok(())
     }
+    /// Step 7: one brief turn, sealed as a project brief. It counts as the lead turn
+    /// (`Work::Turn`): a chat turn and a brief turn never run together.
+    pub fn brief(
+        &mut self,
+        runtime: WorkerRuntime,
+        spec: TurnSpec,
+        launch: ProcessLaunch,
+        plan: StopPlan,
+        mut hooks: LaunchHooks,
+        stop: Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        hooks.emergency_stop = Some(stop);
+        let WorkerRuntime { engine, ids, clock } = runtime;
+        let handle = std::thread::Builder::new()
+            .name("jojo-brief".into())
+            .spawn(move || {
+                let ctx = LaunchContext {
+                    engine: &engine,
+                    ids: ids.as_ref(),
+                    clock: clock.as_ref(),
+                    poll: Duration::from_millis(10),
+                };
+                let run = run_turn(&ctx, &spec, &launch, &plan, hooks);
+                settle_brief(&ctx, &spec, &run).map(drop)
+            })
+            .map_err(|e| e.to_string())?;
+        self.handles.push((Work::Turn, handle));
+        Ok(())
+    }
     /// M4: one review turn: the supervised read-only run of a lead turn, sealed as a
     /// review. `stop` ends it early.
     pub fn review(
@@ -605,6 +634,17 @@ impl Service {
                         .map(|n| format!("closed {n}"))
                 })?;
             }
+            // Step 7: so is a brief turn; the human asks for the brief again.
+            let stale = service
+                .engine
+                .reader()
+                .and_then(|mut r| r.read(|v| v.unfinished_brief()))
+                .map_err(|e| e.to_string())?;
+            if let Some(turn) = stale {
+                service.command("CloseInterruptedBriefs", turn, |tx| {
+                    tx.close_interrupted_briefs().map(|n| format!("closed {n}"))
+                })?;
+            }
             // M3: a run an earlier helper was running comes back paused; the human
             // resumes it after the recovery review.
             let running = service
@@ -759,6 +799,7 @@ impl Service {
             | RequestKind::Validate
             | RequestKind::CandidateDecision
             | RequestKind::ChatTurn
+            | RequestKind::BriefTurn
             | RequestKind::AnswerQuestion
             | RequestKind::CancelTurn
             | RequestKind::SaveProject
@@ -779,6 +820,11 @@ impl Service {
             RequestKind::ProjectDetail => {
                 drop(reader);
                 self.project_detail(e)
+            }
+            // Protocol 1.12: lists the workspace folder after the snapshot is released.
+            RequestKind::Workspace => {
+                drop(reader);
+                self.workspace(e)
             }
             RequestKind::Candidate
             | RequestKind::CandidateChanges

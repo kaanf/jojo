@@ -157,7 +157,7 @@ impl Service {
                     .read(|v| match kind {
                         RequestKind::Attempts => v.ipc_attempts(q.before, e.minor >= 7),
                         RequestKind::Features => v.ipc_features(q.before),
-                        _ => v.ipc_documents(q.before, e.minor >= 10),
+                        _ => v.ipc_documents(q.before, e.minor >= 10, e.minor >= 12),
                     })
                     .map_err(|e| e.to_string())
             }
@@ -380,7 +380,70 @@ impl Service {
             return Err("InvalidPayload: unexpected or missing fields".into());
         }
         let q = protocol::ProjectDetailQuery::parse(&e.payload)?;
-        jojo_storage::project_detail(&self.engine, q.project)
+        jojo_storage::project_detail(&self.engine, q.project, e.minor >= 12)
+    }
+    /// Protocol 1.12 (step 7): the Git repositories in the workspace folder (the
+    /// disposable root), each with its stack and, when it is registered, its identity.
+    pub(super) fn workspace(&mut self, e: &Envelope) -> Result<Json, String> {
+        if !RequestKind::Workspace.shaped(&e.payload) {
+            return Err("InvalidPayload: unexpected or missing fields".into());
+        }
+        let Some(slice) = self.config.slice.clone() else {
+            return Ok(object([
+                ("root", Json::Null),
+                ("problem", text("No workspace folder is configured")),
+                ("repositories", Json::List(Vec::new())),
+            ]));
+        };
+        let root_text = slice.disposable_root.to_string_lossy().into_owned();
+        let root = match DisposableRoot::inspect(&slice.disposable_root) {
+            Ok(root) => root,
+            Err(why) => {
+                return Ok(object([
+                    ("root", text(root_text)),
+                    ("problem", text(why)),
+                    ("repositories", Json::List(Vec::new())),
+                ]));
+            }
+        };
+        let registered = self
+            .engine
+            .reader()
+            .and_then(|mut r| r.read(|v| v.registered_repositories()))
+            .map_err(|e| e.to_string())?;
+        let rows = root
+            .workspace()
+            .into_iter()
+            .map(|entry| {
+                let path = entry.path.to_string_lossy().into_owned();
+                let id = registered
+                    .iter()
+                    .find(|(_, p)| *p == path)
+                    .map_or(Json::Null, |(id, _)| identity(id.0));
+                object([
+                    ("path", text(path.clone())),
+                    (
+                        "name",
+                        text(
+                            entry
+                                .path
+                                .file_name()
+                                .map_or(path.clone(), |n| n.to_string_lossy().into_owned()),
+                        ),
+                    ),
+                    (
+                        "stack",
+                        Json::List(entry.stack.iter().map(|w| text(*w)).collect()),
+                    ),
+                    ("repository", id),
+                ])
+            })
+            .collect();
+        Ok(object([
+            ("root", text(root_text)),
+            ("problem", Json::Null),
+            ("repositories", Json::List(rows)),
+        ]))
     }
     /// Protocol 1.1: a fresh inspection; its digest binds the next resolution.
     pub(super) fn recovery_inspect(&mut self) -> Result<Json, String> {

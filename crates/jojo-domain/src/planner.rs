@@ -60,6 +60,9 @@ pub enum TurnKind {
     /// M4: reads a settled step's candidate and judges it (`review.rs`). Not a chat turn:
     /// it is started by the plan runner, never requested by name.
     Review,
+    /// Step 7: reads a registered repository and writes its project brief (`brief.rs`).
+    /// Not a chat turn: it belongs to a repository, not to a feature.
+    Brief,
 }
 
 impl TurnKind {
@@ -68,6 +71,7 @@ impl TurnKind {
             Self::Discover => "Discover",
             Self::Plan => "Plan",
             Self::Review => "Review",
+            Self::Brief => "Brief",
         }
     }
 
@@ -119,11 +123,11 @@ fn plain_absolute(path: &Path) -> bool {
 }
 
 impl TurnSpec {
-    /// A chat turn is the planner and a review turn the reviewer; no other role can be
+    /// A chat or brief turn is the planner and a review turn the reviewer; no other role can be
     /// expressed. Both are read-only.
     pub fn role(&self) -> Role {
         match self.kind {
-            TurnKind::Discover | TurnKind::Plan => Role::Planner,
+            TurnKind::Discover | TurnKind::Plan | TurnKind::Brief => Role::Planner,
             TurnKind::Review => Role::Reviewer,
         }
     }
@@ -524,6 +528,7 @@ pub enum LeadReply {
     Discovery(Discovery),
     Plan(PlanDraft),
     Review(crate::review::Verdict),
+    Brief(crate::brief::Brief),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -842,5 +847,6 @@ pub fn parse_reply(kind: TurnKind, reply: &str) -> Result<LeadReply, LeadError> 
         TurnKind::Discover => discovery(&root).map(LeadReply::Discovery),
         TurnKind::Plan => plan(&root).map(LeadReply::Plan),
         TurnKind::Review => crate::review::verdict(&root).map(LeadReply::Review),
+        TurnKind::Brief => crate::brief::brief(&root).map(LeadReply::Brief),
     }
 }

@@ -966,7 +966,9 @@ fn origin_words(url: &str) -> (String, &'static str) {
 /// its health, and what the project lacks for the flow (`missing`). Git is read after the
 /// read snapshot is released, with the local Git surface of `worktrees.rs`; `null` for an
 /// unknown project.
-pub fn project_detail(engine: &Engine, project: OpaqueId) -> Result<Json, String> {
+/// Step 7 (protocol 1.12, `briefs`): each repository also carries its project brief and
+/// its newest brief turn.
+pub fn project_detail(engine: &Engine, project: OpaqueId, briefs: bool) -> Result<Json, String> {
     let mut reader = engine.reader().map_err(|e| e.to_string())?;
     let found = reader
         .read(|v| v.project_repositories(project))
@@ -1028,7 +1030,17 @@ pub fn project_detail(engine: &Engine, project: OpaqueId) -> Result<Json, String
             ]));
             issues.push(issue.to_owned());
         }
-        rows.push(object([
+        let brief = if briefs {
+            let mut reader = engine.reader().map_err(|e| e.to_string())?;
+            Some(
+                reader
+                    .read(|v| v.ipc_brief(repository))
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
+        let Json::Object(mut row) = object([
             ("repository", jojo_domain::ipc::identity(repository.0)),
             ("name", text(name)),
             ("path", optional(path)),
@@ -1040,7 +1052,13 @@ pub fn project_detail(engine: &Engine, project: OpaqueId) -> Result<Json, String
             ("active_worktrees", Json::Int(active)),
             ("healthy", Json::Bool(issues.is_empty())),
             ("issues", texts(issues)),
-        ]));
+        ]) else {
+            unreachable!("a repository row is an object")
+        };
+        if let Some(brief) = brief {
+            row.push(("brief".into(), brief));
+        }
+        rows.push(Json::Object(row));
     }
     Ok(object([
         ("project", jojo_domain::ipc::identity(project)),

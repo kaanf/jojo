@@ -94,6 +94,103 @@ impl DisposableRoot {
     }
 }
 
+/// Step 7 (protocol 1.12): a Git repository found under the root, with what its manifests
+/// say it is built with.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkspaceEntry {
+    pub path: PathBuf,
+    pub stack: Vec<&'static str>,
+}
+
+/// The most entries [`DisposableRoot::workspace`] lists.
+pub const WORKSPACE_ROWS: usize = 64;
+
+/// Manifest file names and the word each one adds to a repository's stack.
+const MANIFESTS: [(&str, &str); 13] = [
+    ("Cargo.toml", "Rust"),
+    ("Package.swift", "Swift"),
+    ("build.gradle.kts", "Gradle"),
+    ("build.gradle", "Gradle"),
+    ("pom.xml", "Maven"),
+    ("package.json", "Node"),
+    ("tsconfig.json", "TypeScript"),
+    ("go.mod", "Go"),
+    ("pyproject.toml", "Python"),
+    ("requirements.txt", "Python"),
+    ("Gemfile", "Ruby"),
+    ("composer.json", "PHP"),
+    ("Makefile", "Make"),
+];
+
+impl DisposableRoot {
+    /// The Git working directories one or two levels below the root, by name, at most
+    /// [`WORKSPACE_ROWS`]. Hidden directories and symbolic links are not followed;
+    /// nothing is read but directory listings and the presence of manifest files.
+    pub fn workspace(&self) -> Vec<WorkspaceEntry> {
+        let children = |dir: &Path| -> Vec<PathBuf> {
+            let Ok(read) = std::fs::read_dir(dir) else {
+                return Vec::new();
+            };
+            let mut out: Vec<PathBuf> = read
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                .map(|e| e.path())
+                .collect();
+            out.sort();
+            out
+        };
+        let is_repository = |dir: &Path| std::fs::symlink_metadata(dir.join(".git")).is_ok();
+        let mut found = Vec::new();
+        for first in children(&self.path) {
+            if found.len() == WORKSPACE_ROWS {
+                break;
+            }
+            if is_repository(&first) {
+                found.push(first);
+                continue;
+            }
+            for second in children(&first) {
+                if found.len() == WORKSPACE_ROWS {
+                    break;
+                }
+                if is_repository(&second) {
+                    found.push(second);
+                }
+            }
+        }
+        found
+            .into_iter()
+            .map(|path| {
+                let mut stack: Vec<&'static str> = Vec::new();
+                for (file, word) in MANIFESTS {
+                    if path.join(file).is_file() && !stack.contains(&word) {
+                        stack.push(word);
+                    }
+                }
+                WorkspaceEntry { path, stack }
+            })
+            .collect()
+    }
+}
+
+/// Step 7: the workspace folder Onboarding chose, created private (0700) when it does not
+/// exist yet and its parent does. An existing directory is left exactly as it is: whether
+/// it may serve as the root is still decided by [`DisposableRoot::inspect`] on every use.
+pub fn prepare_disposable_root(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("disposable root: absolute path required".into());
+    }
+    if std::fs::symlink_metadata(path).is_ok() {
+        return Ok(());
+    }
+    std::fs::DirBuilder::new()
+        .recursive(false)
+        .mode(0o700)
+        .create(path)
+        .map_err(|e| format!("disposable root: {e}"))
+}
+
 /// The helper's owned worktree root: created private if absent, never adopted otherwise.
 pub fn prepare_worktree_root(path: &Path) -> Result<WorktreeRoot, String> {
     if std::fs::symlink_metadata(path).is_err() {

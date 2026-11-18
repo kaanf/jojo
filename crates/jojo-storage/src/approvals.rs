@@ -66,6 +66,10 @@ pub(crate) fn approval_inputs_ready(c: &Connection, id: ArtifactId) -> Result<bo
     if version(c, id, None)?.is_some() {
         return Ok(review_readiness(c, id)?.is_some_and(|r| r.is_ready()));
     }
+    // Step 7: a project brief stands on nothing upstream.
+    if crate::briefs::is_brief(c, &id_to_text(id.0))? {
+        return Ok(true);
+    }
     let row=c.query_optional(
         "SELECT prd,adr,prd_decision,adr_decision FROM review_documents WHERE id=?1 ORDER BY revision DESC LIMIT 1",
         &[Value::Text(&id_to_text(id.0))],
@@ -147,6 +151,13 @@ pub(crate) fn bundle(c: &Connection, id: ArtifactId) -> Result<Option<ReviewBund
     let (revision, content_hash, displayed_hash, upstream) = if let Some(v) = version(c, id, None)?
     {
         (v.revision, v.content_digest, v.rendered_digest, vec![])
+    } else if let Some((rev, content, rendered, _)) = crate::briefs::newest(c, &id_to_text(id.0))? {
+        (
+            Revision(from_db(rev)?),
+            hash(&[&content]),
+            hash(&[&rendered]),
+            vec![],
+        )
     } else {
         let row=c.query_optional("SELECT revision,prd,adr,content,rendered,prd_decision,adr_decision FROM review_documents WHERE id=?1 ORDER BY revision DESC LIMIT 1", &[Value::Text(&id_to_text(id.0))], |r|Ok((r.int(0)?,r.text(1)?,r.optional_text(2)?,r.text(3)?,r.text(4)?,r.int(5)?,r.optional_int(6)?)))?;
         let Some((rev, prd, adr, content, rendered, pd, ad)) = row else {

@@ -163,6 +163,22 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// Step 7: the executable a brief turn runs, like a lead turn's.
+    pub fn record_brief_executable(
+        &mut self,
+        turn: OpaqueId,
+        fingerprint: &ProviderFingerprint,
+    ) -> Result<(), TxError> {
+        let identity = self
+            .record_executable(fingerprint)?
+            .ok_or_else(|| deny("TurnRefused: not a production fingerprint"))?;
+        self.conn.execute(
+            "INSERT INTO brief_executables VALUES (?1,?2)",
+            &[Value::Text(&id_to_text(turn)), Value::Text(&identity)],
+        )?;
+        Ok(())
+    }
+
     /// M4: the executable a review turn runs, like a lead turn's.
     pub fn record_review_executable(
         &mut self,

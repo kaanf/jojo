@@ -278,6 +278,9 @@ fn document_label(c: &Connection, document: &str) -> Result<String, StorageError
     if let Some(content) = prd {
         return Ok(crate::overview::prd_title(&content).unwrap_or_else(|| "Requirements".into()));
     }
+    if let Some(title) = crate::briefs::brief_title(c, document)? {
+        return Ok(title);
+    }
     let kind = c.query_optional(
         "SELECT kind, EXISTS(SELECT 1 FROM execution_plans WHERE plan=?1) FROM review_documents
          WHERE id=?1 LIMIT 1",
@@ -296,6 +299,18 @@ fn document_label(c: &Connection, document: &str) -> Result<String, StorageError
         Some(name) => format!("{kind} · {name}"),
         None => kind.to_owned(),
     })
+}
+
+/// A repository's directory name, or "a repository".
+fn repository_label(c: &Connection, repository: &str) -> Result<String, StorageError> {
+    let path = c.query_optional(
+        "SELECT path FROM local_repositories WHERE id=?1",
+        &[Value::Text(repository)],
+        |r| r.text(0),
+    )?;
+    Ok(path
+        .as_deref()
+        .map_or_else(|| "a repository".into(), repository_name))
 }
 
 /// A plan's feature name, or "a plan".
@@ -528,6 +543,31 @@ pub(crate) fn event_summary(
             };
             format!("Review of {of}: {}", field(1).to_lowercase())
         }
+        "BriefTurnAccepted" => format!(
+            "Project brief of {} started on {}",
+            repository_label(c, field(2))?,
+            provider_words(field(3))
+        ),
+        "BriefTurnFinished" => {
+            let repository = c.query_optional(
+                "SELECT repository FROM brief_turns WHERE turn=?1",
+                &[Value::Text(field(0))],
+                |r| r.text(0),
+            )?;
+            let verb = if field(1) == "REPLIED" {
+                "replied"
+            } else {
+                outcome_words(field(1))
+            };
+            format!(
+                "Project brief turn of {} {verb}",
+                repository_label(c, repository.as_deref().unwrap_or(""))?
+            )
+        }
+        "ProjectBriefCreated" => {
+            let revision = field(1).strip_prefix("revision=").unwrap_or("?");
+            format!("{} rev {revision} proposed", document_label(c, field(0))?)
+        }
         "RecoveryResolved" => format!("{} resolved in recovery", attempt(0)?),
         "RecoveryStarted" => "Admission reopened after the recovery review".into(),
         "ProjectSaved" => {
@@ -587,6 +627,7 @@ pub(crate) fn event_category(kind: &str, payload: &str) -> &'static str {
         "ProjectSaved" | "ResourceConfigurationChanged" => "Setup",
         "ArtifactVersionCreated"
         | "ReviewDocumentCreated"
+        | "ProjectBriefCreated"
         | "ExecutionPlanCreated"
         | "ValidationPlanStored" => "Document",
         "UsageObserved" | "EffectObserved" => "Attempt",
@@ -595,7 +636,7 @@ pub(crate) fn event_category(kind: &str, payload: &str) -> &'static str {
         _ if starts(&["Validation", "StepReview", "Review"]) => "Validation",
         _ if starts(&["ExternalAction", "Worktree"]) => "Git",
         _ if starts(&["Evidence"]) => "Evidence",
-        _ if starts(&["Executable"]) => "Setup",
+        _ if starts(&["Executable", "BriefTurn"]) => "Setup",
         _ if starts(&["LeadTurn", "Question", "StepQuestion", "Turn", "Tool"]) => "Chat",
         _ if starts(&["PlanRun", "PlanStep", "Dependency"]) => "Plan",
         _ if starts(&[
@@ -662,6 +703,8 @@ pub(crate) fn event_project(
                 "SELECT coalesce(
                    (SELECT repository FROM owned_worktrees WHERE attempt=?1),
                    (SELECT id FROM local_repositories WHERE id=?1),
+                   (SELECT repository FROM brief_turns WHERE turn=?1),
+                   (SELECT repository FROM project_briefs WHERE id=?1 LIMIT 1),
                    (SELECT repository FROM plan_runs WHERE plan=?1 ORDER BY revision DESC LIMIT 1))",
                 &[Value::Text(field)],
                 |r| r.optional_text(0),

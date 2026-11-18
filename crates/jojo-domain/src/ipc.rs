@@ -21,7 +21,7 @@ pub const MAJOR: i64 = 1;
 /// 1.10 the documents answer lists the external requests that wait.
 /// 1.11 adds the recovery detail and project detail queries; at 1.11 an event carries a
 /// category and the project it concerns.
-pub const MINOR: i64 = 11;
+pub const MINOR: i64 = 12;
 pub const MAX_FRAME: usize = 64 * 1024;
 pub const MAX_PAGE: u32 = 8;
 

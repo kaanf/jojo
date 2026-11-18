@@ -74,6 +74,8 @@ pub enum RequestKind {
     ResolveExternal,
     RecoveryDetail,
     ProjectDetail,
+    BriefTurn,
+    Workspace,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,7 +138,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 55] = [
+pub const SPECS: [Spec; 57] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -192,6 +194,8 @@ pub const SPECS: [Spec; 55] = [
     spec(K::ResolveExternal, "ResolveExternal", Mutation, 10, false, Exact, &["action"]),
     spec(K::RecoveryDetail, "RecoveryDetail", Query, 11, false, Exact, &[]),
     spec(K::ProjectDetail, "ProjectDetail", Query, 11, false, Exact, &["project"]),
+    spec(K::BriefTurn, "BriefTurn", Mutation, 12, false, Exact, &["repository", "provider", "message"]),
+    spec(K::Workspace, "Workspace", Query, 12, false, Exact, &[]),
 ];
 
 impl RequestKind {
@@ -496,6 +500,30 @@ impl ProjectDetailQuery {
     pub fn parse(p: &Json) -> Result<Self, String> {
         Ok(Self {
             project: id(get(p, "project")?)?,
+        })
+    }
+}
+
+/// Protocol 1.12 (step 7): the project brief of one registered repository, written by a
+/// read-only lead turn on `provider`. `message` is what the human says they bring.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BriefTurnCommand {
+    pub repository: RepositoryId,
+    pub provider: ProviderKind,
+    pub message: String,
+}
+impl BriefTurnCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        let repository = RepositoryId(id(get(p, "repository")?)?);
+        let provider = match string(get(p, "provider")?)? {
+            "Codex" => ProviderKind::Codex,
+            "ClaudeCode" => ProviderKind::ClaudeCode,
+            _ => return Err("UnknownProvider".into()),
+        };
+        Ok(Self {
+            repository,
+            provider,
+            message: string(get(p, "message")?)?.to_owned(),
         })
     }
 }
@@ -1139,15 +1167,17 @@ mod tests {
         // 1.9: the document, decision, plan and attempt detail queries (1.8 added none).
         // 1.10 (M5): the external actions query and its four commands.
         // 1.11: the recovery detail and project detail queries.
-        for minor in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
+        // 1.12 (step 7): the brief turn and the workspace query.
+        for minor in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] {
             let v110 = if minor >= 10 {
                 " RequestExternal AuthorizeExternal InspectExternal ResolveExternal"
             } else {
                 ""
             };
+            let v112 = if minor >= 12 { " BriefTurn" } else { "" };
             assert_eq!(
                 names(Mutation, minor),
-                format!("{v12_commands} SaveProject RunPlan ControlPlan{v110}")
+                format!("{v12_commands} SaveProject RunPlan ControlPlan{v110}{v112}")
             );
             let v14 = if minor >= 4 { " Executables" } else { "" };
             let v15 = if minor >= 5 { " Repairs" } else { "" };
@@ -1168,11 +1198,16 @@ mod tests {
             } else {
                 ""
             };
+            let v112q = if minor >= 12 { " Workspace" } else { "" };
             assert_eq!(
                 names(Query, minor),
-                format!("{v12_queries} Projects PlanRun{v14}{v15}{v16}{v17}{v19}{v110q}{v111}")
+                format!(
+                    "{v12_queries} Projects PlanRun{v14}{v15}{v16}{v17}{v19}{v110q}{v111}{v112q}"
+                )
             );
         }
+        assert_eq!(RequestKind::of_frame("BriefTurn", 11), None);
+        assert_eq!(RequestKind::of_frame("Workspace", 12), Some(K::Workspace));
         assert_eq!(RequestKind::of_frame("Executables", 3), None);
         assert_eq!(RequestKind::of_frame("Repairs", 4), None);
         assert_eq!(RequestKind::of_frame("Attempts", 5), None);

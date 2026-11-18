@@ -169,6 +169,10 @@ impl Service {
                 let c = protocol::ChatTurnCommand::parse(p)?;
                 self.chat_turn(request, e.request, c)
             }
+            RequestKind::BriefTurn => {
+                let c = protocol::BriefTurnCommand::parse(p)?;
+                self.brief_turn(request, e.request, c)
+            }
             RequestKind::AnswerQuestion => self.answer_question(request, p),
             RequestKind::CancelTurn => self.cancel_turn(request, p),
             RequestKind::RecoveryStart => self.recovery_start(request, p, origin),
@@ -222,7 +226,7 @@ impl Service {
         ) {
             fields.push(("dispatch".into(), text("not repeated")));
         }
-        if kind == RequestKind::ChatTurn {
+        if matches!(kind, RequestKind::ChatTurn | RequestKind::BriefTurn) {
             fields.push(("turn".into(), identity(e.request)));
             fields.push(("dispatch".into(), text("not repeated")));
         }
@@ -423,7 +427,12 @@ impl Service {
         let protocol::CancelTurnCommand { turn } = protocol::CancelTurnCommand::parse(p)?;
         self.engine
             .execute(request, move |tx| {
-                tx.request_turn_stop(turn)?;
+                // Step 7: a brief turn is stopped through the same command.
+                if tx.is_brief_turn(turn)? {
+                    tx.request_brief_stop(turn)?;
+                } else {
+                    tx.request_turn_stop(turn)?;
+                }
                 Ok("stop committed; the turn ends with its result".into())
             })
             .map(receipt)
@@ -705,6 +714,121 @@ impl Service {
                 ))
             }
         }
+    }
+    /// Step 7 (protocol 1.12): one brief turn, accepted and launched like a chat turn and
+    /// sealed as a brief. It takes the lead turn's place: no chat turn runs beside it.
+    fn brief_turn(
+        &mut self,
+        request: CommandRequest,
+        turn: OpaqueId,
+        c: protocol::BriefTurnCommand,
+    ) -> Result<Json, String> {
+        let with = |r: Receipt, dispatch: &str| {
+            let Json::Object(mut fields) = receipt(r) else {
+                unreachable!("receipt is an object")
+            };
+            fields.push(("turn".into(), identity(turn)));
+            fields.push(("dispatch".into(), text(dispatch)));
+            Json::Object(fields)
+        };
+        let rejected = |e: CommandError| match e {
+            CommandError::Rejected(TxError::Rejected(why)) => why,
+            other => format!("{other:?}"),
+        };
+        let slice = self.config.slice.clone().ok_or("SliceNotConfigured")?;
+        if self.workers.running(Work::Turn) != 0 {
+            return Err("TurnRefused: another lead turn is running".into());
+        }
+        self.engine
+            .reader()
+            .and_then(|mut r| r.read(|v| v.capacity_left("a lead turn")))
+            .map_err(|e| e.to_string())??;
+        let adapter = self.adapter(c.provider, &slice)?;
+        let path = self
+            .engine
+            .reader()
+            .and_then(|mut r| r.read(|v| v.local_repository_path(c.repository)))
+            .map_err(|e| e.to_string())?
+            .ok_or("TurnRefused: the repository is not registered")?;
+        let repository = DisposableRoot::inspect(&slice.disposable_root)?.repository(&path)?;
+        if repository.id() != c.repository {
+            return Err("TurnRefused: repository identity changed".into());
+        }
+        let base = repository_head(&repository).map_err(|e| format!("TurnRefused: {e}"))?;
+        let brief = self.ids.next_id().map_err(|_| "IDs exhausted")?;
+        let accepted = BriefRequest {
+            turn,
+            brief,
+            repository: c.repository,
+            provider: c.provider,
+            message: c.message,
+        };
+        let fingerprint = adapter.fingerprint().clone();
+        let r = self
+            .engine
+            .execute(request, move |tx| {
+                let receipt = tx.accept_brief(&accepted, &base)?;
+                tx.record_brief_executable(turn, &fingerprint)?;
+                Ok(receipt)
+            })
+            .map_err(rejected)?;
+        if r.replayed {
+            return Ok(with(r, "not repeated"));
+        }
+        self.finalized = false;
+        match self.dispatch_brief(turn, &repository, &adapter) {
+            Ok(()) => Ok(with(r, "launched")),
+            Err(why) => {
+                let detail = format!("not spawned: {why}");
+                self.command("FinishBriefTurn", turn, move |tx| {
+                    tx.finish_brief(turn, TurnOutcome::Failed, &detail, None)
+                })?;
+                Err(format!(
+                    "TurnFailed: {why}; command {:032x} is committed and nothing was launched",
+                    turn.0
+                ))
+            }
+        }
+    }
+    fn dispatch_brief(
+        &mut self,
+        turn: OpaqueId,
+        repository: &LocalRepository,
+        adapter: &Adapter,
+    ) -> Result<(), String> {
+        let spec = brief_spec(
+            &self.engine,
+            turn,
+            repository,
+            &adapter.turn_fingerprint(),
+            adapter.variables(),
+        )?;
+        let launch = adapter.prepare_turn(&spec)?;
+        let mut hooks = self
+            .config
+            .launch_hooks
+            .as_mut()
+            .map_or_else(LaunchHooks::default, |make| make());
+        if hooks.inspector.is_none() {
+            hooks.inspector = self.config.inspector.clone();
+        }
+        if hooks.guard.is_none() {
+            hooks.guard = self.guard.clone();
+        }
+        let plan = StopPlan::new(adapter.capabilities(), StopBudgets::ACCEPTED);
+        self.turn_stop = Arc::new(AtomicBool::new(false));
+        self.workers.brief(
+            WorkerRuntime {
+                engine: self.engine.clone(),
+                ids: self.ids.clone(),
+                clock: self.clock.clone(),
+            },
+            spec,
+            launch,
+            plan,
+            hooks,
+            self.turn_stop.clone(),
+        )
     }
     fn dispatch_turn(
         &mut self,

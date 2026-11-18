@@ -658,7 +658,7 @@ impl Tx<'_> {
             return Err(deny("AdmissionClosed"));
         }
         // One turn at a time; a turn takes one unit of the global capacity (D4).
-        if unfinished(self.conn)?.is_some() {
+        if unfinished(self.conn)?.is_some() || crate::briefs::brief_running(self.conn)? {
             return Err(deny("TurnRefused: another lead turn is running"));
         }
         self.capacity_left("a lead turn")?;
@@ -705,9 +705,15 @@ impl Tx<'_> {
         let list = exchanges(self.conn, request.feature)?;
         // M3: what the project says goes into every turn; a plan turn keeps the revision.
         let project = crate::projects::of_repository(self.conn, request.repository)?;
-        let section = project
+        let mut section = project
             .as_ref()
             .map(|(_, _, record)| record.prompt_section());
+        // Step 7: the repository's approved project brief goes into every turn after it.
+        if let Some(brief) = crate::briefs::approved_brief(self.conn, request.repository)? {
+            let text = section.get_or_insert_with(String::new);
+            text.push_str("\n# Project brief (approved by the product owner)\n");
+            text.push_str(&brief);
+        }
         let prompt = match request.kind {
             TurnKind::Discover => {
                 let draft = match feature_prd(self.conn, request.feature)? {
@@ -745,6 +751,9 @@ impl Tx<'_> {
             }
             TurnKind::Review => {
                 return Err(deny("TurnRefused: a review is not a chat turn"));
+            }
+            TurnKind::Brief => {
+                return Err(deny("TurnRefused: a brief is not a chat turn"));
             }
         };
         if prompt.len() > MAX_PROMPT_BYTES {
@@ -1645,6 +1654,7 @@ pub fn run_turn(
         // M4: a review turn is stopped through its own record.
         let stopped = r.read(|v| match kind {
             TurnKind::Review => Ok(v.review(id)?.is_none_or(|t| t.stop_requested)),
+            TurnKind::Brief => Ok(v.brief_turn(id)?.is_none_or(|t| t.stop_requested)),
             _ => Ok(v.turn(id)?.is_none_or(|t| t.stop_requested)),
         });
         if stopped.is_err() {

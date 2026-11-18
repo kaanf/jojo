@@ -109,6 +109,11 @@ impl MigrationPlan {
                 name: "push and draft pull request of a plan branch",
                 sql: SCHEMA_V16,
             },
+            Migration {
+                version: 17,
+                name: "project briefs and the turns that write them",
+                sql: SCHEMA_V17,
+            },
         ])
     }
 
@@ -1301,6 +1306,57 @@ CREATE TRIGGER external_action_observations_immutable BEFORE UPDATE ON external_
 CREATE TRIGGER external_action_observations_keep BEFORE DELETE ON external_action_observations BEGIN SELECT RAISE(ABORT,'immutable external action'); END;
 "#;
 
+/// Step 7: a brief turn reads one registered repository, read-only, and writes its
+/// project brief. It is a lead turn of its own, like a review: it belongs to a repository,
+/// not to a feature. Each reply is a new immutable revision of the repository's one brief,
+/// approved like any document (`human_decisions`, subject = the brief).
+const SCHEMA_V17: &str = r#"
+CREATE TABLE brief_turns (
+ turn TEXT PRIMARY KEY CHECK(length(turn)=32),
+ brief TEXT NOT NULL CHECK(length(brief)=32),
+ project TEXT, project_revision INTEGER,
+ repository TEXT NOT NULL REFERENCES local_repositories(id),
+ base TEXT NOT NULL CHECK(length(base) IN (40,64)),
+ provider TEXT NOT NULL CHECK(provider IN ('Codex','ClaudeCode')),
+ message TEXT NOT NULL,
+ prompt TEXT NOT NULL CHECK(length(prompt)>0),
+ prompt_digest TEXT NOT NULL CHECK(length(prompt_digest)=64),
+ epoch INTEGER NOT NULL REFERENCES engine_sessions(epoch),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ CHECK((project IS NULL)=(project_revision IS NULL)));
+CREATE TABLE brief_turn_results (
+ turn TEXT PRIMARY KEY REFERENCES brief_turns(turn),
+ outcome TEXT NOT NULL CHECK(outcome IN ('REPLIED','FAILED','CANCELLED','INTERRUPTED')),
+ detail TEXT NOT NULL, summary TEXT NOT NULL, reply TEXT NOT NULL,
+ revision INTEGER,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ CHECK((outcome='REPLIED')=(reply<>'')),
+ CHECK(outcome='REPLIED' OR revision IS NULL));
+CREATE TABLE brief_turn_stops (
+ turn TEXT PRIMARY KEY REFERENCES brief_turns(turn),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq));
+CREATE TABLE brief_executables (
+ turn TEXT PRIMARY KEY REFERENCES brief_turns(turn),
+ identity TEXT NOT NULL REFERENCES executable_identities(identity));
+CREATE TABLE project_briefs (
+ id TEXT NOT NULL CHECK(length(id)=32),
+ revision INTEGER NOT NULL CHECK(revision>0),
+ repository TEXT NOT NULL REFERENCES local_repositories(id),
+ turn TEXT NOT NULL UNIQUE REFERENCES brief_turns(turn),
+ content TEXT NOT NULL CHECK(length(content)>0),
+ rendered TEXT NOT NULL CHECK(length(rendered)>0),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ PRIMARY KEY(id, revision));
+CREATE INDEX project_briefs_repository ON project_briefs(repository);
+CREATE TRIGGER brief_turns_immutable BEFORE UPDATE ON brief_turns BEGIN SELECT RAISE(ABORT,'immutable brief'); END;
+CREATE TRIGGER brief_turns_keep BEFORE DELETE ON brief_turns BEGIN SELECT RAISE(ABORT,'immutable brief'); END;
+CREATE TRIGGER brief_turn_results_immutable BEFORE UPDATE ON brief_turn_results BEGIN SELECT RAISE(ABORT,'immutable brief'); END;
+CREATE TRIGGER brief_turn_results_keep BEFORE DELETE ON brief_turn_results BEGIN SELECT RAISE(ABORT,'immutable brief'); END;
+CREATE TRIGGER brief_turn_stops_keep BEFORE DELETE ON brief_turn_stops BEGIN SELECT RAISE(ABORT,'immutable brief'); END;
+CREATE TRIGGER project_briefs_immutable BEFORE UPDATE ON project_briefs BEGIN SELECT RAISE(ABORT,'immutable brief'); END;
+CREATE TRIGGER project_briefs_keep BEFORE DELETE ON project_briefs BEGIN SELECT RAISE(ABORT,'immutable brief'); END;
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -1312,7 +1368,7 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 16));
+        assert_eq!((report.from_version, report.to_version), (0, 17));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);

@@ -172,6 +172,34 @@ pub(crate) fn review_kind(
     })
 }
 
+/// The wire kind of any stored kind: `PRD`, `BRIEF` (step 7) or a review document's.
+pub(crate) fn wire_kind(
+    c: &Connection,
+    id: &str,
+    stored: &str,
+) -> Result<&'static str, StorageError> {
+    match stored {
+        "PRD" => Ok("Prd"),
+        "BRIEF" => Ok("Brief"),
+        "" => Ok("Unknown"),
+        other => review_kind(c, id, other),
+    }
+}
+
+/// The title a document has: a requirements document's own, a brief's repository.
+fn document_title(
+    c: &Connection,
+    id: &str,
+    stored: &str,
+    content: &str,
+) -> Result<Option<String>, StorageError> {
+    match stored {
+        "PRD" => Ok(prd_title(content)),
+        "BRIEF" => crate::briefs::brief_title(c, id),
+        _ => Ok(None),
+    }
+}
+
 /// The approval state of a document's newest revision, whether an earlier revision was
 /// decided, and the event of the decision that applies to this revision.
 pub(crate) fn approval_state(
@@ -302,7 +330,13 @@ impl ReadView<'_> {
     /// and the number of things that wait (`pending`).
     /// M5 (protocol 1.10, `external`): also the push and pull request requests that wait
     /// for the human's decision, counted in `pending`.
-    pub fn ipc_documents(&self, before: Option<u64>, external: bool) -> Result<Json, StorageError> {
+    /// Step 7 (protocol 1.12, `briefs`): also the project briefs.
+    pub fn ipc_documents(
+        &self,
+        before: Option<u64>,
+        external: bool,
+        briefs: bool,
+    ) -> Result<Json, StorageError> {
         let c = self.conn;
         let before = before.map_or(Ok(i64::MAX), to_db)?;
         let all = c.query(
@@ -310,9 +344,11 @@ impl ReadView<'_> {
                SELECT artifact_id AS id, 'PRD' AS kind, max(created_event_seq) AS created
                  FROM artifact_versions WHERE artifact_type='PRD' GROUP BY artifact_id
                UNION ALL
-               SELECT id, kind, max(event) FROM review_documents GROUP BY id)
+               SELECT id, kind, max(event) FROM review_documents GROUP BY id
+               UNION ALL
+               SELECT id, 'BRIEF', max(event) FROM project_briefs WHERE ?1 GROUP BY id)
              ORDER BY created DESC",
-            &[],
+            &[Value::Int(i64::from(briefs))],
             |r| Ok((r.text(0)?, r.text(1)?, r.int(2)?)),
         )?;
         let mut pending = 0u64;
@@ -340,6 +376,14 @@ impl ReadView<'_> {
                     |r| Ok(("Prd", r.int(0)?, prd_title(&r.text(1)?), r.text(2)?)),
                 )
                 .map(|(k, rev, t, a)| (k, rev, t, Some(a)))?
+            } else if kind == "BRIEF" {
+                let revision = c.query_one(
+                    "SELECT max(revision) FROM project_briefs WHERE id=?1",
+                    &[Value::Text(id)],
+                    |r| r.int(0),
+                )?;
+                let title = crate::briefs::brief_title(c, id)?;
+                ("Brief", revision, title, Some("MODEL".to_owned()))
             } else {
                 let revision = c.query_one(
                     "SELECT max(revision) FROM review_documents WHERE id=?1",
@@ -470,6 +514,30 @@ fn revision_rows(c: &Connection, id: &str) -> Result<(String, Vec<RevisionRow>),
     if !prd.is_empty() {
         return Ok(("PRD".into(), prd));
     }
+    let briefs = c.query(
+        "SELECT revision,content,rendered,event FROM project_briefs WHERE id=?1 ORDER BY revision",
+        &[Value::Text(id)],
+        |r| {
+            Ok(RevisionRow {
+                revision: r.int(0)?,
+                content: r.text(1)?,
+                rendered: r.text(2)?,
+                digest: String::new(),
+                created: r.int(3)?,
+                author: Some("MODEL".into()),
+            })
+        },
+    )?;
+    if !briefs.is_empty() {
+        let rows = briefs
+            .into_iter()
+            .map(|mut row| {
+                row.digest = hash(&[&row.content]);
+                row
+            })
+            .collect();
+        return Ok(("BRIEF".into(), rows));
+    }
     let mut kind = String::new();
     let rows = c.query(
         "SELECT revision,content,rendered,event,kind FROM review_documents
@@ -599,11 +667,7 @@ impl ReadView<'_> {
                 row
             }
         };
-        let kind = if prd {
-            "Prd"
-        } else {
-            review_kind(c, &id, &stored)?
-        };
+        let kind = wire_kind(c, &id, &stored)?;
         let (approval, stale, _) = approval_state(c, document, prd)?;
         let current = bundle(c, document)?.map(|b| b.hash);
         let all = decisions(c, document)?;
@@ -731,11 +795,7 @@ impl ReadView<'_> {
             ("kind", text(kind)),
             (
                 "title",
-                optional(if prd {
-                    prd_title(&chosen.content)
-                } else {
-                    None
-                }),
+                optional(document_title(c, &id, &stored, &chosen.content)?),
             ),
             ("feature", feature),
             ("feature_name", feature_name),
@@ -774,19 +834,11 @@ impl ReadView<'_> {
         let mut out = Vec::new();
         for (seq, subject, revision, action) in rows.into_iter().take(OVERVIEW_ROWS) {
             let (stored, revs) = revision_rows(c, &subject)?;
-            let prd = stored == "PRD";
-            let kind = if prd {
-                "Prd"
-            } else if stored.is_empty() {
-                "Unknown"
-            } else {
-                review_kind(c, &subject, &stored)?
+            let kind = wire_kind(c, &subject, &stored)?;
+            let title = match revs.iter().find(|r| r.revision == revision) {
+                Some(r) => document_title(c, &subject, &stored, &r.content)?,
+                None => None,
             };
-            let title = revs
-                .iter()
-                .find(|r| r.revision == revision)
-                .filter(|_| prd)
-                .and_then(|r| prd_title(&r.content));
             let document = ArtifactId(id_from_text(&subject)?);
             let current = bundle(c, document)?.map(|b| b.hash);
             let applies = decisions(c, document)?.last().is_some_and(|d| {
@@ -843,7 +895,10 @@ pub(crate) fn event_actor(
             WHERE x.command_id=?2 AND r.outcome='REPLIED'),
            (SELECT v.provider FROM events x JOIN step_review_results r ON r.event=x.seq
               JOIN step_reviews v ON v.review=r.review
-            WHERE x.command_id=?2 AND r.outcome IN ('APPROVED','REJECTED')))",
+            WHERE x.command_id=?2 AND r.outcome IN ('APPROVED','REJECTED')),
+           (SELECT t.provider FROM events x JOIN brief_turn_results r ON r.event=x.seq
+              JOIN brief_turns t ON t.turn=r.turn
+            WHERE x.command_id=?2 AND r.outcome='REPLIED'))",
         &[Value::Int(seq), Value::Text(command)],
         |r| r.optional_text(0),
     )?;

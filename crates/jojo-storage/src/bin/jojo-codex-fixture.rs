@@ -292,6 +292,8 @@ enum Lead {
     Hang(u64),
 }
 
+const LEAD_BRIEF: &str = r#"{"schema":"jojo-project-brief-v1","summary":"A small sample repository.","rows":[{"key":"Architecture","text":"One source file and a README.","sources":["README.md"],"warning":false},{"key":"Watch out","text":"No tests were found.","sources":[],"warning":true}],"test_command":["/usr/bin/true"]}"#;
+
 /// M2: the scenarios of a lead agent turn, the same for both dialects. `lead` answers by
 /// what the prompt already holds: questions first, then a draft, then a revised draft.
 fn lead(scenario: &str, prompt: &str, args: &[String]) -> Lead {
@@ -316,6 +318,8 @@ fn lead(scenario: &str, prompt: &str, args: &[String]) -> Lead {
             Lead::Reply(lead_draft("Slugify from the shell"))
         }
         "lead" => Lead::Reply(lead_draft("Slugify from the shell, revised")),
+        // Step 7: a project brief of the sample repository.
+        "lead-brief" => Lead::Reply(LEAD_BRIEF.into()),
         "lead-prose" => Lead::Reply("I looked around and could not decide.".into()),
         "lead-write" => Lead::Write(LEAD_QUESTIONS.into()),
         // What actually crossed the OS boundary, as seen from inside the child.
