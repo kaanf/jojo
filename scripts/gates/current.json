@@ -1,9 +1,9 @@
 {
-  "artifact": "gate-s6",
-  "scope": "Tree after step 6 of the Liquid Glass order: Projects, the Recovery Center, Activity & Audit and Settings & Providers from their Mac boards; protocol 1.11 (RecoveryDetail, ProjectDetail, events with a category and a project), derived, no schema change (schema 16); Settings › Appearance is the app's one setting.",
+  "artifact": "gate-s7",
+  "scope": "Tree after step 7: Onboarding and New Project from their Mac boards; protocol 1.12 (BriefTurn, Workspace, a project's briefs in ProjectDetail, briefs in Documents), schema 17 (project briefs and the turns that write them); the app starts the helper from the setup Onboarding saves.",
   "boundary_tests_min": 109,
   "rust": {
-    "passed_min": 499,
+    "passed_min": 503,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -106,7 +106,11 @@
       "s6_project_detail_reads_branch_head_worktrees_origin_and_what_is_missing",
       "s6_events_at_1_11_carry_a_category_and_the_project_they_concern",
       "details::tests::s6_origin_words_drop_credentials_and_name_the_kind",
-      "features::tests::s6_every_event_kind_has_a_category"
+      "features::tests::s6_every_event_kind_has_a_category",
+      "brief::tests::a_brief_reads_and_renders",
+      "brief::tests::a_brief_is_refused_when_it_strays",
+      "s7_a_brief_is_proposed_by_a_read_only_turn_approved_by_the_human_and_then_prompted",
+      "s7_a_brief_turn_is_refused_beside_another_lead_turn_and_the_workspace_lists_repositories"
     ],
     "ignored": [
       "child_fixture",
@@ -124,7 +128,7 @@
     ]
   },
   "swift": {
-    "tests_min": 142
+    "tests_min": 148
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,

@@ -10,7 +10,8 @@ SWIFT_SOURCES = ROOT / 'macos/JojoApp/Sources'
 
 # Requests the helper serves that this client never sends. Adding a request to the helper
 # means adding it to the client or naming it here.
-NOT_SENT_BY_THE_CLIENT = {'RegisterRepository', 'ImportBundle', 'ShutdownReceipt'}
+# Step 7: the client sends RegisterRepository (New Project).
+NOT_SENT_BY_THE_CLIENT = {'ImportBundle', 'ShutdownReceipt'}
 
 SPEC = re.compile(r'spec\(K::(\w+), "(\w+)", (\w+), (\d+), (true|false), (\w+), &\[([^\]]*)\]\)')
 CASE = re.compile(r'case \.(\w+): return \[([^\]]*)\]')

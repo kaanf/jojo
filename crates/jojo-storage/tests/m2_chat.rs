@@ -2956,3 +2956,156 @@ fn s6_events_at_1_11_carry_a_category_and_the_project_they_concern() {
         );
     }
 }
+
+/// Step 7 (protocol 1.12): a brief turn reads the registered repository read-only and
+/// proposes its project brief; the brief is a document the human approves on its own, and
+/// only the approved brief goes into the next discovery turn of that repository.
+#[test]
+fn s7_a_brief_is_proposed_by_a_read_only_turn_approved_by_the_human_and_then_prompted() {
+    let mut h = H::new();
+    let repository = h.ready();
+    h.ok3("SaveProject", h.project_payload(7001, 0, &repository));
+    let payload = object([
+        ("repository", text(&repository)),
+        ("provider", text("Codex")),
+        (
+            "message",
+            text("The product owner brings: code.\nfixture: lead-brief"),
+        ),
+    ]);
+    let r = h.frame(7101, 12, "BriefTurn", payload.clone());
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    assert_eq!(str_of(&r.payload, &["dispatch"]), "launched");
+    until(|| h.s().workers.reap());
+    assert!(!h.s().workers.failed(), "brief worker failed");
+    // The same command again is answered from its receipt; nothing runs twice.
+    let again = h.frame(7101, 12, "BriefTurn", payload);
+    assert_eq!(str_of(&again.payload, &["dispatch"]), "not repeated");
+
+    let detail = h.at(
+        12,
+        "ProjectDetail",
+        object([("project", identity(OpaqueId(7001)))]),
+    );
+    let row = &items(field(&detail.payload, &["repositories"]))[0];
+    assert_eq!(str_of(row, &["brief", "turn", "state"]), "Replied");
+    assert_eq!(str_of(row, &["brief", "brief", "approval"]), "Pending");
+    assert_eq!(field(row, &["brief", "brief", "revision"]), &Json::Int(1));
+    let rows = items(field(row, &["brief", "brief", "rows"]));
+    assert_eq!(str_of(&rows[1], &["key"]), "Watch out");
+    assert_eq!(field(&rows[1], &["warning"]), &Json::Bool(true));
+    assert_eq!(
+        field(row, &["brief", "brief", "test_command"]),
+        &Json::List(vec![text("/usr/bin/true")])
+    );
+    // At 1.11 the repository row carries no brief.
+    let older = h.at(
+        11,
+        "ProjectDetail",
+        object([("project", identity(OpaqueId(7001)))]),
+    );
+    let old_row = &items(field(&older.payload, &["repositories"]))[0];
+    assert!(matches!(old_row, Json::Object(f) if !f.iter().any(|(k, _)| k == "brief")));
+
+    // The brief waits in the documents answer at 1.12, and only there.
+    let documents = h
+        .at(12, "Documents", object([("before", Json::Null)]))
+        .payload;
+    let briefs: Vec<&Json> = items(field(&documents, &["documents"]))
+        .iter()
+        .filter(|d| str_of(d, &["kind"]) == "Brief")
+        .collect();
+    assert_eq!(briefs.len(), 1);
+    assert!(str_of(briefs[0], &["title"]).starts_with("Project brief: "));
+    assert_eq!(str_of(briefs[0], &["approval"]), "Pending");
+    let at10 = h
+        .at(10, "Documents", object([("before", Json::Null)]))
+        .payload;
+    assert!(
+        items(field(&at10, &["documents"]))
+            .iter()
+            .all(|d| str_of(d, &["kind"]) != "Brief")
+    );
+
+    // Not approved: the next discovery turn is not given it.
+    let document = field(briefs[0], &["document"]).clone();
+    h.turn(7201, &repository, "Codex", "Slugify.\nfixture: lead");
+    let prompt = h.read(|v| v.turn_prompt(OpaqueId(7201))).unwrap();
+    assert!(!prompt.contains("# Project brief"));
+    // Approved: the next one is.
+    h.approve(&document);
+    let detail = h.at(
+        12,
+        "ProjectDetail",
+        object([("project", identity(OpaqueId(7001)))]),
+    );
+    let row = &items(field(&detail.payload, &["repositories"]))[0];
+    assert_eq!(str_of(row, &["brief", "brief", "approval"]), "Approved");
+    h.turn(7202, &repository, "Codex", "");
+    let prompt = h.read(|v| v.turn_prompt(OpaqueId(7202))).unwrap();
+    assert!(prompt.contains("# Project brief (approved by the product owner)"));
+    assert!(prompt.contains("No tests were found."));
+    // Its events read as sentences in the Setup and Document categories.
+    let events = h.all_events(12);
+    let kinds: Vec<(&str, &str)> = events
+        .iter()
+        .filter(|e| str_of(e, &["type"]).contains("Brief"))
+        .map(|e| (str_of(e, &["type"]), str_of(e, &["category"])))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("BriefTurnAccepted", "Setup"),
+            ("ProjectBriefCreated", "Document"),
+            ("BriefTurnFinished", "Setup"),
+        ]
+    );
+}
+
+/// Step 7: a brief turn waits for a running chat turn, and refuses a repository that is
+/// not registered; the workspace query lists the registered sample repository.
+#[test]
+fn s7_a_brief_turn_is_refused_beside_another_lead_turn_and_the_workspace_lists_repositories() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let unknown = h.at(
+        12,
+        "BriefTurn",
+        object([
+            ("repository", identity(OpaqueId(99))),
+            ("provider", text("Codex")),
+            ("message", text("")),
+        ]),
+    );
+    assert_eq!(unknown.kind, "Error");
+    assert!(str_of(&unknown.payload, &["code"]).contains("not registered"));
+    let hanging = h.frame(
+        7301,
+        2,
+        "ChatTurn",
+        h.turn_payload(&repository, "Codex", "Slugify.\nfixture: lead-hang 30"),
+    );
+    assert_eq!(hanging.kind, "Response", "{:?}", hanging.payload);
+    let refused = h.at(
+        12,
+        "BriefTurn",
+        object([
+            ("repository", text(&repository)),
+            ("provider", text("Codex")),
+            ("message", text("fixture: lead-brief")),
+        ]),
+    );
+    assert_eq!(refused.kind, "Error");
+    assert!(str_of(&refused.payload, &["code"]).contains("another lead turn is running"));
+    h.ok("CancelTurn", object([("turn", identity(OpaqueId(7301)))]));
+    until(|| h.s().workers.reap());
+
+    let listing = h.at(12, "Workspace", object([])).payload;
+    assert_eq!(field(&listing, &["problem"]), &Json::Null);
+    let entries = items(field(&listing, &["repositories"]));
+    let sample = entries
+        .iter()
+        .find(|e| field(e, &["repository"]) == &text(&repository))
+        .expect("the registered sample is listed");
+    assert!(!str_of(sample, &["name"]).is_empty());
+}

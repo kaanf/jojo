@@ -165,8 +165,8 @@ fn record(h: &mut H) {
     h.at("hello 1.0", 0, "Hello", object([]));
     // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2, 1.5
     // since D3, 1.7 since 1.6, 1.8 since 1.7, 1.9 since 1.8, 1.10 since 1.9, 1.11 since
-    // 1.10, 1.12 since 1.11).
-    h.at("hello 1.12", 12, "Hello", object([("junk", n(1))]));
+    // 1.10, 1.12 since 1.11, 1.13 since 1.12).
+    h.at("hello 1.13", 13, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1323,6 +1323,46 @@ fn record(h: &mut H) {
         "Events",
         object([("after", n(0)), ("limit", n(2))]),
     );
+    // 1.12 (step 7): the brief turn, the workspace query and a project's briefs.
+    h.at("workspace at 1.11", 11, "Workspace", object([]));
+    h.at(
+        "workspace with a field",
+        12,
+        "Workspace",
+        object([("x", n(1))]),
+    );
+    h.at(
+        "brief turn at 1.11",
+        11,
+        "BriefTurn",
+        object([
+            ("repository", hex(42)),
+            ("provider", text("ClaudeCode")),
+            ("message", text("")),
+        ]),
+    );
+    h.at(
+        "brief turn without provider",
+        12,
+        "BriefTurn",
+        object([("repository", hex(42)), ("message", text(""))]),
+    );
+    h.at(
+        "brief turn unknown provider",
+        12,
+        "BriefTurn",
+        object([
+            ("repository", hex(42)),
+            ("provider", text("Gemini")),
+            ("message", text("")),
+        ]),
+    );
+    h.at(
+        "project detail unknown at 1.12",
+        12,
+        "ProjectDetail",
+        object([("project", hex(41))]),
+    );
 }
 
 #[test]
@@ -1339,7 +1379,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.12 => 1.11 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan RequestExternal AuthorizeExternal InspectExternal ResolveExternal","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features Document Decisions PlanDetail AttemptDetail ExternalActions RecoveryDetail ProjectDetail","slice":true}
+hello 1.13 => 1.12 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan RequestExternal AuthorizeExternal InspectExternal ResolveExternal BriefTurn","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features Document Decisions PlanDetail AttemptDetail ExternalActions RecoveryDetail ProjectDetail Workspace","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1580,4 +1620,10 @@ recovery detail with a field => 1.11 Error {"code":"InvalidPayload: unexpected o
 project detail unknown => 1.11 Response null
 project detail without project => 1.11 Error {"code":"InvalidPayload: unexpected or missing fields"}
 events at 1.11 => 1.11 Response [{"actor":"Core","aggregate_id":null,"aggregate_kind":null,"at_unix_ms":1700000000000,"category":"Session","detail_complete":true,"epoch":1,"payload":"previous_epoch=0;previous_shutdown=NONE;quarantined_claims=0","project":null,"project_name":null,"revision":null,"seq":1,"summary":"Session 1 started","type":"EngineStarted"},{"actor":"Human","aggregate_id":null,"aggregate_kind":null,"at_unix_ms":1700000000000,"category":"Recovery","detail_complete":true,"epoch":1,"payload":"95eb9cc2f28783674ee4858759130e25fc6ee54822d07726fb3868924bdb21ba","project":null,"project_name":null,"revision":null,"seq":2,"summary":"Admission reopened after the recovery review","type":"RecoveryStarted"}]
+workspace at 1.11 => 1.11 Error {"code":"UnknownType"}
+workspace with a field => 1.12 Error {"code":"InvalidPayload: unexpected or missing fields"}
+brief turn at 1.11 => 1.11 Error {"code":"UnknownType"}
+brief turn without provider => 1.12 Error {"code":"InvalidPayload: unexpected or missing fields"}
+brief turn unknown provider => 1.12 Error {"code":"UnknownProvider"}
+project detail unknown at 1.12 => 1.12 Response null
 "#;
