@@ -8,7 +8,7 @@ public enum Request: String, CaseIterable, Sendable {
     case Hello
     case PrepareClose, CancelClose, ConfirmClose, CancelAttempt, HumanDecision
     case Start, RecoveryResolve, RecoveryStart, Validate, CandidateDecision
-    case Snapshot, Events, Log, Receipt, CloseStatus, ReviewBundle, Recovery
+    case Snapshot, Events, EventDetail, Log, Receipt, CloseStatus, ReviewBundle, Recovery
     case RecoveryInspect, Candidate, CandidateChanges, CandidateDiff, ValidationReport
     case ApprovedPlan
     case ChatTurn, AnswerQuestion, CancelTurn, FeatureChat, ChatText, ChatIndex
@@ -19,6 +19,7 @@ public enum Request: String, CaseIterable, Sendable {
     case Features
     case Document, Decisions, PlanDetail, AttemptDetail
     case ExternalActions, RequestExternal, AuthorizeExternal, InspectExternal, ResolveExternal
+    case RecoveryDetail, ProjectDetail
 
     public var fields: [String] {
         switch self {
@@ -35,6 +36,7 @@ public enum Request: String, CaseIterable, Sendable {
         case .CandidateDecision: return ["attempt", "candidate", "receipt", "action"]
         case .Snapshot: return ["section", "after", "cursor", "limit"]
         case .Events: return ["after", "limit"]
+        case .EventDetail: return ["seq", "offset"]
         case .Log: return ["attempt", "sequence", "offset"]
         case .Receipt: return ["command"]
         case .CloseStatus: return []
@@ -71,6 +73,8 @@ public enum Request: String, CaseIterable, Sendable {
         case .AuthorizeExternal: return ["action", "digest", "decision"]
         case .InspectExternal: return ["action"]
         case .ResolveExternal: return ["action"]
+        case .RecoveryDetail: return []
+        case .ProjectDetail: return ["project"]
         }
     }
 
@@ -87,12 +91,15 @@ public enum Request: String, CaseIterable, Sendable {
     /// The document, decisions, plan detail and attempt detail queries exist only from 1.9.
     /// M5's external actions query and its four commands exist only from 1.10, and at 1.10
     /// the documents answer lists the push and pull request requests that wait, so the
-    /// documents are read there (after every snapshot, for the sidebar counter).
+    /// documents are read there (after every snapshot, for the sidebar counter). The
+    /// recovery detail and project detail queries exist only from 1.11, and at 1.11 an
+    /// event carries its category and project (`Request.attributedEvents`).
     public var minor: Int64 {
         let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText]
         let runner: [Request] = [.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun]
         let external: [Request] = [.ExternalActions, .RequestExternal, .AuthorizeExternal, .InspectExternal,
                                    .ResolveExternal, .Documents]
+        if [.RecoveryDetail, .ProjectDetail].contains(self) { return 11 }
         if external.contains(self) { return 10 }
         if [.Document, .Decisions, .PlanDetail, .AttemptDetail].contains(self) { return 9 }
         if self == .FeatureChat { return 8 }
@@ -104,9 +111,9 @@ public enum Request: String, CaseIterable, Sendable {
         return chat.contains(self) ? 2 : Envelope.minor
     }
 
-    /// The minor at which an event carries its time and actor (protocol 1.6) and a sentence
-    /// that says what it recorded (1.7).
-    public static let attributedEvents: Int64 = 7
+    /// The minor at which an event carries its time and actor (protocol 1.6), a sentence
+    /// that says what it recorded (1.7), and its category and project (1.11).
+    public static let attributedEvents: Int64 = 11
 
     /// A payload carries exactly this request's fields: nothing missing, nothing else.
     public func accepts(_ payload: [String: JSON]) -> Bool {

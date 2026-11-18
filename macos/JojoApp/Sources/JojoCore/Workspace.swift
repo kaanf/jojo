@@ -89,6 +89,11 @@ public struct JournalEvent: Equatable, Sendable, Identifiable {
     public let actor: String?
     /// Nil from a helper older than 1.7.
     public let summary: String?
+    /// `Approval`, `Git`, `Error` … (protocol 1.11); nil from an older helper.
+    public let category: String?
+    /// The project the event concerns (1.11); nil when none or from an older helper.
+    public let project: String?
+    public let projectName: String?
     public var id: Int64 { seq }
 
     public init?(_ row: JSON) {
@@ -101,6 +106,9 @@ public struct JournalEvent: Equatable, Sendable, Identifiable {
         at = helperDate(row["at_unix_ms"]?.integer)
         actor = row["actor"]?.string
         summary = row["summary"]?.string
+        category = row["category"]?.string
+        project = row["project"]?.string
+        projectName = row["project_name"]?.string
     }
 }
 
@@ -353,6 +361,8 @@ public final class WorkspaceModel {
     /// Whether Feature Chat holds a feature and is shown; it reads the features too, for
     /// the feature's stages and counts.
     public var chatShown = false
+    /// Whether Projects is shown (step 6); it reads the features too, for each project's.
+    public var projectsShown = false
     /// Protocol 1.7: each feature's stages and blockers, read only while the Dashboard is
     /// shown.
     public internal(set) var features: FeatureList?
@@ -391,6 +401,16 @@ public final class WorkspaceModel {
     public internal(set) var attemptDetail: AttemptDetail?
     public internal(set) var attemptDetailLoad = PlanLoad.idle
     var attemptDetailKey = ""
+    /// Protocol 1.11: the Recovery Center's inspection detail, a project's repositories,
+    /// and the whole payload of the chosen event.
+    public internal(set) var recoveryDetail: RecoveryDetail?
+    public internal(set) var recoveryDetailLoad = PlanLoad.idle
+    public internal(set) var projectDetail: ProjectDetail?
+    public internal(set) var projectDetailLoad = PlanLoad.idle
+    var projectDetailKey = ""
+    public internal(set) var eventPayload: EventPayload?
+    public internal(set) var eventPayloadLoad = PlanLoad.idle
+    var eventPayloadKey: Int64 = 0
     /// M2: Feature Chat. Read only when that screen asks; `refresh` does not fill them.
     public internal(set) var chatIndex: ChatIndex?
     public internal(set) var chatIndexLoad = PlanLoad.idle

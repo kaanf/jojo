@@ -390,6 +390,8 @@ func coreLink(_ connection: HelperConnection) -> RecoveryCenterState.Link {
 struct CoreBanners: View {
     let connection: HelperConnection
     var missing: (query: String, what: String)? = nil
+    /// The protocol version that added the missing query.
+    var version = "1.9"
 
     var body: some View {
         switch coreLink(connection) {
@@ -402,7 +404,7 @@ struct CoreBanners: View {
         }
         if let missing {
             Banner(.warning, title: "This core does not report \(missing.what)",
-                   message: "It does not list the \(missing.query) query (protocol 1.9). Start a newer helper.")
+                   message: "It does not list the \(missing.query) query (protocol \(version)). Start a newer helper.")
         }
     }
 }

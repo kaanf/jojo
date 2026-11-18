@@ -552,9 +552,9 @@ final class DesignShellTests: XCTestCase {
         ].compactMap(JournalEvent.init)
     }
 
-    private func activity(query: String = "", hidden: Set<String> = [], selected: Int64? = nil) -> ActivityState {
+    private func activity(query: String = "", range: ActivityRange = .all, selected: Int64? = nil) -> ActivityState {
         ActivityState(connection: .ready(epoch: 7), admission: "Open", rows: snapshotRows(), head: 68, events: journal(), load: .loaded,
-                      query: query, hidden: hidden, selected: selected)
+                      query: query, range: range, selected: selected)
     }
 
     func test_dw1_activity_shows_the_loaded_events_newest_first_grouped_by_epoch() {
@@ -563,11 +563,12 @@ final class DesignShellTests: XCTestCase {
         XCTAssertEqual(state.shown.map(\.seq), Array((60...68).reversed()))
         XCTAssertEqual(state.groups.map(\.title), ["Epoch 7", "Epoch 6"], "the core reports no time to group by")
         XCTAssertEqual(state.groups.map(\.events.count), [7, 2])
-        XCTAssertEqual(state.types.first, ActivityState.TypeCount(type: "ArtifactApproved", count: 2))
-        XCTAssertEqual(state.types.map(\.type), state.types.map(\.type).sorted())
+        XCTAssertFalse(state.categorized, "these events come from a core older than 1.11")
+        XCTAssertEqual(state.categories, [])
+        XCTAssertTrue(state.projects.isEmpty)
         XCTAssertEqual(state.chosen?.seq, 68, "without a choice, the newest shown event")
         XCTAssertEqual(activity(selected: 63).chosen?.seq, 63)
-        XCTAssertEqual(state.range, "Events 60 to 68 are loaded, newest first.")
+        XCTAssertEqual(state.rangeLine, "Events 60 to 68 are loaded, newest first.")
         XCTAssertEqual(ActivityState.record(state.events[0]), "event 60")
         XCTAssertEqual(ActivityState.subject(state.events[0]), "1a2b3c4d1a2b")
         XCTAssertNil(ActivityState.subject(state.events[1]), "an event without an aggregate has no subject")
@@ -577,14 +578,13 @@ final class DesignShellTests: XCTestCase {
         XCTAssertTrue(MainView.built.contains(.activity))
     }
 
-    func test_dw1_activity_search_and_type_filters_cover_only_the_loaded_events() {
+    func test_dw1_activity_search_and_filters_cover_only_the_loaded_events() {
         XCTAssertFalse(activity().filtered)
-        let approved = activity(hidden: ["ArtifactApproved", "EngineStopped"])
-        XCTAssertTrue(approved.filtered)
-        XCTAssertEqual(approved.shown.map(\.seq), [67, 65, 64, 63, 62, 60])
-        XCTAssertEqual(approved.range, "Events 60 to 68 are loaded, newest first; 6 of 9 shown.")
-        XCTAssertEqual(activity(hidden: ["ArtifactApproved"], selected: 68).chosen?.seq, 67, "a hidden event is not the chosen one")
-        XCTAssertFalse(activity(hidden: ["NoSuchType"]).filtered, "a type that is not loaded filters nothing")
+        let day = activity(range: .day)
+        XCTAssertTrue(day.filtered)
+        XCTAssertEqual(day.shown.map(\.seq), [], "an event without a time is outside every range but All")
+        XCTAssertEqual(day.rangeLine, "Events 60 to 68 are loaded, newest first; 0 of 9 shown.")
+        XCTAssertEqual(activity(query: "approve", selected: 60).chosen?.seq, 68, "a filtered-out event is not the chosen one")
 
         XCTAssertEqual(activity(query: " approve ").shown.map(\.seq), [68, 66], "the payload is searched, without case")
         XCTAssertEqual(activity(query: "worktree").shown.map(\.seq), [67], "and the type and the aggregate kind")
@@ -607,7 +607,7 @@ final class DesignShellTests: XCTestCase {
         XCTAssertTrue(state.admissionClosed)
         state.events = Array(journal().prefix(1)).compactMap { JournalEvent(event(1, payload: $0.payload)) }
         XCTAssertFalse(state.canLoadOlder, "the journal starts at event 1")
-        XCTAssertEqual(state.range, "Event 1 is loaded.")
+        XCTAssertEqual(state.rangeLine, "Event 1 is loaded.")
     }
 
     /// Review aid, as above: Activity & Audit with test events in two columns and in one,
@@ -632,7 +632,7 @@ final class DesignShellTests: XCTestCase {
             ("activity", activity(), opening), ("activity-tall", activity(selected: 65), tall),
             ("activity-wide", activity(selected: 64), wide),
             ("activity-narrow", activity(selected: 65), CGSize(width: 900, height: 1700)),
-            ("activity-filtered", activity(query: "approve", hidden: ["WorktreeReady", "EngineStopped"]), wide),
+            ("activity-filtered", activity(query: "approve"), wide),
             ("activity-unmatched", activity(query: "09:42"), wide),
             ("activity-loading", loading, opening), ("activity-empty", none, opening),
             ("activity-failed", failed, opening), ("activity-failed-loaded", stale, wide),
@@ -703,7 +703,8 @@ final class DesignShellTests: XCTestCase {
     func test_dw1_settings_show_the_launch_options_of_a_provider_and_nothing_that_could_be_a_credential() {
         let state = settings()
         let claude = state.page(.claude)
-        XCTAssertEqual(claude.groups.map(\.title), ["Found by the core", "Passed to the core at launch", "Authentication", "Reported by the core"])
+        XCTAssertEqual(claude.groups.map(\.title), ["Found by the core", "Passed to the core at launch", "Authentication", "Reported by the core",
+                                                "Capabilities", "Usage"])
         let shown = values(claude)
         // D3: until the Executables answer arrives, the found executable is being read.
         XCTAssertEqual(shown["Executable"], "Being read…")
@@ -765,10 +766,14 @@ final class DesignShellTests: XCTestCase {
                        ["Claude Code", "Codex", "Core", "Executable discovery", "Defaults & concurrency", "Git & GitHub", "Workspace storage",
                         "Evidence retention", "Security & approvals", "Keyboard shortcuts", "Appearance"])
 
-        // D4 is decided (M3); the number lives in a project record and is shown on Projects, not here.
+        // D4 is decided (M3); the number lives in a project record. Step 6: Settings shows it once a record is read.
         let concurrency = state.page(.defaults).groups[1].lines
         XCTAssertTrue(concurrency.allSatisfy { $0.form == .missing })
-        XCTAssertEqual(concurrency.first?.value, "Decided (D4): one number for the whole core, set in a project record. Shown on Projects.")
+        XCTAssertEqual(concurrency.first?.value, "One number for the whole core, set in a project record (D4). No record is read yet.")
+        var counted = state
+        counted.capacity = 3
+        XCTAssertEqual(counted.page(.defaults).groups[1].lines.first?.value,
+                       "3 across all projects, set by the project record saved last (D4). Edited on Projects.")
         // D2: the board's validator line no longer holds.
         XCTAssertFalse(values(state.page(.defaults))["Validator"]!.contains("no agent"))
         // M4: repair and review are built and set per project.
@@ -1164,6 +1169,12 @@ private struct Gallery: View {
                 Button("Reinspect") {}.buttonStyle(.jojo(.secondary, compact: true))
                 Button("Push") {}.buttonStyle(.jojo(.primary)).disabled(true)
                 DisabledReason("Unavailable: 5 requirements unmet.")
+            }
+            section("System screens (COMPONENTS.md, section 29)") {
+                MenuCapsule(title: "All types", choices: [(nil, "All types"), ("Approval", "Approval")], choose: { _ in })
+                MenuCapsule(title: "All projects", choices: [(nil, "All projects")], choose: { _ in })
+                LetterBadge("Crew")
+                LetterBadge("Jojo", size: 40)
             }
             section("Dashboard (COMPONENTS.md, section 25)") {
                 KPITile(symbol: "play.fill", tile: Palette.blue, label: "Running now", value: "2", unit: "tasks",

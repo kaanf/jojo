@@ -1,12 +1,26 @@
 import JojoCore
 import SwiftUI
 
-// Activity & Audit (docs/design/screens/ACTIVITY.md): the events the core committed, as the
-// `Events` answer gives them. The workspace reads them when this screen asks. Since 1.6 the
-// helper reports the time and actor of an event; it reports no hash, so no chain is verified.
+// Activity & Audit: docs/design/screens/ACTIVITY.md, rebuilt from `ActivityMac.dc.html`
+// (step 6). The journal the core reports, newest first: time, actor, category, the core's
+// sentence, subject and record; a project, a category and a range filter the loaded
+// events. The core stores no hash, so no chain is verified and the screen says so.
 
-/// What the screen shows: the events the workspace holds, and the search, the type filters
-/// and the chosen event, which live in the screen.
+/// The board's range control: the last day, the last week, everything loaded.
+enum ActivityRange: String, CaseIterable, Identifiable {
+    case day = "24h", week = "7d", all = "All"
+    var id: String { rawValue }
+
+    var seconds: TimeInterval? {
+        switch self {
+        case .day: return 86_400
+        case .week: return 7 * 86_400
+        case .all: return nil
+        }
+    }
+}
+
+/// Everything the screen reads, as plain values.
 struct ActivityState: Equatable {
     var connection: HelperConnection
     var admission: String
@@ -18,61 +32,75 @@ struct ActivityState: Equatable {
     var events: [JournalEvent]
     var load: JournalLoad
     var query = ""
-    /// Event types that are switched off.
-    var hidden: Set<String> = []
+    /// The category shown (nil: every category).
+    var category: String?
+    /// The project shown, by identity (nil: every project).
+    var project: String?
+    var range = ActivityRange.all
     var selected: Int64?
-    /// The day the groups are named from ("Today").
+    /// The day the groups are named from ("Today") and the range is measured from.
     var now = Date()
+    /// The whole payload of the chosen event, when it was read (`EventDetail`).
+    var payload: EventPayload?
+    var payloadLoad = PlanLoad.idle
 
     /// The core reported times and actors (protocol 1.6).
     var attributed: Bool { events.contains { $0.at != nil } }
+    /// The core reported categories and projects (protocol 1.11).
+    var categorized: Bool { events.contains { $0.category != nil } }
 
     /// Who caused an event, as shown.
     static func actor(_ event: JournalEvent) -> String? {
         switch event.actor {
         case nil: return nil
         case "Core": return "Jojo core"
+        case "Human": return "You"
         case let actor?: return providerName(actor)
         }
     }
-    var link: RecoveryCenterState.Link {
-        switch connection {
-        case .ready: return .connected
-        case .notStarted, .handshaking: return .starting
-        case .incompatible: return .incompatible
-        case .launchFailed, .channelLost, .ended: return .lost
-        }
-    }
+
+    var link: RecoveryCenterState.Link { coreLink(connection) }
 
     var admissionClosed: Bool { link == .connected && !admission.isEmpty && admission != "Open" }
 
-    /// One type among the loaded events, with how many of them have it.
-    struct TypeCount: Identifiable, Equatable {
-        let type: String
-        let count: Int
-        var id: String { type }
+    /// The categories in the board's order, then the rest the core reports.
+    static let categoryOrder = ["Decision", "Approval", "Attempt", "Recovery", "Git", "Validation", "Error", "Evidence",
+                                "Chat", "Document", "Plan", "Setup", "Session", "Core"]
+
+    /// The categories among the loaded events, in the board's order.
+    var categories: [String] {
+        let present = Set(events.compactMap(\.category))
+        return Self.categoryOrder.filter(present.contains) + present.subtracting(Self.categoryOrder).sorted()
     }
 
-    /// The types of the loaded events, by name. The core reports no category above them.
-    var types: [TypeCount] {
-        Dictionary(grouping: events, by: \.type).map { TypeCount(type: $0.key, count: $0.value.count) }
-            .sorted { $0.type < $1.type }
+    /// The projects the loaded events concern, by name.
+    var projects: [(id: String, name: String)] {
+        var seen: [String: String] = [:]
+        for e in events { if let id = e.project { seen[id] = e.projectName ?? String(id.prefix(8)) } }
+        return seen.map { (id: $0.key, name: $0.value) }.sorted { $0.name < $1.name }
     }
+
+    var projectName: String? { project.flatMap { p in projects.first { $0.id == p }?.name } }
 
     private var needle: String { query.trimmingCharacters(in: .whitespaces).lowercased() }
 
-    var filtered: Bool { !needle.isEmpty || !hidden.isDisjoint(with: events.map(\.type)) }
+    var filtered: Bool { !needle.isEmpty || category != nil || project != nil || range != .all }
 
     /// Search reads what the core reported about a loaded event, nothing else.
     static func matches(_ event: JournalEvent, _ needle: String) -> Bool {
-        needle.isEmpty || [event.type, event.payload, event.aggregateKind ?? "", event.aggregateID ?? "", record(event),
-                           actor(event) ?? ""]
+        needle.isEmpty || [event.type, event.payload, event.summary ?? "", event.category ?? "", event.projectName ?? "",
+                           event.aggregateKind ?? "", event.aggregateID ?? "", record(event), actor(event) ?? ""]
             .contains { $0.lowercased().contains(needle) }
     }
 
-    /// The loaded events that pass the search and the type filters, newest first.
+    /// The loaded events that pass the search and the filters, newest first. An event
+    /// without a time is outside every range but "All".
     var shown: [JournalEvent] {
-        events.reversed().filter { !hidden.contains($0.type) && Self.matches($0, needle) }
+        events.reversed().filter { e in
+            (category == nil || e.category == category) && (project == nil || e.project == project)
+                && (range.seconds.map { span in e.at.map { now.timeIntervalSince($0) <= span } ?? false } ?? true)
+                && Self.matches(e, needle)
+        }
     }
 
     /// The shown events of one day, or of one engine epoch from a core that reports no time.
@@ -119,8 +147,25 @@ struct ActivityState: Equatable {
         event.aggregateID.map(ApprovalInboxState.short)
     }
 
+    /// The sentence of an event, or its type and payload from a core older than 1.7.
+    static func sentence(_ event: JournalEvent) -> String {
+        event.summary ?? (event.payload.isEmpty ? event.type : "\(event.type): \(event.payload)")
+    }
+
+    /// The color of a category tag.
+    static func tone(_ category: String?) -> Tone {
+        switch category {
+        case "Approval", "Decision": return .review
+        case "Error": return .danger
+        case "Recovery": return .warn
+        case "Validation", "Evidence": return .ok
+        case "Git", "Attempt", "Plan", "Chat", "Document": return .info
+        default: return .neutral
+        }
+    }
+
     /// The loaded range and how much of it passes the filters.
-    var range: String? {
+    var rangeLine: String? {
         guard let first = events.first, let last = events.last else { return nil }
         let loaded = first.seq == last.seq ? "Event \(first.seq) is loaded" : "Events \(first.seq) to \(last.seq) are loaded, newest first"
         return filtered ? "\(loaded); \(shown.count) of \(events.count) shown." : "\(loaded)."
@@ -136,47 +181,132 @@ struct ActivityState: Equatable {
         guard let subject = event.aggregateID else { return false }
         return ApprovalInboxState.documents(in: rows).contains { $0.id == subject }
     }
+
+    /// The whole payload of the chosen event when it was read, else the excerpt.
+    func payloadText(_ event: JournalEvent) -> String {
+        if let payload, payload.seq == event.seq { return payload.text }
+        return event.payload
+    }
+
+    /// The shown events as Markdown, newest first: what Export writes. The record says
+    /// that no hash chain was verified.
+    var markdown: String {
+        var lines = ["# Jojo activity and audit", ""]
+        var filters = [rangeLine ?? "No events are loaded."]
+        if let category { filters.append("Category: \(category).") }
+        if let projectName { filters.append("Project: \(projectName).") }
+        if !needle.isEmpty { filters.append("Search: \"\(query)\".") }
+        lines += [filters.joined(separator: " "), "",
+                  "Records are append-only. The core stores no record hash, so no hash chain was verified.", "",
+                  "| Time | Actor | Category | Event | Subject | Record |", "|---|---|---|---|---|---|"]
+        let cell = { (s: String) in s.replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: " ") }
+        for e in shown {
+            let time = e.at.map { $0.formatted(.iso8601) } ?? "Epoch \(e.epoch)"
+            lines.append("| \(time) | \(cell(Self.actor(e) ?? "Not reported")) | \(e.category ?? "Not reported") | "
+                         + "\(cell(Self.sentence(e))) | \(cell(Self.subject(e) ?? "")) | \(Self.record(e)) |")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
 }
 
 struct ActivityActions {
     var search: (String) -> Void = { _ in }
-    var toggle: (String) -> Void = { _ in }
+    var category: (String?) -> Void = { _ in }
+    var project: (String?) -> Void = { _ in }
+    var range: (ActivityRange) -> Void = { _ in }
     var clearFilters: () -> Void = {}
     var select: (Int64) -> Void = { _ in }
     var reload: () -> Void = {}
     var loadOlder: () -> Void = {}
+    /// Reads the rest of a long payload (`EventDetail`).
+    var loadPayload: (Int64) -> Void = { _ in }
     /// Loads a document's review and opens Specifications.
     var openDocument: (String) -> Void = { _ in }
     var open: (Screen) -> Void = { _ in }
+}
+
+/// The filters of Activity & Audit, kept by the shell so that Export writes what is shown.
+struct ActivityFilters: Equatable {
+    var query = ""
+    var category: String?
+    var project: String?
+    var range = ActivityRange.all
+    var selected: Int64?
 }
 
 struct ActivityScreen: View {
     @ObservedObject var model: AppModel
     /// The journal is read only while this destination is the shown one.
     let visible: Bool
+    @Binding var filters: ActivityFilters
+    /// Export writes the shown events as Markdown through the save panel.
+    @Binding var exporting: Bool
     let open: (Screen) -> Void
-    @State private var query = ""
-    @State private var hidden: Set<String> = []
-    @State private var selected: Int64?
+
+    var state: ActivityState {
+        let workspace = model.workspace
+        return ActivityState(
+            connection: model.client.connection, admission: workspace.admission, rows: workspace.rows,
+            head: workspace.snapshotSeq, events: workspace.events, load: workspace.eventsLoad,
+            query: filters.query, category: filters.category, project: filters.project, range: filters.range,
+            selected: filters.selected, payload: workspace.eventPayload, payloadLoad: workspace.eventPayloadLoad)
+    }
 
     var body: some View {
         let workspace = model.workspace
         ActivityView(
-            state: ActivityState(
-                connection: model.client.connection, admission: workspace.admission, rows: workspace.rows,
-                head: workspace.snapshotSeq, events: workspace.events, load: workspace.eventsLoad,
-                query: query, hidden: hidden, selected: selected),
+            state: state,
             actions: ActivityActions(
-                search: { query = $0 },
-                toggle: { hidden.formSymmetricDifference([$0]) },
-                clearFilters: { (query, hidden) = ("", []) },
-                select: { selected = $0 },
+                search: { filters.query = $0 },
+                category: { filters.category = $0 },
+                project: { filters.project = $0 },
+                range: { filters.range = $0 },
+                clearFilters: { filters = ActivityFilters(selected: filters.selected) },
+                select: { filters.selected = $0 },
                 reload: { workspace.loadEvents() },
                 loadOlder: { workspace.loadOlderEvents() },
+                loadPayload: { workspace.loadEventPayload($0) },
                 openDocument: { workspace.loadReview($0); open(.specifications) },
                 open: open))
             .onChange(of: visible) { if visible { workspace.loadEvents() } }
             .onChange(of: workspace.snapshotSeq) { if visible { workspace.loadEvents() } }
+            .fileExporter(isPresented: $exporting, document: TranscriptDocument(text: state.markdown),
+                          contentType: TranscriptDocument.readableContentTypes[0],
+                          defaultFilename: "Jojo activity") { _ in }
+    }
+}
+
+/// A capsule that opens a menu of choices; off screen, where a menu does not draw, its
+/// title stands in for it.
+struct MenuCapsule: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.offscreen) private var offscreen
+    let title: String
+    let choices: [(id: String?, title: String)]
+    let choose: (String?) -> Void
+    var label = ""
+
+    var body: some View {
+        Group {
+            if offscreen {
+                HStack(spacing: 4) {
+                    Text(title).font(.system(size: 12, weight: .medium))
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(theme.text2)
+                }
+            } else {
+                Menu {
+                    ForEach(Array(choices.enumerated()), id: \.offset) { _, c in Button(c.title) { choose(c.id) } }
+                } label: {
+                    Text(title).font(.system(size: 12, weight: .medium))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 30)
+        .background(theme.glassStrong, in: Capsule())
+        .accessibilityLabel(label.isEmpty ? title : label)
     }
 }
 
@@ -186,237 +316,236 @@ struct ActivityView: View {
     var actions = ActivityActions()
 
     var body: some View {
-        GeometryReader { geometry in
-            // The table keeps at least 460 beside the record panel.
-            let wide = geometry.size.width >= 780
-            HStack(spacing: 0) {
-                Scrolling {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) { banners }.padding(.horizontal, 10)
+            if state.events.isEmpty {
+                placeholder.frame(maxWidth: .infinity, minHeight: 260).padding(.horizontal, 10)
+                Spacer(minLength: 0)
+            } else {
+                InspectorColumns(trailingWidth: 320, wide: 900) {
                     VStack(alignment: .leading, spacing: 12) {
-                        banners
-                        if state.events.isEmpty {
-                            placeholder.frame(minHeight: 260)
-                        } else {
-                            ListSearchField(prompt: state.attributed ? "Search the loaded events: type, actor, payload, subject, event number"
-                                                            : "Search the loaded events: type, payload, subject, event number",
-                                        text: Binding(get: { state.query }, set: { actions.search($0) }))
-                            chips
-                            if state.shown.isEmpty { unmatched.frame(minHeight: 200) } else { table }
-                            footer
-                            if !wide { Card(.panelList) { record } }
-                        }
+                        filterBar
+                        if state.shown.isEmpty { unmatched.frame(minHeight: 200) } else { table }
+                        footer
                     }
-                    .padding(EdgeInsets(top: 14, leading: 18, bottom: 20, trailing: 18))
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                if wide {
-                    Scrolling { record }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .background(theme.sidebar)
-                        .overlay(alignment: .leading) { Rectangle().fill(theme.sidebarEdge).frame(width: 1) }
-                        .frame(width: 300)
+                } trailing: {
+                    GlassInspector { record }
                 }
             }
         }
+        .padding(.top, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
     private var banners: some View {
-        switch state.link {
-        case .lost:
-            Banner(.danger, title: "Jojo core isn't responding",
-                   message: "Showing the events read before, read-only. No more can be read.")
-        case .incompatible:
-            Banner(.danger, title: "Jojo core speaks another protocol version",
-                   message: "Read-only. Events can still be read.")
-        case .connected, .starting:
-            EmptyView()
-        }
+        CoreBanners(connection: state.connection)
         if state.admissionClosed {
-            Banner(.danger, title: "Execution admission is closed",
-                   message: "No new attempt starts until you review the inspection. Events can still be read.") {
+            Banner(.warning, title: "Execution admission is closed",
+                   message: "The journal is still readable. Review recovery to start a new session.") {
                 Button("Open Recovery Center") { actions.open(.recoveryCenter) }.buttonStyle(.jojo(.secondary, compact: true))
             }
         }
-        if case .failed(let reason) = state.load, state.link != .lost {
-            Banner(.warning, title: "The event journal could not be read",
-                   message: state.events.isEmpty ? "The core answered: \(reason)." : "The core answered: \(reason). The events read before stay.") {
-                Button("Try Again", action: actions.reload).buttonStyle(.jojo(.secondary, compact: true))
+        if case .failed(let reason) = state.load {
+            Banner(.warning, title: "The events could not be read", message: reason) {
+                Button("Try Again") { actions.reload() }.buttonStyle(.jojo(.secondary, compact: true))
+                    .disabled(state.link != .connected)
             }
+        }
+        if !state.events.isEmpty, !state.categorized {
+            Banner(.warning, title: "This core reports no category or project",
+                   message: "It answers events below protocol 1.11. The type stands in for the category; the project filter is empty.")
         }
     }
 
-    /// No event is held: say why.
     @ViewBuilder
     private var placeholder: some View {
-        switch state.load {
-        case .loading:
+        if state.load == .loading || (state.load == .idle && state.link == .connected) {
             LoadingBlock("Reading the event journal…")
-        case .loaded:
+        } else if state.link != .connected {
+            StateBlock(symbol: "clock.arrow.circlepath", title: "No events are loaded",
+                       message: "The journal is read from the core while it is connected.")
+        } else {
             StateBlock(symbol: "clock.arrow.circlepath", title: "No events yet",
-                       message: "The core has committed no event after the one this read started from.")
-        case .failed:
-            StateBlock(symbol: "clock.arrow.circlepath", title: "No events loaded",
-                       message: "The journal was not read. Nothing is shown in its place.")
-        case .idle:
-            if state.link == .lost || state.link == .incompatible {
-                StateBlock(symbol: "clock.arrow.circlepath", title: "No events loaded",
-                           message: "The journal was not read before the core stopped answering as expected.")
-            } else {
-                LoadingBlock("Waiting for the core's snapshot…")
-            }
+                       message: "The core has recorded nothing yet.")
         }
     }
 
     private var unmatched: some View {
-        StateBlock(symbol: "magnifyingglass", title: "No loaded event matches",
-                   message: "Search and the type filters cover the \(state.events.count) loaded events only, not the whole journal.") {
-            Button("Clear Filters", action: actions.clearFilters).buttonStyle(.jojo(.secondary, compact: true))
+        StateBlock(symbol: "line.3.horizontal.decrease.circle", title: "No loaded event matches",
+                   message: "The search and filters cover the loaded events only.") {
+            Button("Clear Filters") { actions.clearFilters() }.buttonStyle(.jojo(.secondary, compact: true))
         }
     }
 
-    private var chips: some View {
-        WrappingRow(spacing: 6, lineSpacing: 6) {
-            ForEach(state.types) { item in
-                let isOn = !state.hidden.contains(item.type)
-                Button { actions.toggle(item.type) } label: {
-                    FilterChip(title: item.type, count: item.count, isOn: isOn)
-                }
-                .buttonStyle(.plain)
-                .help(isOn ? "Hide \(item.type) events" : "Show \(item.type) events")
+    /// The board's filter row: search, type, project and range.
+    private var filterBar: some View {
+        FlowRow(spacing: 8) {
+            ListSearchField(prompt: "Search the loaded events",
+                            text: Binding(get: { state.query }, set: { actions.search($0) }))
+                .frame(width: 240)
+            MenuCapsule(title: state.category ?? "All types",
+                        choices: [(nil, "All types")] + state.categories.map { (Optional($0), $0) },
+                        choose: actions.category, label: "Filter by category")
+            MenuCapsule(title: state.projectName ?? "All projects",
+                        choices: [(nil, "All projects")] + state.projects.map { (Optional($0.id), $0.name) },
+                        choose: actions.project, label: "Filter by project")
+            SegmentedCapsule(selection: Binding(get: { state.range }, set: { actions.range($0) }), label: "Range")
+            if state.filtered {
+                Button("Clear") { actions.clearFilters() }.buttonStyle(.jojo(.ghost, compact: true))
             }
         }
     }
+
+    private static let columns: [(String, CGFloat?)] = [("Time", 46), ("Actor", 84), ("Type", 86), ("Event", nil),
+                                                        ("Subject", 96), ("Record", 74)]
 
     private var table: some View {
-        Card(.panelList) {
-            VStack(spacing: 0) {
-                RecordHeader(attributed: state.attributed)
-                let last = state.shown.last?.seq
-                ForEach(state.groups) { group in
-                    RecordGroup(group.title)
-                    ForEach(group.events) { event in
-                        Button { actions.select(event.seq) } label: {
-                            RecordRow(type: event.type, text: event.payload.isEmpty ? "(empty payload)" : event.payload, mono: true,
-                                      subject: ActivityState.subject(event), record: ActivityState.record(event),
-                                      selected: event.seq == state.chosen?.seq, last: event.seq == last,
-                                      time: clockTime(event.at, now: state.now), actor: ActivityState.actor(event))
-                        }
-                        .buttonStyle(.plain)
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                ForEach(Self.columns, id: \.0) { name, width in
+                    Text(name).textStyle(.label).foregroundStyle(theme.text3)
+                        .frame(width: width, alignment: .leading)
+                        .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
                 }
             }
+            .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+            ForEach(state.groups) { group in
+                Text(group.title).textStyle(.label).foregroundStyle(theme.text2)
+                    .padding(EdgeInsets(top: 10, leading: 12, bottom: 4, trailing: 12))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: .top) { Rectangle().fill(theme.sep).frame(height: 0.5) }
+                ForEach(group.events) { event in row(event) }
+            }
         }
+        .cardElevation(radius: 14)
+    }
+
+    private func row(_ event: JournalEvent) -> some View {
+        let chosen = event.seq == state.chosen?.seq
+        return Button { actions.select(event.seq) } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(boardTime(event.at, now: state.now).map { String($0.suffix(5)) } ?? "–")
+                    .textStyle(.mono).foregroundStyle(theme.text2).frame(width: 46, alignment: .leading)
+                Text(ActivityState.actor(event) ?? "–").textStyle(.secondary).foregroundStyle(theme.text)
+                    .lineLimit(1).frame(width: 84, alignment: .leading)
+                Group {
+                    if let category = event.category {
+                        DocumentTag(category.uppercased(), tone: ActivityState.tone(category))
+                    } else {
+                        Text(event.type).textStyle(.secondary).foregroundStyle(theme.text3).lineLimit(1)
+                    }
+                }
+                .frame(width: 86, alignment: .leading)
+                Text(ActivityState.sentence(event)).textStyle(.secondary).foregroundStyle(theme.text)
+                    .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                Text(ActivityState.subject(event) ?? "–").textStyle(.mono).foregroundStyle(theme.text2)
+                    .lineLimit(1).truncationMode(.middle).frame(width: 96, alignment: .leading)
+                Text(ActivityState.record(event)).textStyle(.mono).foregroundStyle(theme.text3)
+                    .lineLimit(1).frame(width: 74, alignment: .leading)
+            }
+            .padding(EdgeInsets(top: 7, leading: 12, bottom: 7, trailing: 12))
+            .background(chosen ? theme.accentTint : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                if let range = state.range { Text(range).textStyle(.meta).foregroundStyle(theme.text3) }
-                Spacer(minLength: 0)
-                if state.load == .loading, !state.events.isEmpty {
-                    Text("Reading…").textStyle(.meta).foregroundStyle(theme.text3)
-                }
-                if (state.events.first?.seq ?? 0) > 1 {
-                    Button("Load Older", action: actions.loadOlder).buttonStyle(.jojo(.secondary, compact: true))
-                        .disabled(!state.canLoadOlder)
-                } else {
-                    Text("The journal starts here.").textStyle(.meta).foregroundStyle(theme.text3)
-                }
-            }
-            Footnote(state.attributed
-                     ? "Events are append-only in the core. It reports no hash for them, so the app verifies no chain. The actor is the human for a command sent from the app, a provider for a record of its output, and Jojo core for everything else. There is no export and no filter by project or date."
-                     : "Events are append-only in the core. It reports no hash for them, so the app verifies no chain. Not reported by this core: the time and the actor of an event; events are grouped by the engine epoch that committed them. There is no export and no filter by project or date.")
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("Records are append-only. The core stores no record hash, so no chain is verified. "
+                 + (state.rangeLine ?? ""))
+                .textStyle(.secondary).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(state.load == .loading ? "Loading…" : "Load Older") { actions.loadOlder() }
+                .buttonStyle(.jojo(.secondary, compact: true))
+                .disabled(!state.canLoadOlder)
+                .help(state.canLoadOlder ? "Reads the 64 events before the oldest loaded one." : "No older events to read.")
         }
+        .padding(.horizontal, 4)
     }
 
-    // MARK: Record panel
+    // MARK: Record
 
     @ViewBuilder
     private var record: some View {
         if let event = state.chosen {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Audit record · \(ActivityState.record(event))").font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(theme.text3)
-                    Text(event.type).textStyle(.inspectorTitle).foregroundStyle(theme.textStrong)
-                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                    HStack(spacing: 6) {
-                        KindTag("Epoch \(event.epoch)")
-                        if let kind = event.aggregateKind { KindTag(kind) }
-                    }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Audit record · \(event.category ?? event.type)").textStyle(.label).foregroundStyle(theme.text3)
+                Text(ActivityState.sentence(event)).font(.system(size: 17, weight: .bold))
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                HStack(spacing: 6) {
+                    if let category = event.category { DocumentTag(category.uppercased(), tone: ActivityState.tone(category)) }
+                    Text(event.type).textStyle(.mono).foregroundStyle(theme.text2)
                 }
-                .padding(EdgeInsets(top: 14, leading: 16, bottom: 12, trailing: 16))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .overlay(alignment: .bottom) { Rectangle().fill(theme.hairline).frame(height: 1) }
-                InspectorSection("Record") {
-                    FactGrid {
-                        Fact("Record ID") { identifier(ActivityState.record(event)) }
-                        Fact("Time") {
-                            if let at = event.at {
-                                Text(at.formatted(date: .abbreviated, time: .standard)).font(.system(size: 12.5))
-                            } else {
-                                missing("Not reported")
-                            }
-                        }
-                        Fact("Actor") {
-                            if let actor = ActivityState.actor(event) { Text(actor).font(.system(size: 12.5)) } else { missing("Not reported") }
-                        }
-                        Fact("Epoch", "\(event.epoch)")
-                        Fact("Subject") {
-                            if let id = event.aggregateID {
-                                identifier("\(event.aggregateKind ?? "aggregate") \(id)")
-                            } else {
-                                missing("This event names none")
-                            }
-                        }
-                        Fact("Revision") {
-                            if let revision = event.revision { Text("\(revision)").font(.system(size: 12.5)) } else { missing("None") }
-                        }
+            }
+            LabeledSection(title: "Record") {
+                DefinitionCard(rows: [
+                    Definition(key: "Record ID", value: ActivityState.record(event), mono: true),
+                    Definition(key: "Time", value: event.at.map { $0.formatted(.dateTime.day().month(.abbreviated).hour().minute().second()) }
+                               ?? "Not reported"),
+                    Definition(key: "Actor", value: ActivityState.actor(event) ?? "Not reported"),
+                    Definition(key: "Project", value: event.projectName ?? (state.categorized ? "None" : "Not reported")),
+                    Definition(key: "Subject", value: [event.aggregateKind, event.aggregateID].compactMap { $0 }.joined(separator: " ")
+                               .nonEmpty ?? "None", mono: true),
+                    Definition(key: "Session", value: "Epoch \(event.epoch)"),
+                    Definition(key: "Cause", value: "Not reported"),
+                ], keyWidth: 84)
+            }
+            LabeledSection(title: "Integrity") {
+                DefinitionCard(rows: [
+                    Definition(key: "Record hash", value: "Not reported"),
+                    Definition(key: "Previous", value: "Not reported"),
+                    Definition(key: "Chain", value: "", pill: ("Not verified", .warn)),
+                ], keyWidth: 84)
+                NotReported("The core stores no record hash, and the app verifies no chain.")
+            }
+            payloadSection(event)
+            LabeledSection(title: "Go to") {
+                FlowRow(spacing: 8) {
+                    if let subject = event.aggregateID, state.isDocument(event) {
+                        Button("Open Document") { actions.openDocument(subject) }.buttonStyle(.jojo(.secondary, compact: true))
                     }
-                }
-                InspectorSection("Payload") {
-                    Text(event.payload.isEmpty ? "(empty)" : event.payload).font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(theme.text).textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(theme.fill2, in: RoundedRectangle(cornerRadius: 8))
-                    if !event.detailComplete {
-                        Footnote("The first 512 characters. The app has no request for the rest of a payload yet.")
+                    if event.category == "Approval" || event.category == "Decision" {
+                        Button("Approval Inbox") { actions.open(.approvalInbox) }.buttonStyle(.jojo(.secondary, compact: true))
                     }
-                }
-                InspectorSection("Integrity") {
-                    FactGrid {
-                        Fact("Record hash") { missing("Not reported") }
-                        Fact("Previous") { missing("Not reported") }
-                        Fact("Chain") { EvidencePill(.notRun, label: "Not verified") }
+                    if event.category == "Recovery" {
+                        Button("Recovery Center") { actions.open(.recoveryCenter) }.buttonStyle(.jojo(.secondary, compact: true))
                     }
-                }
-                InspectorSection("Go to", last: true) {
-                    if let id = event.aggregateID, state.isDocument(event) {
-                        Button("Open in Specifications") { actions.openDocument(id) }.buttonStyle(.jojo(.secondary, compact: true))
-                            .help("Loads this document's review and opens Specifications")
-                    } else {
-                        missing(event.aggregateID == nil ? "This event names no subject." : "No screen opens this subject yet.")
-                    }
+                    Button("Affected Tasks") {}.buttonStyle(.jojo(.secondary, compact: true)).disabled(true)
+                        .help("Not reported: the core does not say which tasks an event affects.")
                 }
             }
         } else {
-            VStack(alignment: .leading, spacing: 0) {
-                InspectorSection("Record", last: true) { missing("No event is shown.") }
-            }
+            NotReported("Choose an event to see its record.")
         }
     }
 
-    private func identifier(_ value: String) -> some View {
-        Text(value).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func missing(_ text: String) -> some View {
-        Text(text).font(.system(size: 12.5)).foregroundStyle(theme.text3)
+    private func payloadSection(_ event: JournalEvent) -> some View {
+        let full = state.payload?.seq == event.seq
+        return LabeledSection(title: "Payload") {
+            Text(state.payloadText(event).isEmpty ? "(empty payload)" : state.payloadText(event))
+                .textStyle(.mono).foregroundStyle(theme.text).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(full ? nil : 12)
+                .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cardElevation(radius: 12)
+            if !event.detailComplete {
+                if full, let payload = state.payload {
+                    NotReported(payload.complete ? "The whole payload, \(payload.total) characters."
+                                                 : "The first \(payload.text.count) of \(payload.total) characters.")
+                } else {
+                    HStack(spacing: 8) {
+                        Button(state.payloadLoad == .loading ? "Reading…" : "Load Full Payload") { actions.loadPayload(event.seq) }
+                            .buttonStyle(.jojo(.secondary, compact: true))
+                            .disabled(state.link != .connected || state.payloadLoad == .loading)
+                        NotReported("The first 512 characters are shown.")
+                    }
+                    if case .failed(let reason) = state.payloadLoad { NotReported(reason) }
+                }
+            }
+        }
     }
 }

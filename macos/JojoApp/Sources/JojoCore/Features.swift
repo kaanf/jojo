@@ -56,6 +56,8 @@ public struct FeatureSummary: Equatable, Sendable, Identifiable {
     public let name: String?
     public let repositoryName: String?
     public let projectName: String?
+    /// The project's identity (protocol 1.7); nil when the feature has none.
+    public let project: String?
     /// The five stages the core reports, in `stageNames` order.
     public let stages: [FeatureStage]
     public let running: Int64
@@ -74,14 +76,15 @@ public struct FeatureSummary: Equatable, Sendable, Identifiable {
         guard stages.count == Self.stageNames.count, blockers.count == blockerItems.count else { return nil }
         self.init(id: id, number: number, name: p["name"]?.string, repositoryName: p["repository_name"]?.string,
                   projectName: p["project_name"]?.string, stages: stages, running: running, blocked: blocked,
-                  awaiting: awaiting, done: done, blockers: blockers)
+                  awaiting: awaiting, done: done, blockers: blockers, project: p["project"]?.string)
     }
 
     public init(id: String, number: Int64, name: String? = nil, repositoryName: String? = nil,
                 projectName: String? = nil, stages: [FeatureStage] = [], running: Int64 = 0, blocked: Int64 = 0,
-                awaiting: Int64 = 0, done: Bool = false, blockers: [FeatureBlocker] = []) {
+                awaiting: Int64 = 0, done: Bool = false, blockers: [FeatureBlocker] = [], project: String? = nil) {
         (self.id, self.number, self.name, self.repositoryName, self.projectName) =
             (id, number, name, repositoryName, projectName)
+        self.project = project
         self.stages = stages + Array(repeating: .off, count: max(0, Self.stageNames.count - stages.count))
         (self.running, self.blocked, self.awaiting, self.done, self.blockers) =
             (running, blocked, awaiting, done, blockers)
@@ -112,7 +115,7 @@ extension WorkspaceModel {
     /// Protocol 1.7: the newest features with their stages and blockers. Read only while
     /// the Dashboard or a feature's chat is shown, and again with each new snapshot.
     public func loadFeatures() {
-        guard featuresLoad != .loading, snapshotSeq != nil, dashboardShown || chatShown else { return }
+        guard featuresLoad != .loading, snapshotSeq != nil, dashboardShown || chatShown || projectsShown else { return }
         featuresLoad = .loading
         onChange?()
         client.query(.Features, ["before": .null]) { [weak self] reply in

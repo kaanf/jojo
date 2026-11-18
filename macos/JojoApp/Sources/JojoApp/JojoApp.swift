@@ -9,7 +9,7 @@ struct JojoApp: App {
 
     var body: some Scene {
         Settings {
-            Text("Jojo Phase 1 has no settings.").padding()
+            Text("Jojo's settings are in the main window, under Settings & Providers.").padding()
         }
         .commands {
             // Replaces AppKit's terminate: menu item so Cmd-Q always reaches the coordinator.

@@ -62,7 +62,7 @@ final class S2UserFacingDataTests: XCTestCase {
         model.pollEvents()
         XCTAssertEqual(h.fake.last("Events")?.minor, 1, "polling keeps its 1.1 frame")
         model.loadEvents()
-        XCTAssertEqual(h.fake.last("Events")?.minor, 7, "Activity & Audit reads events with time, actor and sentence")
+        XCTAssertEqual(h.fake.last("Events")?.minor, 11, "Activity & Audit reads events with time, actor, sentence, category and project")
         XCTAssertEqual(h.fake.count("Attempts"), 0, "attempts are read only while Agent Runs is shown")
         model.repairsShown = true
         model.loadAttempts()

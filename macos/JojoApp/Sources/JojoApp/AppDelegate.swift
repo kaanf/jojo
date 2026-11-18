@@ -65,6 +65,30 @@ final class Tracer {
     }
 }
 
+/// Settings › Appearance (step 6): the one setting of the app, kept in this Mac's app
+/// settings, not in the core. Light by default, as the human decided on 2026-11-17.
+enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
+    case system = "System", light = "Light", dark = "Dark"
+    var id: String { rawValue }
+
+    static let key = "JojoAppearance"
+
+    static var stored: AppAppearance {
+        UserDefaults.standard.string(forKey: key).flatMap(AppAppearance.init(rawValue:)) ?? .light
+    }
+
+    /// Nil follows the system.
+    var named: NSAppearance.Name? {
+        switch self {
+        case .system: return nil
+        case .light: return .aqua
+        case .dark: return .darkAqua
+        }
+    }
+
+    @MainActor func apply() { NSApp.appearance = named.flatMap(NSAppearance.init(named:)) }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     let client: HelperClient
@@ -76,6 +100,14 @@ final class AppModel: ObservableObject {
     let options: LaunchOptions
     /// The delegate's single quit entry (set at launch).
     var quit: (QuitSource) -> Void = { _ in }
+    /// Settings › Appearance; applied to the app and kept when it changes.
+    @Published var appearance = AppAppearance.stored
+
+    func setAppearance(_ appearance: AppAppearance) {
+        self.appearance = appearance
+        UserDefaults.standard.set(appearance.rawValue, forKey: AppAppearance.key)
+        appearance.apply()
+    }
 
     init(options: LaunchOptions, trace: Tracer) {
         self.trace = trace
@@ -130,9 +162,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        // The human's decision (2026-11-17): the app is light, as the canvas's boards are;
-        // the dark tokens stay for the snapshot renders and a later Settings › Appearance.
-        NSApp.appearance = NSAppearance(named: .aqua)
+        // The human's decision (2026-11-17): the app is light, as the canvas's boards are,
+        // unless Settings › Appearance chose otherwise (step 6).
+        AppAppearance.stored.apply()
         // Never let the OS silently kill Jojo while a helper session may own agents.
         ProcessInfo.processInfo.disableSuddenTermination()
         ProcessInfo.processInfo.disableAutomaticTermination("Jojo helper session")

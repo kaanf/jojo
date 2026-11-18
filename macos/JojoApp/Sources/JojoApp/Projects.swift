@@ -1,11 +1,11 @@
 import JojoCore
 import SwiftUI
 
-// Projects (docs/design/screens/PROJECTS.md), the M3 minimum of the canvas board: the
-// project records the core holds and a form that saves one whole. The records are read
-// with `Projects` while the screen is the shown one; repositories come from the chat
-// index (the registered ones). Health, worktrees, features and missing configuration of
-// the board are not reported by the core and are not drawn.
+// Projects (docs/design/screens/PROJECTS.md), rebuilt from `ProjectsMac.dc.html` (step
+// 6): the project records the core holds, each with its repositories as the core reads
+// them now (protocol 1.11 `ProjectDetail`: branch, commit, worktrees, health, what is
+// missing), its features (1.7) and a form that saves the whole record. Everything is read
+// while the screen is the shown one.
 
 /// What the human typed for a project, before it is a record.
 struct ProjectDraft: Equatable {
@@ -76,8 +76,68 @@ struct ProjectsState: Equatable {
     var chosen: String?
     var draft: ProjectDraft?
     var commandPending = false
+    /// 1.11: the shown project's repositories as the core reads them now.
+    var detail: ProjectDetail?
+    var detailLoad = PlanLoad.idle
+    /// False when the core does not list `ProjectDetail` (older than 1.11).
+    var reportsDetail = true
+    /// The features the core reports (1.7), for the features of a project.
+    var features: [FeatureSummary] = []
+    var admission = ""
+    /// gh's sign-in as the core last read it (M5): a missing configuration when not ready.
+    var gh: ExternalSignIn?
+    /// Prior attempts held in the Recovery Center, by project name (1.11).
+    var held: [String: Int] = [:]
 
     var project: ProjectRecord? { list?.projects.first { $0.id == chosen } ?? list?.projects.first }
+
+    /// The detail answers for the shown project only.
+    var shownDetail: ProjectDetail? { detail?.project == project?.id ? detail : nil }
+
+    func features(of project: ProjectRecord) -> [FeatureSummary] {
+        features.filter { $0.project == project.id || ($0.project == nil && $0.projectName == project.name) }
+    }
+
+    /// "2 repos · 3 features".
+    func line(_ project: ProjectRecord) -> String {
+        let repos = project.repositories.count, count = features(of: project).count
+        return "\(repos) \(repos == 1 ? "repo" : "repos") · \(count) \(count == 1 ? "feature" : "features")"
+    }
+
+    /// The board's operational pills of the shown project.
+    func pills(_ project: ProjectRecord) -> [(String, Tone)] {
+        let mine = features(of: project)
+        var out: [(String, Tone)] = []
+        if case .ready = connection, !admission.isEmpty {
+            out.append(admission == "Open" ? ("Admission open", .ok) : ("Admission closed", .danger))
+        }
+        let running = mine.reduce(0) { $0 + $1.running }, blocked = mine.reduce(0) { $0 + $1.blocked }
+        let awaiting = mine.reduce(0) { $0 + $1.awaiting }, held = held[project.name] ?? 0
+        if running > 0 { out.append(("\(running) running", .info)) }
+        if blocked > 0 { out.append(("\(blocked) blocked", .warn)) }
+        if awaiting > 0 { out.append(("\(awaiting) awaiting approval", .review)) }
+        if held > 0 { out.append(("\(held) held", .danger)) }
+        return out
+    }
+
+    /// What the project lacks for the flow: the core's list, and gh's sign-in.
+    var missingConfiguration: [String] {
+        var out = shownDetail?.missing.map(\.text) ?? []
+        if let gh, !gh.ready { out.append("GitHub CLI: \(gh.detail.isEmpty ? gh.state : gh.detail)") }
+        return out
+    }
+
+    /// A feature's stage line: "Execution · 2 running · 3 blocked".
+    static func stageLine(_ f: FeatureSummary) -> (String, String) {
+        let index = f.stages.lastIndex { $0.state != "Off" } ?? 0
+        let name = FeatureSummary.stageNames[index].capitalized
+        var parts = [name]
+        if f.running > 0 { parts.append("\(f.running) running") }
+        if f.blocked > 0 { parts.append("\(f.blocked) blocked") }
+        if f.awaiting > 0 { parts.append("\(f.awaiting) awaiting approval") }
+        if f.done { parts.append("completed") }
+        return (parts.joined(separator: " · "), f.done ? "Done" : name)
+    }
 
     var saveBlocked: String? {
         guard case .ready = connection else { return "Unavailable: the core is not connected." }
@@ -103,10 +163,8 @@ struct ProjectsState: Equatable {
 
     /// What the board draws and the core does not report.
     static let missing = [
-        ("Repository health", "Not reported: branch, worktrees and issues of a repository."),
-        ("Features", "Not reported per project. Feature Chat lists the features of a registered repository."),
-        ("Missing configuration", "Not reported."),
-        ("Open in Finder, Import Local Project", "Not built. A repository is registered from Feature Chat."),
+        ("Import Local Project, Attach Repository", "Not built. A repository is registered from Feature Chat."),
+        ("Instructions revisions", "Every save is a revision of the whole record; there is no separate instructions history."),
     ]
 }
 
@@ -115,20 +173,40 @@ struct ProjectsActions {
     var edit: (ProjectDraft?) -> Void = { _ in }
     var save: (ProjectDraft) -> Void = { _ in }
     var reload: () -> Void = {}
+    var newFeature: (String) -> Void = { _ in }
+    var openFeature: (String) -> Void = { _ in }
+}
+
+/// Opens a project's repositories in Finder: the one thing this screen does with a path.
+@MainActor func openInFinder(_ paths: [String]) {
+    let urls = paths.map { URL(fileURLWithPath: $0) }
+    if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
 }
 
 struct ProjectsScreen: View {
     @ObservedObject var model: AppModel
     /// The records are read only while this destination is the shown one.
     let visible: Bool
-    @State private var chosen: String?
-    @State private var draft: ProjectDraft?
+    @Binding var chosen: String?
+    @Binding var draft: ProjectDraft?
+    var newFeature: (String) -> Void = { _ in }
+    var openFeature: (String) -> Void = { _ in }
+
+    var state: ProjectsState {
+        let workspace = model.workspace
+        var held: [String: Int] = [:]
+        for s in workspace.recoveryDetail?.subjects ?? [] { if let name = s.projectName { held[name, default: 0] += 1 } }
+        return ProjectsState(connection: model.client.connection, list: workspace.projects, load: workspace.projectsLoad,
+                             repositories: workspace.chatIndex?.repositories ?? [], chosen: chosen, draft: draft,
+                             commandPending: workspace.commandPending, detail: workspace.projectDetail,
+                             detailLoad: workspace.projectDetailLoad,
+                             reportsDetail: model.client.hello.map { $0.queries.contains("ProjectDetail") } ?? true,
+                             features: workspace.features?.features ?? [], admission: workspace.admission,
+                             gh: workspace.external?.gh, held: held)
+    }
 
     var body: some View {
         let workspace = model.workspace
-        let state = ProjectsState(connection: model.client.connection, list: workspace.projects, load: workspace.projectsLoad,
-                                  repositories: workspace.chatIndex?.repositories ?? [], chosen: chosen, draft: draft,
-                                  commandPending: workspace.commandPending)
         ProjectsView(state: state, actions: ProjectsActions(
             choose: { (chosen, draft) = ($0, nil) },
             edit: { draft = $0 },
@@ -137,14 +215,30 @@ struct ProjectsScreen: View {
                 workspace.saveProject(record, asNew: typed.isNew)
                 (chosen, draft) = (record.id, nil)
             },
-            reload: { workspace.loadProjects() }))
+            reload: { workspace.loadProjects() },
+            newFeature: newFeature,
+            openFeature: openFeature))
             .onChange(of: visible) {
-                if visible {
-                    workspace.loadProjects()
-                    workspace.loadChatIndex()
-                }
+                workspace.projectsShown = visible
+                if visible { load() }
             }
-            .onChange(of: workspace.snapshotSeq) { if visible { workspace.loadProjects() } }
+            .onChange(of: workspace.snapshotSeq) { if visible { load() } }
+            .onChange(of: state.project?.id) { if visible { loadDetail() } }
+    }
+
+    private func load() {
+        let workspace = model.workspace
+        workspace.loadProjects()
+        workspace.loadChatIndex()
+        workspace.loadFeatures()
+        workspace.loadExternalActions()
+        if model.client.hello?.queries.contains("RecoveryDetail") ?? false { workspace.loadRecoveryDetail() }
+        loadDetail()
+    }
+
+    private func loadDetail() {
+        guard state.reportsDetail, let project = state.project?.id else { return }
+        model.workspace.loadProjectDetail(project)
     }
 }
 
@@ -154,102 +248,251 @@ struct ProjectsView: View {
     var actions = ProjectsActions()
 
     var body: some View {
-        Scrolling {
-            VStack(alignment: .leading, spacing: 18) {
-                if case .ready = state.connection {} else {
-                    Banner(.danger, title: "Jojo core isn't responding", message: "Project records cannot be read or saved.")
-                }
-                list
-                if let draft = state.draft {
-                    form(draft)
-                } else if let project = state.project {
-                    detail(project)
-                }
-                missing
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                CoreBanners(connection: state.connection,
+                            missing: state.reportsDetail ? nil : ("ProjectDetail", "repository health"), version: "1.11")
             }
-            .frame(maxWidth: 760, alignment: .topLeading)
-            .padding(EdgeInsets(top: 18, leading: 22, bottom: 24, trailing: 22))
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 10)
+            FeatureColumns(leadingWidth: 240, trailingWidth: 300, wide: 1060, medium: 760) {
+                list
+            } main: {
+                VStack(alignment: .leading, spacing: 18) {
+                    if let draft = state.draft {
+                        form(draft)
+                    } else if let project = state.project {
+                        detail(project)
+                    } else {
+                        empty
+                    }
+                }
+            } trailing: {
+                if let project = state.project, state.draft == nil { configuration(project) }
+            }
         }
+        .padding(.top, 6)
     }
 
     @ViewBuilder
-    private var list: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Projects") {
-                Button("Create Project…") {
-                    var fresh = ProjectDraft()
-                    fresh.id = ProjectsView.newIdentity()
-                    actions.edit(fresh)
-                }
-                .buttonStyle(.jojo(.secondary, compact: true))
-                .disabled(state.draft != nil)
+    private var empty: some View {
+        switch state.load {
+        case .idle, .loading where state.list == nil:
+            LoadingBlock("Reading the project records…").frame(minHeight: 160)
+        case .failed(let reason):
+            Banner(.warning, title: "The project records could not be read", message: ProjectsState.loadFailure(reason)) {
+                Button("Try Again") { actions.reload() }.buttonStyle(.jojo(.secondary, compact: true))
             }
-            switch state.load {
-            case .idle, .loading where state.list == nil:
-                LoadingBlock("Reading the project records…").frame(minHeight: 100)
-            case .failed(let reason):
-                Banner(.warning, title: "The project records could not be read", message: ProjectsState.loadFailure(reason)) {
-                    Button("Try Again") { actions.reload() }.buttonStyle(.jojo(.secondary, compact: true))
-                }
-            default:
-                if let list = state.list, !list.projects.isEmpty {
-                    Card(.panelList) {
-                        Rows(list.projects) { project in
-                            Button { actions.choose(project.id) } label: {
-                                ListRow(project.name, meta: "Revision \(project.revision)",
-                                        detail: "\(project.repositories.count) repositories · default \(ProjectsState.provider(project.defaultProvider))",
-                                        leading: { EmptyView() },
-                                        trailing: { if project.id == state.project?.id { KindTag("Shown", tone: .info) } })
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
+        default:
+            StateBlock(symbol: "folder", title: "No projects yet",
+                       message: "A project names its registered repositories, the commands that test them, the instructions every agent session gets, the provider per task kind and the parallel capacity.") {
+                Button("Create Project…") { create() }.buttonStyle(.jojo(.primary, compact: true))
+            }
+            .frame(minHeight: 200)
+        }
+    }
+
+    private func create() {
+        var fresh = ProjectDraft()
+        fresh.id = ProjectsView.newIdentity()
+        actions.edit(fresh)
+    }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            GroupLabel("Projects · \(state.list?.projects.count ?? 0)").padding(.horizontal, 6)
+            ForEach(state.list?.projects ?? []) { project in
+                SelectableRow(selected: project.id == state.project?.id && state.draft == nil, action: { actions.choose(project.id) }) {
+                    LetterBadge(project.name)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(project.name).textStyle(.bodyStrong).lineLimit(1)
+                        Text(state.line(project)).textStyle(.secondary).foregroundStyle(theme.text2).lineLimit(1)
                     }
-                    Footnote("Parallel capacity of the core: \(list.capacity) attempts in all, not split by provider. A lead turn takes one of them (D4).")
-                } else {
-                    StateBlock(symbol: "folder", title: "No projects yet",
-                               message: "A project names its registered repositories, the commands that test them, the instructions every agent session gets, the provider per task kind and the parallel capacity.") {
-                        EmptyView()
-                    }
-                    .frame(minHeight: 140)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Button("Create Project…") { create() }
+                    .buttonStyle(.jojo(.ghost, compact: true))
+                    .disabled(state.draft != nil)
+                Button("Import Local Project…") {}
+                    .buttonStyle(.jojo(.ghost, compact: true))
+                    .disabled(true)
+                    .help("Not built: a repository is registered from Feature Chat.")
+            }
+            .padding(EdgeInsets(top: 10, leading: 6, bottom: 0, trailing: 6))
+            if let list = state.list, !list.projects.isEmpty {
+                Footnote("Parallel capacity of the core: \(list.capacity) attempts in all, not split by provider. A lead turn takes one of them (D4).")
+                    .padding(EdgeInsets(top: 8, leading: 6, bottom: 0, trailing: 6))
             }
         }
     }
 
     private func detail(_ project: ProjectRecord) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading(project.name) {
-                Button("Edit Project") { actions.edit(ProjectDraft(project)) }.buttonStyle(.jojo(.secondary, compact: true))
-            }
-            Card(.panelList) {
-                VStack(spacing: 0) {
-                    FactLine("Repositories") {
-                        VStack(alignment: .leading, spacing: 3) {
-                            ForEach(project.repositories, id: \.self) { repository in
-                                identifier(path(repository) ?? repository)
-                            }
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 12) {
+                LetterBadge(project.name, size: 40)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(project.name).font(.system(size: 22, weight: .bold))
+                    Text(project.repositories.compactMap(path).first.map { ($0 as NSString).abbreviatingWithTildeInPath }
+                         ?? "Revision \(project.revision)")
+                        .textStyle(.mono).foregroundStyle(theme.text2).lineLimit(1).truncationMode(.middle)
+                    FlowRow(spacing: 6) {
+                        ForEach(Array(state.pills(project).enumerated()), id: \.offset) { _, pill in
+                            OperationalPill(pill.0, tone: pill.1)
                         }
                     }
-                    FactLine("Test command") { command(project.testCommand) }
-                    FactLine("CI command") { command(project.ciCommand) }
-                    FactLine("Task kinds", project.kinds.isEmpty ? "None; the lead names the provider" :
-                        project.kinds.map { "\($0.kind) → \(ProjectsState.provider($0.provider))" }.joined(separator: ", "))
-                    FactLine("Default provider", ProjectsState.provider(project.defaultProvider))
-                    FactLine("Parallel capacity", "\(project.capacity) in all")
-                    FactLine("Automatic repair", ProjectsState.repairs(project.repairLimit))
-                    FactLine("Cross-provider review", project.review ? "On: the other provider reviews each step" : "Off", last: true)
+                    .padding(.top, 4)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            repositories(project)
+            missingConfiguration
+            commands(project)
+            features(project)
+            instructions(project)
+        }
+    }
+
+    private func repositories(_ project: ProjectRecord) -> some View {
+        LabeledSection(title: "Repositories · \(project.repositories.count)") {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(project.repositories.enumerated()), id: \.offset) { index, id in
+                    repositoryRow(id, detail: state.shownDetail?.repositories.first { $0.id == id })
+                        .overlay(alignment: .top) { if index > 0 { Rectangle().fill(theme.sep).frame(height: 0.5) } }
                 }
             }
-            SectionHeading("Project instructions")
-            Card(.panelList) {
-                Text(project.instructions.isEmpty ? "None" : project.instructions)
-                    .textStyle(.body).foregroundStyle(project.instructions.isEmpty ? theme.text3 : theme.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .cardElevation(radius: 12)
+            if state.shownDetail == nil {
+                NotReported(!state.reportsDetail ? "Branch, worktrees and health are not reported by this core (protocol 1.11)."
+                            : state.detailLoad == .loading ? "Reading the repositories…"
+                            : { if case .failed(let r) = state.detailLoad { return "Not read: \(r)" }; return "Reading the repositories…" }())
             }
-            Footnote("Given to every lead turn of this project and appended to each ADR a lead drafts, so that it is approved and reaches every attempt. A saved change is a new revision; a plan keeps the revision it was drafted under.")
+        }
+    }
+
+    private func repositoryRow(_ id: String, detail: ProjectDetail.Repository?) -> some View {
+        let path = detail?.path ?? path(id)
+        let name = detail?.name.isEmpty == false ? detail!.name : (path.map { ($0 as NSString).lastPathComponent } ?? String(id.prefix(8)))
+        var line = [path.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? id]
+        if let detail {
+            line.append([detail.branch ?? "detached", detail.head.map { String($0.prefix(7)) }].compactMap { $0 }.joined(separator: " @ "))
+            line.append("\(detail.worktrees) \(detail.worktrees == 1 ? "worktree" : "worktrees")"
+                        + (detail.activeWorktrees > 0 ? " (\(detail.activeWorktrees) active)" : ""))
+        }
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).textStyle(.bodyStrong)
+                Text(line.joined(separator: " · ")).textStyle(.mono).foregroundStyle(theme.text2)
+                    .lineLimit(1).truncationMode(.middle)
+                if let detail, !detail.issues.isEmpty {
+                    Text(detail.issues.joined(separator: " · ")).textStyle(.secondary).foregroundStyle(theme.text2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let detail {
+                OperationalPill(detail.healthy ? "Healthy" : "\(detail.issues.count) \(detail.issues.count == 1 ? "issue" : "issues")",
+                                tone: detail.healthy ? .ok : .warn)
+            }
+        }
+        .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
+    }
+
+    @ViewBuilder
+    private var missingConfiguration: some View {
+        let lines = state.missingConfiguration
+        if state.shownDetail != nil || !lines.isEmpty {
+            LabeledSection(title: "Missing configuration · \(lines.count)") {
+                if lines.isEmpty {
+                    NotReported("Nothing is missing for the flow.")
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { index, text in
+                            HStack(spacing: 10) {
+                                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(theme.warn)
+                                Text(text).textStyle(.secondary).foregroundStyle(theme.text).fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if text.hasPrefix("No test command") || text.hasPrefix("No CI command"), let project = state.project {
+                                    Button("Edit Command") { actions.edit(ProjectDraft(project)) }.buttonStyle(.jojo(.secondary, compact: true))
+                                }
+                            }
+                            .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 10))
+                            .overlay(alignment: .top) { if index > 0 { Rectangle().fill(theme.sep).frame(height: 0.5) } }
+                        }
+                    }
+                    .background(theme.tint(.warn), in: RoundedRectangle(cornerRadius: 12))
+                }
+            }
+        }
+    }
+
+    private func commands(_ project: ProjectRecord) -> some View {
+        LabeledSection(title: "Test and CI commands") {
+            DefinitionCard(rows: [
+                Definition(key: "Test", value: project.testCommand.isEmpty ? "None" : project.testCommand.joined(separator: " "), mono: true),
+                Definition(key: "CI", value: project.ciCommand.isEmpty ? "None" : project.ciCommand.joined(separator: " "), mono: true),
+            ], keyWidth: 60)
+            NotReported("The test command is offered to the lead; host validation runs the approved validation plan's command. The CI command is stored and shown only.")
+        }
+    }
+
+    private func features(_ project: ProjectRecord) -> some View {
+        let mine = state.features(of: project)
+        return LabeledSection(title: "Features · \(mine.count)", link: ("New Feature", { actions.newFeature(project.id) })) {
+            if mine.isEmpty {
+                NotReported("No feature of this project yet.")
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(mine.enumerated()), id: \.offset) { index, f in
+                        let stage = ProjectsState.stageLine(f)
+                        Button { actions.openFeature(f.id) } label: {
+                            HStack(spacing: 10) {
+                                LetterTile(text: "FT", color: Palette.blue)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("\(f.code) \(f.name ?? "Unnamed feature")").textStyle(.bodyStrong).lineLimit(1)
+                                    Text(stage.0).textStyle(.secondary).foregroundStyle(theme.text2).lineLimit(1)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                OperationalPill(stage.1, tone: f.done ? .ok : f.blocked > 0 ? .warn : .info)
+                            }
+                            .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .overlay(alignment: .top) { if index > 0 { Rectangle().fill(theme.sep).frame(height: 0.5) } }
+                    }
+                }
+                .cardElevation(radius: 12)
+            }
+        }
+    }
+
+    private func instructions(_ project: ProjectRecord) -> some View {
+        LabeledSection(title: "Project instructions", link: ("Edit Instructions", { actions.edit(ProjectDraft(project)) })) {
+            Text(project.instructions.isEmpty ? "None" : project.instructions)
+                .textStyle(.body).foregroundStyle(project.instructions.isEmpty ? theme.text3 : theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cardElevation(radius: 12)
+            Footnote("Given to every provider session for this project: every lead turn, and through the approved ADR every attempt. A saved change is a new revision; a plan keeps the revision it was drafted under.")
+        }
+    }
+
+    private func configuration(_ project: ProjectRecord) -> some View {
+        GlassInspector {
+            LabeledSection(title: "Configuration", link: ("Edit", { actions.edit(ProjectDraft(project)) })) {
+                DefinitionCard(rows: [
+                    Definition(key: "Revision", value: "\(project.revision)"),
+                    Definition(key: "Default provider", value: ProjectsState.provider(project.defaultProvider)),
+                    Definition(key: "Task kinds", value: project.kinds.isEmpty ? "None; the lead names the provider" :
+                        project.kinds.map { "\($0.kind) → \(ProjectsState.provider($0.provider))" }.joined(separator: "\n")),
+                    Definition(key: "Parallel capacity", value: "\(project.capacity) in all"),
+                    Definition(key: "Automatic repair", value: ProjectsState.repairs(project.repairLimit)),
+                    Definition(key: "Cross-provider review", value: project.review ? "On: the other provider reviews each step" : "Off"),
+                ], keyWidth: 110)
+            }
+            missing
         }
     }
 
@@ -321,15 +564,8 @@ struct ProjectsView: View {
     }
 
     private var missing: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Not reported")
-            Card(.panelList) {
-                VStack(spacing: 0) {
-                    ForEach(Array(ProjectsState.missing.enumerated()), id: \.offset) { index, line in
-                        SettingLine(line.0, line.1, form: .missing, last: index == ProjectsState.missing.count - 1)
-                    }
-                }
-            }
+        LabeledSection(title: "Not built") {
+            DefinitionCard(rows: ProjectsState.missing.map { Definition(key: $0.0, value: $0.1) }, keyWidth: 110)
         }
     }
 
@@ -369,5 +605,21 @@ struct ProjectsView: View {
     /// A fresh project identity: 32 lowercase hex characters.
     static func newIdentity() -> String {
         (0..<32).map { _ in String("0123456789abcdef".randomElement()!) }.joined()
+    }
+}
+
+/// A project's tile: its first letter on the project gradient (the board's "C", "J").
+struct LetterBadge: View {
+    let name: String
+    var size: CGFloat = 26
+
+    init(_ name: String, size: CGFloat = 26) { (self.name, self.size) = (name, size) }
+
+    var body: some View {
+        Text(name.first.map { String($0).uppercased() } ?? "–")
+            .font(.system(size: size * 0.46, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(Palette.gradient(Palette.projectBadge), in: RoundedRectangle(cornerRadius: size * 0.27))
     }
 }

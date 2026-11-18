@@ -1,10 +1,11 @@
 import JojoCore
 import SwiftUI
 
-// Recovery Center and launch review: docs/design/screens/RECOVERY_CENTER.md. The screen
-// draws only what the helper reports; a part without a source says so. M5: a push or pull
-// request whose outcome is unknown is held here until the human inspects the remote and
-// decides; it is never sent again.
+// Recovery Center and launch review: docs/design/screens/RECOVERY_CENTER.md, rebuilt from
+// `RecoveryCenterMac.dc.html` (step 6). Held items are prior attempts, external actions
+// whose outcome is unknown (M5: never sent again until the human inspects the remote and
+// decides) and quarantined claims; each fact comes from the core's inspection (protocol
+// 1.11 `RecoveryDetail`). A part without a source says so.
 
 /// Everything the screen reads, as plain values.
 struct RecoveryCenterState: Equatable {
@@ -23,6 +24,11 @@ struct RecoveryCenterState: Equatable {
     var commandPending: Bool
     /// M5 (1.10): issued external actions whose outcome is not known.
     var external: [ExternalAction] = []
+    /// 1.11: the inspection's counts and facts; nil before it is read.
+    var detail: RecoveryDetail? = nil
+    /// False when the core does not list `RecoveryDetail` (older than 1.11).
+    var reportsDetail = true
+    var now = Date()
 
     var link: Link {
         switch connection {
@@ -44,7 +50,20 @@ struct RecoveryCenterState: Equatable {
         return nil
     }
 
-    var items: [HeldItem] { rows.map(HeldItem.init) }
+    /// The detail answers for the inspection on screen only.
+    var currentDetail: RecoveryDetail? { detail?.digest == digest ? detail : nil }
+
+    var items: [HeldItem] { rows.map { HeldItem(row: $0, subject: currentDetail?.subject($0.attempt)) } }
+
+    /// Every held item in the board's order: external side effects, prior attempts, then
+    /// quarantined claims of holders that are not subjects.
+    var held: [Held] {
+        external.map { Held(kind: .external($0)) } + items.map { Held(kind: .attempt($0)) }
+            + (currentDetail?.claims ?? []).map { Held(kind: .claim($0)) }
+    }
+
+    /// Resolutions of this session that moved an attempt on (a Hold keeps it held).
+    var settled: [RecoveryDetail.Settled] { currentDetail?.settled.filter { $0.choice != "HOLD" } ?? [] }
 
     /// No inspection has arrived yet on a connection that can still deliver one.
     var loading: Bool { digest.isEmpty && (link == .connected || link == .starting) }
@@ -54,6 +73,19 @@ struct RecoveryCenterState: Equatable {
 
     /// The inspection digest as shown: its first twelve characters.
     var digestShown: String { digest.isEmpty ? "None" : String(digest.prefix(12)) }
+
+    /// "inspected 09:04 · 38 min ago"; nil when the time is not reported.
+    var inspectedLine: String? {
+        guard let at = currentDetail?.inspectedAt, let time = boardTime(at, now: now) else { return nil }
+        let minutes = max(0, Int(now.timeIntervalSince(at) / 60))
+        return "inspected \(time) · " + (minutes == 0 ? "just now" : "\(minutes) min ago")
+    }
+
+    /// An inspection older than five minutes is stale: reinspect before acting.
+    var fresh: Bool? {
+        guard let at = currentDetail?.inspectedAt else { return nil }
+        return now.timeIntervalSince(at) < 300
+    }
 
     /// Why "Start New Session" cannot be sent, or nil when it can.
     func startBlocked(reviewed: Set<String>) -> String? {
@@ -66,16 +98,85 @@ struct RecoveryCenterState: Equatable {
     }
 }
 
-/// One held subject. Today every subject is a prior attempt.
+/// One held item of the leading list.
+struct Held: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case external(ExternalAction)
+        case attempt(HeldItem)
+        case claim(RecoveryDetail.Claim)
+    }
+
+    let kind: Kind
+
+    var id: String {
+        switch kind {
+        case .external(let a): return "external:" + a.id
+        case .attempt(let item): return item.id
+        case .claim(let c): return "claim:" + c.id
+        }
+    }
+
+    var kindTitle: String {
+        switch kind {
+        case .external: return "External side effect"
+        case .attempt: return "Prior attempt"
+        case .claim: return "Quarantined claim"
+        }
+    }
+
+    var title: String {
+        switch kind {
+        case .external(let a): return ExternalWords.title(a)
+        case .attempt(let item): return item.title
+        case .claim(let c): return c.resource
+        }
+    }
+
+    var place: String {
+        switch kind {
+        case .external(let a): return [a.featureName, a.remote].compactMap { $0 }.joined(separator: " · ")
+        case .attempt(let item): return item.place
+        case .claim(let c): return c.holder.map { "Held by \($0)" } ?? ""
+        }
+    }
+
+    var pill: (String, Tone) {
+        switch kind {
+        case .external: return ("Outcome unknown", .warn)
+        case .attempt(let item): return item.pill
+        case .claim: return ("Quarantined", .review)
+        }
+    }
+}
+
+/// One held prior attempt, with the facts of the 1.11 inspection when they are reported.
 struct HeldItem: Identifiable, Equatable {
     let row: RecoveryRow
+    var subject: RecoveryDetail.Subject? = nil
 
     var id: String { row.attempt }
-    var title: String { "Attempt \(row.attempt.prefix(8))" }
+    var title: String {
+        guard let label = subject?.label else { return "Attempt \(row.attempt.prefix(8))" }
+        return label.replacingOccurrences(of: "attempt", with: "Attempt")
+    }
+
+    /// "Sample · FT-3 name · Step title" from what the core names.
+    var place: String {
+        guard let s = subject else { return "Names not reported" }
+        return [s.projectName, s.featureName, s.title].compactMap { $0 }.joined(separator: " · ")
+    }
 
     /// True only when the helper states that every process is proven gone.
     var processGone: Bool { row.structured?.processAbsent == true }
     var pillLabel: String { processGone ? "Confirmed dead" : "Unknown" }
+
+    /// A recorded process still alive under no supervision, as the inspection found it.
+    var alive: Bool { subject?.processes.contains { $0.state == "Alive" } == true }
+
+    var pill: (String, Tone) {
+        if alive { return ("Live · unsupervised", .danger) }
+        return processGone ? ("Confirmed dead", .neutral) : ("Unknown", .warn)
+    }
 
     var blockerLine: String {
         guard let structured = row.structured else { return "Blockers not reported" }
@@ -98,6 +199,7 @@ struct HeldItem: Identifiable, Equatable {
 
     func sentence(_ choice: RecoveryChoice) -> String {
         if offers(choice) { return choice.sentence }
+        if alive { return "Unavailable: the process is alive but unsupervised. Actions open only after the OS reports its exit." }
         return processGone
             ? "Unavailable: the core's inspection does not offer this choice."
             : "Unavailable while process state is unknown. Needs OS evidence that the process exited."
@@ -118,6 +220,102 @@ struct HeldItem: Identifiable, Equatable {
 
     var findingSentence: String {
         row.structured?.blockers.first ?? row.assessment
+    }
+
+    /// The board's "Inspected facts" rows from the 1.11 facts, one by one.
+    var facts: [Definition] {
+        var out = [Definition(key: "Attempt", value: row.attempt, mono: true)]
+        guard let s = subject else {
+            out.append(Definition(key: "OS evidence", value: processGone ? "Every process proven gone" : "Not proven gone"))
+            out.append(Definition(key: "Findings", value: row.findings + (row.detailComplete ? "" : " … (partial)"), mono: true))
+            return out
+        }
+        out.append(Definition(key: "Stage", value: HeldItem.stageWords(s.stage)))
+        for p in s.processes {
+            let (key, name) = HeldItem.processName(p.label)
+            out.append(Definition(key: key, value: "\(name) · \(HeldItem.findingWords(p.state))" + (p.detail.isEmpty ? "" : " · \(p.detail)"),
+                                  mono: true))
+        }
+        out.append(Definition(key: "OS evidence", value: processGone ? "No process with the recorded identity" : "Original process not confirmed gone"))
+        out.append(Definition(key: "Worktree", value: HeldItem.worktreeWords(s.worktree)))
+        out.append(Definition(key: "Snapshot", value: HeldItem.snapshotWords(s.snapshot.state, digest: s.snapshotDigest)))
+        out.append(Definition(key: "Evidence", value: s.evidenceGaps.isEmpty ? "Logs complete to their last durable record" : s.evidenceGaps.joined(separator: "; ")))
+        out.append(Definition(key: "Session", value: HeldItem.sessionWords(s.session)))
+        if !s.claims.isEmpty {
+            out.append(Definition(key: "Claims", value: s.claims.map { "\($0.resource) · \(($0.state ?? "").lowercased())" }.joined(separator: "\n"), mono: true))
+        }
+        if !s.staleApprovals.isEmpty {
+            out.append(Definition(key: "Stale approvals", value: s.staleApprovals.joined(separator: "\n")))
+        }
+        if !s.unknownEffects.isEmpty {
+            out.append(Definition(key: "Unknown effects", value: s.unknownEffects.joined(separator: "\n"), mono: true))
+        }
+        if !s.blockers.isEmpty {
+            out.append(Definition(key: "Blockers", value: s.blockers.joined(separator: "\n")))
+        }
+        return out
+    }
+
+    /// The core labels a process "pid:N start:S" and a process group "group:N".
+    static func processName(_ label: String) -> (String, String) {
+        if label.hasPrefix("group:") { return ("Process group", "pgid " + label.dropFirst(6)) }
+        if label.hasPrefix("pid:") { return ("Process", "pid " + (label.dropFirst(4).split(separator: " ").first.map(String.init) ?? "")) }
+        return ("Process", label)
+    }
+
+    static func stageWords(_ stage: String) -> String {
+        switch stage {
+        case "NotIssued": return "Reserved; the launch was never issued"
+        case "IssuedWithoutIdentity": return "Launch issued; no process identity recorded"
+        case "Spawned": return "Running when supervision was lost"
+        case "Concluded": return "Supervision concluded the process tree gone"
+        case "Sealed": return "Result sealed"
+        default: return stage
+        }
+    }
+
+    static func findingWords(_ finding: String) -> String {
+        switch finding {
+        case "Absent": return "absent"
+        case "Alive": return "alive · start time matches"
+        case "Reused": return "reused by another program"
+        default: return "unknown"
+        }
+    }
+
+    static func worktreeWords(_ fact: RecoveryDetail.Fact) -> String {
+        switch fact.state {
+        case "Intact": return "Present · matches its record"
+        case "NotCreated": return "Not created"
+        case "Changed": return "Changed · \(fact.detail)"
+        default: return fact.detail.isEmpty ? "Not readable" : fact.detail
+        }
+    }
+
+    static func snapshotWords(_ state: String, digest: String?) -> String {
+        switch state {
+        case "Matches": return "sha256 verified" + (digest.map { " · \($0.prefix(12))" } ?? "")
+        case "Mismatch": return "Changed after snapshot"
+        default: return "No reviewed snapshot"
+        }
+    }
+
+    static func sessionWords(_ fact: RecoveryDetail.Fact) -> String {
+        switch fact.state {
+        case "Recorded": return "\(fact.detail.isEmpty ? "Provider" : fact.detail) session recorded"
+        case "NotRecorded": return "No session recorded"
+        default: return fact.detail.isEmpty ? "Not resumable" : fact.detail
+        }
+    }
+
+    /// "Continued fresh", "Continued with history", "Output validated".
+    static func settledWords(_ choice: String) -> String {
+        switch choice {
+        case "VALIDATE_OUTPUT": return "Output validated"
+        case "CONTINUE_WITH_HISTORY": return "Continued with history"
+        case "CONTINUE_FRESH_CONTEXT": return "Continued fresh"
+        default: return "Held"
+        }
     }
 }
 
@@ -157,23 +355,39 @@ struct RecoveryActions {
 /// The Recovery Center destination, bound to the app model.
 struct RecoveryCenterScreen: View {
     @ObservedObject var model: AppModel
-    /// The external actions (protocol 1.10) are read only while this is the shown screen.
+    /// The external actions (1.10) and the inspection detail (1.11) are read only while
+    /// this is the shown screen.
     var visible = false
+    var reviewing: Binding<Bool>? = nil
+
+    var state: RecoveryCenterState {
+        let workspace = model.workspace
+        return RecoveryCenterState(connection: model.client.connection, admission: workspace.admission,
+                                   rows: workspace.recovery, digest: workspace.recoveryDigest,
+                                   commandPending: workspace.commandPending,
+                                   external: workspace.external?.unresolved ?? [],
+                                   detail: workspace.recoveryDetail,
+                                   reportsDetail: model.client.hello?.queries.contains("RecoveryDetail") ?? true)
+    }
 
     var body: some View {
         RecoveryCenterView(
-            state: RecoveryCenterState(connection: model.client.connection, admission: model.workspace.admission,
-                                       rows: model.workspace.recovery, digest: model.workspace.recoveryDigest,
-                                       commandPending: model.workspace.commandPending,
-                                       external: model.workspace.external?.unresolved ?? []),
+            state: state,
             actions: RecoveryActions(inspect: { model.workspace.inspectRecovery() },
                                      resolve: { model.workspace.resolveRecovery($0, $1) },
                                      start: { model.workspace.startAfterRecovery() },
                                      inspectExternal: { model.workspace.inspectExternal($0) },
-                                     resolveExternal: { model.workspace.resolveExternal($0) }))
-            .onAppear { if visible { model.workspace.loadExternalActions() } }
-            .onChange(of: visible) { if visible { model.workspace.loadExternalActions() } }
-            .onChange(of: model.workspace.snapshotSeq) { if visible { model.workspace.loadExternalActions() } }
+                                     resolveExternal: { model.workspace.resolveExternal($0) }),
+            review: reviewing)
+            .onAppear { if visible { load() } }
+            .onChange(of: visible) { if visible { load() } }
+            .onChange(of: model.workspace.snapshotSeq) { if visible { load() } }
+            .onChange(of: model.workspace.recoveryDigest) { if visible { model.workspace.loadRecoveryDetail() } }
+    }
+
+    private func load() {
+        model.workspace.loadExternalActions()
+        if state.reportsDetail { model.workspace.loadRecoveryDetail() }
     }
 }
 
@@ -186,7 +400,9 @@ struct RecoveryCenterView: View {
     @Environment(\.theme) private var theme
     let state: RecoveryCenterState
     var actions = RecoveryActions()
-    @State private var reviewing: Bool
+    /// The launch review: the shell's binding when there is one, else this view's own.
+    private let review: Binding<Bool>?
+    @State private var ownReviewing: Bool
     @State private var selected: String?
     /// Findings marked reviewed, and the inspection they were marked on.
     @State private var marks: (digest: String, attempts: Set<String>) = ("", [])
@@ -194,22 +410,29 @@ struct RecoveryCenterView: View {
     /// M5: the external action "Mark Not Performed" asks about.
     @State private var notPerformed: ExternalAction?
 
-    init(state: RecoveryCenterState, actions: RecoveryActions = RecoveryActions(), reviewing: Bool = false) {
+    init(state: RecoveryCenterState, actions: RecoveryActions = RecoveryActions(), reviewing: Bool = false,
+         review: Binding<Bool>? = nil) {
         self.state = state
         self.actions = actions
-        _reviewing = State(initialValue: reviewing)
+        self.review = review
+        _ownReviewing = State(initialValue: reviewing)
+    }
+
+    private var reviewing: Bool {
+        get { review?.wrappedValue ?? ownReviewing }
+        nonmutating set { if let review { review.wrappedValue = newValue } else { ownReviewing = newValue } }
     }
 
     /// A new inspection clears the marks: they were made on other facts.
     private var reviewed: Set<String> { marks.digest == state.digest ? marks.attempts : [] }
 
-    private var current: HeldItem? {
-        state.items.first { $0.id == selected } ?? state.items.first
+    private var current: Held? {
+        state.held.first { $0.id == selected } ?? state.held.first
     }
 
     var body: some View {
         Group {
-            if reviewing, state.admissionState == .closed { review } else { center }
+            if reviewing, state.admissionState == .closed { launchReview } else { center }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .confirmationDialog(confirmation.map { "\($0.choice.buttonTitle): \($0.item.title)?" } ?? "",
@@ -236,86 +459,27 @@ struct RecoveryCenterView: View {
     // MARK: Center
 
     private var center: some View {
-        GeometryReader { geometry in
-            // Three columns only while the detail keeps at least 420.
-            let wide = geometry.size.width >= 920
-            HStack(spacing: 0) {
-                panel(edge: .trailing) { heldList }.frame(width: 240)
-                Scrolling {
-                    VStack(alignment: .leading, spacing: 16) {
-                        banners(openReview: true)
-                        if !state.external.isEmpty { externalHeld }
-                        detail
-                        if !wide { aside }
-                    }
-                    .padding(EdgeInsets(top: 18, leading: 22, bottom: 24, trailing: 22))
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                if wide {
-                    panel(edge: .leading) { Scrolling { aside.padding(14) } }.frame(width: 260)
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                CoreBanners(connection: state.connection,
+                            missing: state.reportsDetail ? nil : ("RecoveryDetail", "the inspection's counts and facts"),
+                            version: "1.11")
+                admissionBanner(openReview: true)
+            }
+            .padding(.horizontal, 10)
+            FeatureColumns(leadingWidth: 250, trailingWidth: 300, wide: 1060, medium: 780) {
+                heldList
+            } main: {
+                detail
+            } trailing: {
+                inspector
             }
         }
-    }
-
-    /// M5: issued pushes and pull requests whose outcome is unknown.
-    private var externalHeld: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeading("External actions · \(state.external.count) with unknown outcome")
-            ForEach(state.external) { a in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Text(ExternalWords.title(a)).textStyle(.bodyStrong).lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        let pill = ExternalWords.pill(a)
-                        OperationalPill(pill.0, tone: pill.1)
-                    }
-                    DefinitionCard(rows: [
-                        Definition(key: "Remote", value: "\(a.remote) · \(a.url)", mono: true),
-                        Definition(key: "Reference", value: a.kind == .Push ? a.reference : "\(a.branch) → \(a.base ?? "")", mono: true),
-                        Definition(key: "Commit", value: a.commit, mono: true),
-                        Definition(key: "Last seen", value: a.observations.last.map { "\(ExternalWords.observer($0)): \($0.detail)" }
-                                   ?? "Nothing was observed: the helper stopped before the result came back."),
-                    ], keyWidth: 100)
-                    FlowRow(spacing: 10) {
-                        Button("Check Remote") { actions.inspectExternal(a.id) }.buttonStyle(.jojo(.primary, compact: true))
-                            .disabled(!externalActable(a)).help("Reads the remote and records what it shows. Sends nothing.")
-                        Button("Mark Not Performed…") { notPerformed = a }.buttonStyle(.jojo(.secondary, compact: true))
-                            .disabled(!externalActable(a) || !a.observations.contains { $0.observer.hasPrefix("git:ls-remote") || $0.observer.hasPrefix("gh:pr-list") })
-                            .help("Available after the remote was checked.")
-                        Text("Jojo never sends it again by itself.").font(.system(size: 11)).foregroundStyle(theme.text2)
-                    }
-                }
-                .padding(14)
-                .cardElevation(radius: 14)
-            }
-        }
-    }
-
-    private func externalActable(_ a: ExternalAction) -> Bool {
-        state.link == .connected && !state.commandPending && a.state == .Unknown
-    }
-
-    private func panel(edge: Alignment, @ViewBuilder _ content: () -> some View) -> some View {
-        content()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(theme.sidebar)
-            .overlay(alignment: edge) { Rectangle().fill(theme.sidebarEdge).frame(width: 1) }
+        .padding(.top, 6)
     }
 
     @ViewBuilder
-    private func banners(openReview: Bool) -> some View {
-        switch state.link {
-        case .lost:
-            Banner(.danger, title: "Jojo core isn't responding",
-                   message: "Showing the last known state, read-only. No actions can be requested.")
-        case .incompatible:
-            Banner(.danger, title: "Jojo core speaks another protocol version",
-                   message: "Read-only. No actions can be requested.")
-        case .connected, .starting:
-            EmptyView()
-        }
+    private func admissionBanner(openReview: Bool) -> some View {
         if state.admissionState == .closed {
             Banner(.danger, title: "Execution admission is closed",
                    message: openReview
@@ -329,68 +493,68 @@ struct RecoveryCenterView: View {
     }
 
     private var heldList: some View {
-        Scrolling {
-            VStack(alignment: .leading, spacing: 0) {
-                SectionHeading("Held · \(state.rows.count)")
-                    .padding(EdgeInsets(top: 12, leading: 16, bottom: 6, trailing: 12))
-                VStack(spacing: 2) {
-                    ForEach(state.items) { item in heldRow(item) }
+        VStack(alignment: .leading, spacing: 2) {
+            GroupLabel("Held · \(state.held.count)").padding(.horizontal, 6)
+            if state.held.isEmpty {
+                NotReported(state.loading ? "Reading the inspection…" : "Nothing is on hold.").padding(10)
+            }
+            ForEach(state.held) { h in
+                SelectableRow(selected: h.id == current?.id, action: { selected = h.id }) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(h.kindTitle).textStyle(.label).foregroundStyle(theme.text3)
+                        HStack(spacing: 6) {
+                            Text(h.title).textStyle(.bodyStrong).lineLimit(1).truncationMode(.middle)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            OperationalPill(h.pill.0, tone: h.pill.1)
+                        }
+                        if !h.place.isEmpty {
+                            Text(h.place).textStyle(.secondary).foregroundStyle(theme.text2).lineLimit(1)
+                        }
+                    }
                 }
-                SectionHeading("Settled today").padding(EdgeInsets(top: 14, leading: 16, bottom: 6, trailing: 16))
-                Text("Not reported yet.").textStyle(.meta).foregroundStyle(theme.text3)
-                    .padding(EdgeInsets(top: 0, leading: 18, bottom: 14, trailing: 16))
+            }
+            GroupLabel("Settled this session").padding(EdgeInsets(top: 16, leading: 6, bottom: 2, trailing: 6))
+            if state.currentDetail == nil {
+                NotReported(state.reportsDetail ? "Reading…" : "Not reported by this core.").padding(10)
+            } else if state.settled.isEmpty {
+                NotReported("Nothing was settled in this session.").padding(10)
+            }
+            ForEach(state.settled) { s in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(s.label.map { $0.replacingOccurrences(of: "attempt", with: "Attempt") } ?? "Attempt \(s.attempt.prefix(8))")
+                            .textStyle(.bodyStrong).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        if let time = boardTime(s.at, now: state.now) {
+                            Text(time).textStyle(.secondary).foregroundStyle(theme.text3)
+                        }
+                    }
+                    Text(HeldItem.settledWords(s.choice)).textStyle(.secondary).foregroundStyle(theme.text2)
+                }
+                .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
             }
         }
     }
 
-    private func heldRow(_ item: HeldItem) -> some View {
-        let isSelected = item.id == current?.id
-        return Button { selected = item.id } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text("Prior attempt").font(.system(size: 11)).foregroundStyle(theme.text3)
-                    Spacer(minLength: 0)
-                    OperationalPill(.recoveryRequired, label: item.pillLabel)
-                }
-                Text(item.title).textStyle(.controlStrong).foregroundStyle(theme.text)
-                Text(item.blockerLine).textStyle(.meta).foregroundStyle(theme.text3)
-            }
-            .padding(.vertical, 9)
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? theme.accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(isSelected ? theme.info.opacity(0.4) : .clear, lineWidth: 1))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
+    // MARK: Detail
 
     @ViewBuilder
     private var detail: some View {
-        if let item = current {
-            header(item)
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Inspected facts · read-only")
-                Card(.panel) { facts(item) }
-                Footnote("Worktree, snapshot, evidence, session, claims and the process group are not reported as separate facts yet. See Findings.")
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Recovery actions")
-                Card(.panelList) {
-                    Rows(RecoveryChoice.allCases.map { ActionRow(choice: $0) }) { action(item, $0.choice) }
+        if let held = current {
+            VStack(alignment: .leading, spacing: 16) {
+                header(held)
+                freshness
+                switch held.kind {
+                case .attempt(let item): attemptDetail(item)
+                case .external(let a): externalDetail(a)
+                case .claim(let c): claimDetail(c)
                 }
             }
-            Footnote(item.footnote)
         } else if state.loading {
             LoadingBlock("Loading the recovery inspection…")
         } else if state.digest.isEmpty {
             StateBlock(symbol: "cross.case", title: "No inspection was loaded",
                        message: "The core stopped answering before it reported a recovery inspection.")
                 .frame(minHeight: 260)
-        } else if !state.external.isEmpty {
-            EmptyView()
         } else {
             StateBlock(symbol: "checkmark.circle", title: "Nothing is on hold",
                        message: "The last inspection found no interrupted or unknown work.") {
@@ -400,115 +564,179 @@ struct RecoveryCenterView: View {
         }
     }
 
+    private func header(_ held: Held) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(([held.kindTitle] + (held.place.isEmpty ? [] : [held.place])).joined(separator: " · "))
+                    .textStyle(.secondary).foregroundStyle(theme.text2).lineLimit(2)
+                Text(held.title).font(.system(size: 22, weight: .bold)).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            OperationalPill(held.pill.0, tone: held.pill.1)
+        }
+    }
+
+    /// The board's freshness strip: Fresh or Stale, when it was inspected, Reinspect.
+    private var freshness: some View {
+        HStack(spacing: 10) {
+            switch state.fresh {
+            case .some(true): OperationalPill("Fresh", tone: .ok)
+            case .some(false): OperationalPill("Stale", tone: .warn)
+            case .none: OperationalPill("Not reported", tone: .neutral)
+            }
+            Text(state.inspectedLine.map { $0 + (state.fresh == false ? " · reinspect before acting" : "") }
+                 ?? "The time of the inspection is not reported by this core.")
+                .textStyle(.secondary).foregroundStyle(theme.text2).lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            reinspect(help: "Read-only. Collects fresh facts for every held item.")
+        }
+        .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 8))
+        .cardElevation(radius: 12)
+    }
+
     private func reinspect(help: String) -> some View {
         Button { actions.inspect() } label: { Label("Reinspect", systemImage: "arrow.clockwise") }
-            .buttonStyle(.jojo(.secondary))
+            .buttonStyle(.jojo(.secondary, compact: true))
             .disabled(state.link != .connected)
             .help(help)
     }
 
-    private func header(_ item: HeldItem) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Prior attempt").textStyle(.secondary).foregroundStyle(theme.text2)
-                Text(item.title).font(.system(size: 20, weight: .bold)).tracking(-0.4).foregroundStyle(theme.textStrong)
-                HStack(spacing: 8) {
-                    OperationalPill(.recoveryRequired, label: item.pillLabel, standalone: true)
-                    Text("Inspection age not reported").textStyle(.meta).foregroundStyle(theme.text3)
-                }
-            }
-            Spacer(minLength: 0)
-            reinspect(help: "Read-only. Collects fresh facts for every held item.")
-        }
-    }
-
-    private func facts(_ item: HeldItem) -> some View {
-        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 7) {
-            fact("Attempt") { Text(item.row.attempt).textStyle(.mono).foregroundStyle(theme.text).textSelection(.enabled) }
-            fact("OS evidence") {
-                if item.processGone {
-                    EvidencePill(.passed, label: "Every process proven gone")
-                } else {
-                    EvidencePill(.unknown, label: item.row.structured == nil ? "Not reported" : "Not proven gone")
-                }
-            }
-            fact("Blockers") {
-                VStack(alignment: .leading, spacing: 3) {
-                    if let structured = item.row.structured {
-                        if structured.blockers.isEmpty { value("None reported") }
-                        ForEach(structured.blockers, id: \.self) { value($0) }
-                        if !structured.blockersComplete {
-                            Text("The core shortened this list.").textStyle(.meta).foregroundStyle(theme.text3)
-                        }
-                    } else {
-                        Text("Not reported by this core.").textStyle(.control).foregroundStyle(theme.text3)
-                    }
-                }
-            }
-            fact("Assessment") { value(item.row.assessment) }
-            fact("Findings") {
-                Text(item.row.findings + (item.row.detailComplete ? "" : " … (partial)"))
-                    .textStyle(.mono).foregroundStyle(theme.text).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder
+    private func attemptDetail(_ item: HeldItem) -> some View {
+        LabeledSection(title: "Inspected facts · read-only") {
+            DefinitionCard(rows: item.facts, keyWidth: 120)
+            if item.subject == nil {
+                NotReported(state.reportsDetail
+                            ? "The worktree, snapshot, evidence, session and claims are read with the inspection's detail."
+                            : "This core reports no separate facts for the worktree, snapshot, evidence, session and claims.")
             }
         }
-    }
-
-    private func fact(_ label: String, @ViewBuilder _ content: () -> some View) -> some View {
-        GridRow {
-            Text(label).font(.system(size: 12.5)).foregroundStyle(theme.text3).frame(width: 130, alignment: .leading)
-            content().frame(maxWidth: .infinity, alignment: .leading)
+        LabeledSection(title: "Recovery actions") {
+            actionCard(RecoveryChoice.allCases.map { choice in AnyView(action(item, choice)) })
         }
+        Footnote(item.footnote)
     }
 
-    private func value(_ text: String) -> some View {
-        Text(text).font(.system(size: 12.5)).foregroundStyle(theme.text).textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder
+    private func externalDetail(_ a: ExternalAction) -> some View {
+        let push = a.kind == .Push
+        LabeledSection(title: "Inspected facts · read-only") {
+            DefinitionCard(rows: [
+                Definition(key: "Operation", value: push ? "git push \(a.remote) \(a.reference)"
+                                                         : "gh pr create --draft \(a.branch) → \(a.base ?? "default branch")", mono: true),
+                Definition(key: "Idempotency key", value: a.id, mono: true),
+                Definition(key: "Commit", value: a.commit, mono: true),
+                Definition(key: "Remote", value: "\(a.remote) · \(a.url)", mono: true),
+                Definition(key: "Last seen", value: a.observations.last.map { "\(ExternalWords.observer($0)): \($0.detail)" }
+                           ?? "No exit recorded: the helper stopped before the result came back."),
+            ], keyWidth: 120)
+        }
+        LabeledSection(title: "How this resolves") {
+            Text("Check Remote reads \(push ? "the remote branch \(a.branch)" : "the remote's pull requests for \(a.branch)"). If it shows the \(push ? "commit" : "pull request"), the \(push ? "push" : "pull request") is recorded as performed with that evidence; if not, you can mark it not performed. A new \(push ? "push" : "pull request") always needs a new authorization.")
+                .textStyle(.secondary).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
+                .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cardElevation(radius: 12)
+        }
+        LabeledSection(title: "External actions · \(state.external.count) with unknown outcome") {
+            actionCard([
+                AnyView(actionRow(title: "Check Remote", primary: true, enabled: externalActable(a),
+                                  sentence: "Reads the remote and records what it shows. Sends nothing.") { actions.inspectExternal(a.id) }),
+                AnyView(actionRow(title: "Mark Not Performed…", primary: false,
+                                  enabled: externalActable(a) && a.observations.contains { $0.observer.hasPrefix("git:ls-remote") || $0.observer.hasPrefix("gh:pr-list") },
+                                  sentence: "Available after the remote was checked. Records that it did not happen.") { notPerformed = a }),
+            ])
+        }
+        Footnote("Jojo never sends it again by itself. Validate Output, Continue with History and Continue Fresh are unavailable while the external outcome is unknown.")
     }
 
-    private struct ActionRow: Identifiable {
-        let choice: RecoveryChoice
-        var id: String { choice.rawValue }
+    @ViewBuilder
+    private func claimDetail(_ c: RecoveryDetail.Claim) -> some View {
+        LabeledSection(title: "Inspected facts · read-only") {
+            DefinitionCard(rows: [
+                Definition(key: "Paths", value: c.resource, mono: true),
+                Definition(key: "Held by", value: c.holder ?? "Not reported"),
+                Definition(key: "Mode", value: c.mode.lowercased()),
+                Definition(key: "Blocks", value: c.mode == "EXCLUSIVE" ? "Any task using these paths" : "Any task writing these paths"),
+            ], keyWidth: 120)
+        }
+        Footnote("Only Hold is available: the claim's owner is unconfirmed. It resolves when its attempt is settled.")
+    }
+
+    private func externalActable(_ a: ExternalAction) -> Bool {
+        state.link == .connected && !state.commandPending && a.state == .Unknown
+    }
+
+    /// The board's action list: a card of rows 0.5 `sep` apart.
+    private func actionCard(_ rows: [AnyView]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                row.overlay(alignment: .top) { if index > 0 { Rectangle().fill(theme.sep).frame(height: 0.5) } }
+            }
+        }
+        .cardElevation(radius: 12)
+    }
+
+    private func actionRow(title: String, primary: Bool, enabled: Bool, sentence: String,
+                           _ perform: @escaping () -> Void) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Button(title, action: perform)
+                .buttonStyle(.jojo(primary ? .primary : .secondary, compact: true))
+                .disabled(!enabled)
+                .help(sentence)
+                .frame(width: 180, alignment: .leading)
+            Text(sentence).textStyle(.secondary).foregroundStyle(enabled ? theme.text2 : theme.text3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 3)
+        }
+        .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
     }
 
     private func action(_ item: HeldItem, _ choice: RecoveryChoice) -> some View {
         let offered = item.offers(choice)
-        return HStack(alignment: .top, spacing: 12) {
-            Button(choice.buttonTitle + (offered && choice.confirms ? "…" : "")) {
-                if choice.confirms {
-                    confirmation = Confirmation(item: item, choice: choice)
-                } else {
-                    actions.resolve(item.id, choice)
-                }
+        return actionRow(title: choice.buttonTitle + (offered && choice.confirms ? "…" : ""),
+                         primary: choice == item.primary, enabled: offered && state.canAct,
+                         sentence: item.sentence(choice)) {
+            if choice.confirms {
+                confirmation = Confirmation(item: item, choice: choice)
+            } else {
+                actions.resolve(item.id, choice)
             }
-            .buttonStyle(.jojo(choice == item.primary ? .primary : .secondary))
-            .disabled(!offered || !state.canAct)
-            .help(item.sentence(choice))
-            .frame(width: 180, alignment: .leading)
-            Text(item.sentence(choice)).textStyle(.body).foregroundStyle(offered ? theme.text2 : theme.text3)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 5)
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 14)
     }
 
     // MARK: Admission and inspection
 
-    private var aside: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Execution admission")
-                Card(.panel) { admission }
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading("Last inspection")
-                Card(.panelList) { Rows(counts) { count($0) } }
-                Footnote("Attempts examined, worktree, snapshot, external effect and approval counts are not reported yet.")
+    private var inspector: some View {
+        GlassInspector {
+            LabeledSection(title: "Execution admission") { admission }
+            LabeledSection(title: "Last inspection") {
+                if let d = state.currentDetail {
+                    DefinitionCard(rows: counts(d), keyWidth: 150)
+                } else {
+                    NotReported(state.reportsDetail ? (state.digest.isEmpty ? "No inspection yet." : "Reading…")
+                                                    : "Not reported by this core (protocol 1.11).")
+                }
             }
             Footnote("Recovery inspection never changes anything. Only the actions you choose do, and the core checks eligibility again.")
         }
+    }
+
+    private func counts(_ d: RecoveryDetail) -> [Definition] {
+        let c = d.counts
+        return [
+            Definition(key: "Attempts examined", value: "\(c.examined)"),
+            Definition(key: "Worktrees intact", value: "\(c.worktreesIntact) / \(c.worktrees)"),
+            Definition(key: "Snapshot mismatches", value: "\(c.snapshotMismatches)"),
+            Definition(key: "Unknown external effects", value: "\(c.unknownEffects)"),
+            Definition(key: "Stale approvals", value: "\(c.staleApprovals)"),
+            Definition(key: "Evidence gaps", value: "\(c.evidenceGaps)"),
+            Definition(key: "Quarantined claims", value: "\(c.claims)"),
+            Definition(key: "Inspected", value: state.inspectedLine?.replacingOccurrences(of: "inspected ", with: "") ?? "Not reported"),
+            Definition(key: "Inspection", value: state.digestShown, mono: true),
+        ]
     }
 
     private var admission: some View {
@@ -520,10 +748,10 @@ struct RecoveryCenterView: View {
                 case .unknown: EvidencePill(.unknown)
                 }
                 if let epoch = state.epoch {
-                    Text("epoch \(epoch)").textStyle(.mono).foregroundStyle(theme.text2)
+                    Text("Session \(epoch)").textStyle(.mono).foregroundStyle(theme.text2)
                 }
             }
-            Text(admissionSentence).textStyle(.body).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
+            Text(admissionSentence).textStyle(.secondary).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
             switch state.admissionState {
             case .closed:
                 Button("Open Review") { reviewing = true }.buttonStyle(.jojo(.primary, compact: true))
@@ -541,51 +769,22 @@ struct RecoveryCenterView: View {
 
     private var admissionSentence: String {
         switch state.admissionState {
-        case .open: return "Held items stay held. Who started the session, and when, is not reported yet."
+        case .open: return "Held items stay held. Who started the session, and when, is not reported."
         case .closed: return "No new work starts until you review the inspection and start a new session."
         case .unknown:
             return state.link == .connected ? "The core has not reported admission yet." : "Not known while the core is not connected."
         }
     }
 
-    private struct Count: Identifiable {
-        let label: String
-        let value: String
-        var attention = false
-        var id: String { label }
-    }
-
-    private var counts: [Count] {
-        let items = state.items
-        let reported = items.filter { $0.row.structured != nil }
-        let blocked = reported.filter { !($0.row.structured?.blockers.isEmpty ?? true) }.count
-        return [
-            Count(label: "Held attempts", value: "\(items.count)"),
-            Count(label: "Processes proven gone", value: "\(items.filter(\.processGone).count) / \(items.count)"),
-            Count(label: "With blockers", value: "\(blocked)", attention: blocked > 0),
-            Count(label: "Offering more than Hold", value: "\(reported.filter { $0.primary != nil }.count)"),
-            Count(label: "Inspection", value: state.digestShown),
-        ]
-    }
-
-    private func count(_ count: Count) -> some View {
-        HStack(spacing: 10) {
-            Text(count.label).textStyle(.body).foregroundStyle(theme.text)
-            Spacer(minLength: 0)
-            Text(count.value).textStyle(.mono).foregroundStyle(count.attention ? theme.warn : theme.text)
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 14)
-    }
-
     // MARK: Launch review
 
-    private var review: some View {
+    private var launchReview: some View {
         Scrolling {
             VStack(alignment: .leading, spacing: 16) {
                 Button { reviewing = false } label: { Label("Recovery Center", systemImage: "chevron.left") }
                     .buttonStyle(.jojo(.ghost, compact: true))
-                banners(openReview: false)
+                CoreBanners(connection: state.connection)
+                admissionBanner(openReview: false)
                 Card(.panel) { strip }
                 VStack(alignment: .leading, spacing: 8) {
                     SectionHeading("Review each finding · \(reviewed.intersection(state.rows.map(\.attempt)).count) of \(state.rows.count)")
@@ -610,8 +809,17 @@ struct RecoveryCenterView: View {
         HStack(alignment: .top, spacing: 30) {
             field("Inspection") { Text(state.digestShown).textStyle(.mono).foregroundStyle(theme.text) }
             field("Findings") { Text("\(state.rows.count)").textStyle(.control).foregroundStyle(theme.text) }
-            field("Collected") { Text("Not reported yet").textStyle(.control).foregroundStyle(theme.text3) }
-            field("Freshness") { Text("Not reported yet").textStyle(.control).foregroundStyle(theme.text3) }
+            field("Collected") {
+                Text(state.currentDetail?.inspectedAt.flatMap { boardTime($0, now: state.now) } ?? "Not reported")
+                    .textStyle(.control).foregroundStyle(state.currentDetail == nil ? theme.text3 : theme.text)
+            }
+            field("Freshness") {
+                switch state.fresh {
+                case .some(true): OperationalPill("Fresh", tone: .ok)
+                case .some(false): OperationalPill("Stale", tone: .warn)
+                case .none: Text("Not reported").textStyle(.control).foregroundStyle(theme.text3)
+                }
+            }
             Spacer(minLength: 0)
             reinspect(help: "Collect a new read-only inspection")
         }

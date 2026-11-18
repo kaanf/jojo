@@ -116,7 +116,7 @@ final class S3DashboardTests: XCTestCase {
     func test_s3_the_features_query_is_sent_at_1_7_only_while_the_dashboard_is_shown() throws {
         XCTAssertEqual(Request.allCases.filter { $0.minor == 7 }, [.Attempts, .Features])
         XCTAssertEqual(Request.Features.fields, ["before"])
-        XCTAssertEqual(Request.attributedEvents, 7)
+        XCTAssertEqual(Request.attributedEvents, 11)
         let (h, model) = ready()
         model.loadFeatures()
         model.loadAttempts()

@@ -15,6 +15,11 @@ struct MainView: View {
     @State private var attemptTab = AttemptTab.timeline
     @State private var diffLayout = DiffLayout.unified
     @State private var exportingEvidence = false
+    @State private var recoveryReviewing = false
+    @State private var activityFilters = ActivityFilters()
+    @State private var exportingActivity = false
+    @State private var projectChosen: String?
+    @State private var projectDraft: ProjectDraft?
 
     var body: some View {
         Themed {
@@ -31,7 +36,10 @@ struct MainView: View {
                         .padding(.horizontal, 20)
                         // A redesigned screen fills the content area and sets its own padding.
                         shown(.dashboard) { DashboardScreen(model: model, visible: screen == .dashboard, range: range, open: { screen = $0 }) }
-                        shown(.activity) { ActivityScreen(model: model, visible: screen == .activity, open: { screen = $0 }) }
+                        shown(.activity) {
+                            ActivityScreen(model: model, visible: screen == .activity, filters: $activityFilters,
+                                           exporting: $exportingActivity, open: { screen = $0 })
+                        }
                         shown(.agentRuns) {
                             AgentRunsScreen(model: model, visible: screen == .agentRuns, tab: $attemptTab, open: { screen = $0 })
                         }
@@ -47,7 +55,9 @@ struct MainView: View {
                             ExecutionPlanScreen(model: model, visible: screen == .executionPlan, chosenPlan: $chosenPlan,
                                                 open: { screen = $0 }, compare: compare)
                         }
-                        shown(.recoveryCenter) { RecoveryCenterScreen(model: model, visible: screen == .recoveryCenter) }
+                        shown(.recoveryCenter) {
+                            RecoveryCenterScreen(model: model, visible: screen == .recoveryCenter, reviewing: $recoveryReviewing)
+                        }
                         shown(.settings) { SettingsScreen(model: model, visible: screen == .settings) }
                         shown(.sourceControl) {
                             SourceControlScreen(model: model, visible: screen == .sourceControl, layout: $diffLayout,
@@ -61,7 +71,11 @@ struct MainView: View {
                             VerificationScreen(model: model, visible: screen == .verification, exporting: $exportingEvidence,
                                                open: { screen = $0 })
                         }
-                        shown(.projects) { ProjectsScreen(model: model, visible: screen == .projects) }
+                        shown(.projects) {
+                            ProjectsScreen(model: model, visible: screen == .projects, chosen: $projectChosen, draft: $projectDraft,
+                                           newFeature: { newFeatureProject = $0; newFeature() },
+                                           openFeature: { model.workspace.openChat($0); screen = .featureChat })
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     if !model.workspace.status.isEmpty {
@@ -114,6 +128,14 @@ struct MainView: View {
             return (screen.title, scope.place("attempts"))
         case .sourceControl:
             return (screen.title, scope.place(SourceControlState.placeTail(workspace.attemptDetail)))
+        case .recoveryCenter:
+            let held = RecoveryCenterScreen(model: model).state.held.count
+            return (screen.title, "Workspace · \(held) held")
+        case .activity:
+            return (screen.title, "Workspace · append-only history")
+        case .projects:
+            let project = projectsState.project
+            return (screen.title, project.map { "Workspace · \($0.name)" } ?? "Workspace")
         default:
             return nil
         }
@@ -175,6 +197,34 @@ struct MainView: View {
         if screen == .approvalInbox {
             return AnyView(HeaderButtons(buttons: [HeaderButton(title: "Approval History") { screen = .activity }]))
         }
+        if screen == .recoveryCenter {
+            let state = RecoveryCenterScreen(model: model).state
+            return AnyView(HeaderButtons(buttons: [
+                HeaderButton(title: "Reinspect All", disabled: state.link == .connected ? nil : "The core is not connected.") {
+                    model.workspace.inspectRecovery()
+                },
+                HeaderButton(title: "Inspect Recovery",
+                             disabled: state.admissionState == .closed ? nil : "The launch review opens while admission is closed.") {
+                    recoveryReviewing = true
+                },
+            ]))
+        }
+        if screen == .projects {
+            let project = projectsState.project
+            let paths = project.map { p in p.repositories.compactMap { id in projectsState.repositories.first { $0.id == id }?.path } } ?? []
+            return AnyView(HeaderButtons(buttons: [
+                HeaderButton(title: "Open in Finder", disabled: paths.isEmpty ? "No repository path is known." : nil) { openInFinder(paths) },
+                HeaderButton(title: "Project Settings", disabled: project == nil ? "No project yet." : nil) {
+                    if let project { projectDraft = ProjectDraft(project) }
+                },
+            ]))
+        }
+        if screen == .activity {
+            let empty = model.workspace.events.isEmpty
+            return AnyView(HeaderButtons(buttons: [
+                HeaderButton(title: "Export", disabled: empty ? "No events are loaded." : nil) { exportingActivity = true },
+            ]))
+        }
         if screen == .dashboard { return AnyView(SegmentedCapsule(selection: $range, label: "Time range")) }
         if screen == .featureChat, model.workspace.chatFeature != nil {
             return AnyView(ChatHeaderActions(export: { exportingTranscript = true }))
@@ -186,6 +236,10 @@ struct MainView: View {
     /// Resume of a paused run).
     private var primary: AnyView? {
         if screen == .dashboard { return AnyView(NewFeatureButton(newFeature: newFeature)) }
+        if screen == .projects {
+            let project = projectsState.project
+            return AnyView(NewFeatureButton(newFeature: { newFeatureProject = project?.id; newFeature() }))
+        }
         if screen == .executionPlan {
             let state = planState
             let workspace = model.workspace
@@ -211,6 +265,10 @@ struct MainView: View {
     /// primary Start Eligible Tasks.
     private var planState: ExecutionPlanState {
         ExecutionPlanScreen(model: model, visible: false, chosenPlan: $chosenPlan, open: { _ in }, compare: { _ in }).state
+    }
+
+    private var projectsState: ProjectsState {
+        ProjectsScreen(model: model, visible: false, chosen: $projectChosen, draft: $projectDraft).state
     }
 
     /// New Feature is Feature Chat holding no feature.

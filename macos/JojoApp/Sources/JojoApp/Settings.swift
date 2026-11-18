@@ -179,6 +179,12 @@ struct SettingsState: Equatable {
     var executables: ExecutableList?
     var executablesLoad = PlanLoad.idle
     var section = SettingsSection.claude
+    /// M5 (1.10): how git and gh are signed in, as the core last read them.
+    var external: ExternalList?
+    /// The core's parallel capacity as the newest project record says (D4).
+    var capacity: Int64?
+    /// Settings › Appearance, the one setting of the app (step 6).
+    var appearance = AppAppearance.light
 
     static let notReported = "Not reported"
     static let notBuilt = "Not built"
@@ -226,7 +232,8 @@ struct SettingsState: Equatable {
                         .missing("Repair", "Set per project (M4): automatic, at most two tries, then a hold for you; 0 switches it off. External actions are never retried. Shown on Projects."),
                     ]),
                     SettingsGroup(title: "Concurrency", lines: [
-                        .missing("Parallel attempts", "Decided (D4): one number for the whole core, set in a project record. Shown on Projects."),
+                        capacity.map { SettingsLine(label: "Parallel attempts", value: "\($0) across all projects, set by the project record saved last (D4). Edited on Projects.") }
+                            ?? .missing("Parallel attempts", "One number for the whole core, set in a project record (D4). No record is read yet."),
                         .missing("Per repository", "No limit (D4)."),
                         .missing("Per provider", "Not split by provider (D4)."),
                     ]),
@@ -236,13 +243,14 @@ struct SettingsState: Equatable {
                 groups: [
                     SettingsGroup(title: "Git", lines: [
                         .passed("Worktree root", launch.worktreeRoot, otherwise: "Not passed. The core uses its default, which it does not report."),
-                        .missing("Branch prefix"),
+                        SettingsLine(label: "Branch prefix", value: "jojo/plan/ — a finished plan's branch is pushed under this name"),
                         .missing("Sign commits"),
+                        signIn("Credential helper", external?.git),
                     ]),
                     SettingsGroup(title: "GitHub", lines: [
-                        .missing("Account", Self.notBuilt),
-                        .missing("Push and pull request", "Decided, not built: each is its own approval kind."),
-                        SettingsLine(label: "Combined approval", value: "None. There is no approve-all."),
+                        signIn("Account", external?.gh, prefix: "Via the gh CLI"),
+                        SettingsLine(label: "Push and pull request", value: "Each needs its own authorization in the Approval Inbox, on its exact payload (M5)."),
+                        SettingsLine(label: "Combined approval", value: "None. There is no approve-all.", trailing: .note("Off")),
                     ]),
                 ])
         case .storage:
@@ -268,7 +276,7 @@ struct SettingsState: Equatable {
                         SettingsLine(label: "Approval binding", value: "A decision names the document's revision and digests; the core refuses a stale one.",
                                      trailing: .note("Always on")),
                         SettingsLine(label: "Approval kinds",
-                                     value: "Specification and plan. Push and pull request are decided and not built. There is no approve-all."),
+                                     value: "Specification, plan, push and pull request, each decided on its own. There is no approve-all."),
                         .missing("Scope expansions", Self.notBuilt),
                         .missing("Baseline changes", Self.notBuilt),
                     ]),
@@ -281,12 +289,22 @@ struct SettingsState: Equatable {
         case .appearance:
             return SettingsPage(
                 groups: [SettingsGroup(title: "Appearance", lines: [
-                    SettingsLine(label: "Theme", value: "Follows the system"),
                     SettingsLine(label: "Density", value: "One density"),
-                    .missing("Reduce motion", "No setting"),
+                    SettingsLine(label: "Reduce motion", value: "Follows the system"),
                 ])],
-                footnote: "The app has no switch for these yet.")
+                footnote: "Theme is kept by this Mac's app settings, not by the core. Light is the default.")
         }
+    }
+
+    /// git's or gh's sign-in as the core last read it (M5), with its pill.
+    private func signIn(_ label: String, _ s: ExternalSignIn?, prefix: String = "") -> SettingsLine {
+        guard reported != nil, let s else {
+            return .missing(label, reported == nil ? "Unknown: the core is not connected." : "Not read yet")
+        }
+        let pill = ExternalWords.signIn(s)
+        let words = [prefix, s.detail].filter { !$0.isEmpty }.joined(separator: " · ")
+        return SettingsLine(label: label, value: words.isEmpty ? pill.0 : words,
+                            trailing: .evidence(s.ready ? .passed : .unknown, pill.0))
     }
 
     /// Whether the helper says it holds a slice configuration: the one thing it reports
@@ -330,6 +348,13 @@ struct SettingsState: Equatable {
                                  value: "Handled by the provider's CLI. The only sign-in kind the core accepts is native-subscription; there is no API key option."),
                 ]),
                 confirmed,
+                SettingsGroup(title: "Capabilities", lines: [
+                    SettingsLine(label: "Structured event stream", value: "Used: the core reads the CLI's JSON events through a stream profile"),
+                    SettingsLine(label: "Headless mode", value: "Used: every run is non-interactive"),
+                    .missing("Session resume", "Not built in Jojo: every turn is a fresh run"),
+                    .missing("Token reporting"),
+                ]),
+                SettingsGroup(title: "Usage", lines: [.missing("Tokens"), .missing("Plan limits")]),
             ],
             footnote: "The core finds the executable, checks it again before each run and records its version and digest with every run. It reports no capability, sign-in state, token count or limit of a provider.")
     }
@@ -365,7 +390,7 @@ struct SettingsState: Equatable {
         if let path = executable.path { lines.append(SettingsLine(label: "Path", value: path, form: .identifier)) }
         if let version = executable.version {
             lines.append(SettingsLine(label: "Version", value: version,
-                                      trailing: executable.profiled == true ? .evidence(.passed, "Profiled") : .note("Not the profiled release")))
+                                      trailing: executable.profiled == true ? .evidence(.passed, "Compatible") : .note("Not the profiled release")))
         }
         if let digest = executable.sha256 { lines.append(SettingsLine(label: "SHA-256 digest", value: digest, form: .identifier)) }
         lines.append(executable.lastRun.map {
@@ -407,13 +432,14 @@ struct SettingsState: Equatable {
                     names("Queries", reported.queries),
                 ]),
             ],
-            footnote: "None of them changes a setting, so every value on this screen is read-only.")
+            footnote: "None of them changes a setting: the core's values are read-only here. Appearance is this app's own setting.")
     }
 }
 
 struct SettingsScreen: View {
     @ObservedObject var model: AppModel
-    /// The executables are read only while this destination is the shown one (D3).
+    /// The executables, sign-in states and project records are read only while this
+    /// destination is the shown one.
     let visible: Bool
     @State private var section = SettingsSection.claude
 
@@ -424,13 +450,22 @@ struct SettingsScreen: View {
                 connection: model.client.connection, admission: workspace.admission,
                 pid: model.client.processIdentifier, hello: model.client.hello,
                 launch: SettingsLaunch(model.options), executables: workspace.executables,
-                executablesLoad: workspace.executablesLoad, section: section),
-            select: { section = $0 })
+                executablesLoad: workspace.executablesLoad, section: section, external: workspace.external,
+                capacity: workspace.projects?.capacity, appearance: model.appearance),
+            select: { section = $0 },
+            setAppearance: { model.setAppearance($0) })
             .onChange(of: visible) {
                 workspace.executablesShown = visible
-                if visible { workspace.loadExecutables() }
+                if visible { load() }
             }
-            .onChange(of: workspace.snapshotSeq) { if visible { workspace.loadExecutables() } }
+            .onChange(of: workspace.snapshotSeq) { if visible { load() } }
+    }
+
+    private func load() {
+        let workspace = model.workspace
+        workspace.loadExecutables()
+        workspace.loadExternalActions()
+        workspace.loadProjects()
     }
 }
 
@@ -438,49 +473,63 @@ struct SettingsView: View {
     @Environment(\.theme) private var theme
     let state: SettingsState
     var select: (SettingsSection) -> Void = { _ in }
+    var setAppearance: (AppAppearance) -> Void = { _ in }
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .top, spacing: 14) {
             Scrolling { sections }
+                .frame(width: 230)
                 .frame(maxHeight: .infinity, alignment: .top)
-                .frame(width: 220)
-                .background(theme.sidebar)
-                .overlay(alignment: .trailing) { Rectangle().fill(theme.sidebarEdge).frame(width: 1) }
+                .glassPanel(radius: 18)
             Scrolling {
                 VStack(alignment: .leading, spacing: 18) {
                     banners
                     HStack(spacing: 10) {
                         SectionTile(symbol: state.section.symbol, color: state.section.color, size: 28)
-                        Text(state.section.title).font(.system(size: 18, weight: .bold)).foregroundStyle(theme.textStrong)
+                        Text(state.section.title).font(.system(size: 20, weight: .bold)).foregroundStyle(theme.textStrong)
                             .accessibilityAddTraits(.isHeader)
                     }
+                    if state.section == .appearance { theme_ }
                     page(state.page)
                 }
                 .frame(maxWidth: 760, alignment: .topLeading)
-                .padding(EdgeInsets(top: 18, leading: 22, bottom: 24, trailing: 22))
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 24, trailing: 12))
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .padding(EdgeInsets(top: 6, leading: 10, bottom: 10, trailing: 2))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// The one writable setting: the theme of this app.
+    private var theme_: some View {
+        LabeledSection(title: "Theme") {
+            HStack(spacing: 12) {
+                Text("Theme").textStyle(.body).foregroundStyle(theme.text)
+                Spacer(minLength: 0)
+                SegmentedCapsule(selection: Binding(get: { state.appearance }, set: { setAppearance($0) }), label: "Theme")
+            }
+            .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 9))
+            .cardElevation(radius: 12)
+        }
+    }
+
     private var sections: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(SettingsSection.groups, id: \.self) { group in
-                VStack(spacing: 1) {
-                    ForEach(group) { section in
-                        Button { select(section) } label: {
-                            SectionItem(title: section.title, symbol: section.symbol, color: section.color,
-                                        selected: section == state.section)
-                        }
-                        .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(SettingsSection.groups.enumerated()), id: \.offset) { index, group in
+                GroupLabel(index == 0 ? "Providers" : "Jojo")
+                    .padding(EdgeInsets(top: index == 0 ? 0 : 12, leading: 6, bottom: 2, trailing: 6))
+                ForEach(group) { section in
+                    SelectableRow(selected: section == state.section, action: { select(section) }) {
+                        SectionTile(symbol: section.symbol, color: section.color, size: 20)
+                        Text(section.title).textStyle(.body).foregroundStyle(theme.text).lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 8)
+        .padding(10)
     }
 
     @ViewBuilder
@@ -504,13 +553,11 @@ struct SettingsView: View {
             StateBlock(symbol: state.section.symbol, title: empty.title, message: empty.message).frame(height: 180)
         }
         ForEach(page.groups) { group in
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeading(group.title)
-                Card(.panelList) {
-                    VStack(spacing: 0) {
-                        ForEach(group.lines) { line in self.line(line, last: line.id == group.lines.last?.id) }
-                    }
+            LabeledSection(title: group.title) {
+                VStack(spacing: 0) {
+                    ForEach(group.lines) { line in self.line(line, last: line.id == group.lines.last?.id) }
                 }
+                .cardElevation(radius: 12)
             }
         }
         if let notice = page.notice { NoticeWell(notice) }
