@@ -805,6 +805,7 @@ impl Service {
             | RequestKind::SaveProject
             | RequestKind::RunPlan
             | RequestKind::ControlPlan
+            | RequestKind::RetryPlanStep
             | RequestKind::RequestExternal
             | RequestKind::AuthorizeExternal
             | RequestKind::InspectExternal

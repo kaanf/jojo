@@ -44,6 +44,51 @@ impl PlanControl {
     }
 }
 
+/// M6: how the human starts a step that waits for them again. Each is a decision of its
+/// own; an attempt started this way that fails is held again, never repaired.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetryAction {
+    /// A new attempt told what failed, like a repair.
+    Repair,
+    /// A fresh attempt from the plan branch as it is now.
+    Restart,
+}
+impl RetryAction {
+    pub fn named(name: &str) -> Option<Self> {
+        match name {
+            "Repair" => Some(Self::Repair),
+            "Restart" => Some(Self::Restart),
+            _ => None,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Repair => "Repair",
+            Self::Restart => "Restart",
+        }
+    }
+    fn stored(self) -> &'static str {
+        match self {
+            Self::Repair => "REPAIR",
+            Self::Restart => "RESTART",
+        }
+    }
+    fn from_stored(text: &str) -> Result<Self, StorageError> {
+        match text {
+            "REPAIR" => Ok(Self::Repair),
+            "RESTART" => Ok(Self::Restart),
+            other => Err(StorageError::corrupt(format!("retry action {other}"))),
+        }
+    }
+    /// How the step's detail names it.
+    fn words(self) -> &'static str {
+        match self {
+            Self::Repair => "the human's repair",
+            Self::Restart => "the human's restart",
+        }
+    }
+}
+
 /// Where one step of a run stands. Derived from durable records only.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StepState {
@@ -138,10 +183,32 @@ pub struct RunStep {
     pub repair: Option<(u8, u8)>,
     /// M4: a repair that was decided and has not started: the attempt it starts as.
     pub pending_repair: Option<OpaqueId>,
-    /// M4: why the newest attempt failed, while the step is `Failed`.
+    /// M4: why the newest attempt failed, while the step is `Failed`; M6: also while it is
+    /// held for that failure.
     pub failure: Option<Failure>,
     /// M4: the review of the newest attempt's candidate, once one was started.
     pub review: Option<StepReview>,
+    /// M6: the human's retry the newest attempt is, or will start as while it waits.
+    pub retry: Option<RetryAction>,
+}
+
+impl RunStep {
+    /// M6: what the human may do to start this step again. Nothing in a cancelled run; a
+    /// repair needs a failure to tell the next attempt.
+    pub fn retry_actions(&self, control: &str) -> Vec<RetryAction> {
+        if control == "CANCELLED" {
+            return vec![];
+        }
+        match self.state {
+            StepState::NeedsHuman if self.failure.is_some() && self.attempt.is_some() => {
+                vec![RetryAction::Repair, RetryAction::Restart]
+            }
+            StepState::NeedsHuman | StepState::Conflict | StepState::Refused => {
+                vec![RetryAction::Restart]
+            }
+            _ => vec![],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -397,6 +464,7 @@ struct Facts {
     pending_repair: Option<OpaqueId>,
     failure: Option<Failure>,
     review: Option<StepReview>,
+    retry: Option<RetryAction>,
 }
 
 impl Facts {
@@ -413,6 +481,7 @@ impl Facts {
             pending_repair: None,
             failure: None,
             review: None,
+            retry: None,
         }
     }
 }
@@ -461,11 +530,26 @@ fn step_state(
 ) -> Result<Facts, StorageError> {
     let c = v.conn;
     let id = id_to_text(step.id);
-    let refusal = c.query_optional(
-        "SELECT detail FROM plan_step_refusals WHERE plan=?1 AND revision=?2 AND step=?3",
+    // M6: the human's newest retry of the step: the attempt it starts as, its action,
+    // whether it started and why its start was refused. Once the human retried, only that
+    // retry's refusal counts; the runner's own refusal came before it.
+    let retry = c.query_optional(
+        "SELECT r.attempt,r.action,
+                EXISTS(SELECT 1 FROM scheduler_attempts s WHERE s.attempt=r.attempt),
+                (SELECT x.detail FROM plan_step_retry_refusals x WHERE x.attempt=r.attempt)
+         FROM plan_step_retries r WHERE plan=?1 AND revision=?2 AND step=?3
+         ORDER BY event DESC LIMIT 1",
         &[Value::Text(plan), Value::Int(revision), Value::Text(&id)],
-        |r| r.text(0),
+        |r| Ok((r.text(0)?, r.text(1)?, r.int(2)? == 1, r.optional_text(3)?)),
     )?;
+    let refusal = match &retry {
+        Some((_, _, _, refused)) => refused.clone(),
+        None => c.query_optional(
+            "SELECT detail FROM plan_step_refusals WHERE plan=?1 AND revision=?2 AND step=?3",
+            &[Value::Text(plan), Value::Int(revision), Value::Text(&id)],
+            |r| r.text(0),
+        )?,
+    };
     // M4: the repairs of the step, oldest first: ordinal, limit and the attempt it is.
     let repairs = c.query(
         "SELECT ordinal,repair_limit,attempt,
@@ -490,7 +574,26 @@ fn step_state(
         f.attempt = f.attempt.or(attempt);
         f
     };
-    if let Some((ordinal, limit, pending, false)) = repairs.last() {
+    if let Some((pending, action, false, _)) = &retry {
+        let action = RetryAction::from_stored(action)?;
+        let mut f = match (&refusal, cancelled) {
+            (Some(detail), _) => Facts::new(StepState::Refused, detail.clone()),
+            (None, true) => Facts::new(StepState::Cancelled, ""),
+            (None, false) => {
+                let mut f = Facts::new(
+                    StepState::Repairing,
+                    format!("{}: waiting to start", action.words()),
+                );
+                f.pending_repair = Some(id_from_text(pending)?);
+                f
+            }
+        };
+        f.retry = Some(action);
+        return Ok(with(f));
+    }
+    // A repair that waits to start; a retry of the human's, which always comes later,
+    // replaces it.
+    if let Some((ordinal, limit, pending, false)) = repairs.last().filter(|_| retry.is_none()) {
         let mut f = match (&refusal, cancelled) {
             (Some(detail), _) => Facts::new(StepState::Refused, detail.clone()),
             (None, true) => Facts::new(StepState::Cancelled, ""),
@@ -538,14 +641,24 @@ fn step_state(
         &[Value::Text(&text_id)],
         |r| r.text(0),
     )?;
+    let retried = match &retry {
+        Some((a, action, _, _)) if *a == text_id => Some(RetryAction::from_stored(action)?),
+        _ => None,
+    };
     let base = |state: StepState, detail: String| {
         let mut f = Facts::new(state, detail);
         f.repair = repair;
+        f.retry = retried;
         with(f)
     };
-    // A failure is a hold once the runner recorded one, and pending until it decides.
+    // A failure is a hold once the runner recorded one, and pending until it decides. A held
+    // step keeps its failure, so that the human can have it repaired (M6).
     let failed = |failure: Failure, detail: String| match &hold {
-        Some(reason) => base(StepState::NeedsHuman, reason.clone()),
+        Some(reason) => {
+            let mut f = base(StepState::NeedsHuman, reason.clone());
+            f.failure = Some(failure);
+            f
+        }
         None if cancelled && failure == Failure::Cancelled => base(StepState::Cancelled, detail),
         None => {
             let mut f = base(StepState::Failed, detail);
@@ -560,7 +673,16 @@ fn step_state(
             (None, Some((n, of))) => {
                 base(StepState::Repairing, format!("repair {n} of {of}: running"))
             }
-            (None, None) => base(StepState::Running, String::new()),
+            (None, None) => match retried {
+                Some(RetryAction::Repair) => base(
+                    StepState::Repairing,
+                    format!("{}: running", RetryAction::Repair.words()),
+                ),
+                Some(RetryAction::Restart) => {
+                    base(StepState::Running, RetryAction::Restart.words().to_owned())
+                }
+                None => base(StepState::Running, String::new()),
+            },
         });
     };
     use jojo_domain::attempt::AttemptOutcome;
@@ -786,6 +908,7 @@ fn view(v: &ReadView<'_>, plan: &str, revision: i64) -> Result<PlanRunView, Stor
             pending_repair: f.pending_repair,
             failure: f.failure,
             review: f.review,
+            retry: f.retry,
         });
     }
     // A step is ready only when every prerequisite is on the plan branch; a step behind a
@@ -858,7 +981,105 @@ fn run_state(control: &str, steps: &[RunStep]) -> String {
     if halted { "HALTED" } else { "RUNNING" }.into()
 }
 
+/// M6: the longest note the human may give a retry, in characters.
+pub const MAX_RETRY_NOTE_CHARS: usize = 4096;
+
+/// M6: what the human asks for: start again a step that waits for them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RetryRequest {
+    pub plan: ArtifactId,
+    pub step: OpaqueId,
+    /// The step's newest attempt as the human saw it; `None` for a step that never started.
+    pub held: Option<OpaqueId>,
+    pub action: RetryAction,
+    /// The identity the new attempt starts under.
+    pub attempt: OpaqueId,
+    pub note: String,
+    /// What the new attempt is told: the failure for a repair, then the human's note. Empty
+    /// for a restart without a note.
+    pub section: String,
+}
+
+/// M6: the retry an attempt starts as: the attempt it follows and what it is told.
+pub(crate) fn retry_of(
+    c: &Connection,
+    attempt: OpaqueId,
+) -> Result<Option<(Option<String>, String)>, StorageError> {
+    Ok(c.query_optional(
+        "SELECT held,section FROM plan_step_retries WHERE attempt=?1",
+        &[Value::Text(&id_to_text(attempt))],
+        |r| Ok((r.optional_text(0)?, r.text(1)?)),
+    )?)
+}
+
 impl Tx<'_> {
+    /// M6: records the human's retry of a step that waits for them, before it starts. The
+    /// step must still be as the human saw it (the same newest attempt) and the action one
+    /// it allows. The runner then starts it under the identity recorded here.
+    pub fn retry_plan_step(&mut self, r: &RetryRequest) -> Result<String, TxError> {
+        if r.note.chars().count() > MAX_RETRY_NOTE_CHARS {
+            return Err(deny("NoteTooLong: a retry note is at most 4096 characters"));
+        }
+        let (revision, held) = {
+            let view = ReadView { conn: self.conn };
+            let Some(run) = view.plan_run(r.plan)? else {
+                return Err(deny("UnknownPlanRun: this plan was never started"));
+            };
+            let Some(step) = run.steps.iter().find(|s| s.step.id == r.step) else {
+                return Err(deny("UnknownStep: the plan run has no such step"));
+            };
+            if step.attempt != r.held {
+                return Err(deny(
+                    "StaleRetry: the step has another newest attempt than the one shown",
+                ));
+            }
+            if !step.retry_actions(&run.control).contains(&r.action) {
+                return Err(deny(format!(
+                    "RetryRefused: a {} step of a {} run cannot be given a {}",
+                    step.state.name(),
+                    run.control,
+                    r.action.name().to_lowercase()
+                )));
+            }
+            (to_db(run.revision.0)?, step.attempt.map(id_to_text))
+        };
+        let (plan, step, attempt) = (
+            id_to_text(r.plan.0),
+            id_to_text(r.step),
+            id_to_text(r.attempt),
+        );
+        let event = self.append_event(
+            "PlanStepRetried",
+            None,
+            &format!(
+                "{plan}|{step}|{}|{}|{attempt}",
+                r.action.name(),
+                held.as_deref().unwrap_or("")
+            ),
+        )?;
+        self.conn.execute(
+            "INSERT INTO plan_step_retries VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            &[
+                Value::Text(&plan),
+                Value::Int(revision),
+                Value::Text(&step),
+                held.as_deref().map_or(Value::Null, Value::Text),
+                Value::Text(&attempt),
+                Value::Text(r.action.stored()),
+                Value::Text(&r.note),
+                Value::Text(&r.section),
+                Value::Int(to_db(event.0)?),
+            ],
+        )?;
+        // As for a repair: the settled step's queue row runs again under this decision.
+        self.conn.execute(
+            "UPDATE scheduler_queue SET control_revision=control_revision+1,intent='RUN',
+             was_eligible=0 WHERE step=?1 AND intent='HOLD'",
+            &[Value::Text(&step)],
+        )?;
+        Ok(format!("{} recorded", r.action.name().to_lowercase()))
+    }
+
     /// The human starts an approved lead plan. Every document of the plan must be
     /// approved now; a revision is run once.
     pub fn run_plan(&mut self, plan: ArtifactId) -> Result<String, TxError> {
@@ -1022,6 +1243,29 @@ impl Tx<'_> {
             None,
             &format!("{}|{}|{detail}", id_to_text(plan.0), id_to_text(step)),
         )?;
+        // M6: once the human retried the step, the refusal is that retry's.
+        let retried = self.conn.query_optional(
+            "SELECT r.attempt FROM plan_step_retries r WHERE plan=?1 AND revision=?2 AND step=?3
+             AND NOT EXISTS(SELECT 1 FROM plan_step_retry_refusals x WHERE x.attempt=r.attempt)
+             ORDER BY event DESC LIMIT 1",
+            &[
+                Value::Text(&id_to_text(plan.0)),
+                Value::Int(to_db(revision.0)?),
+                Value::Text(&id_to_text(step)),
+            ],
+            |r| r.text(0),
+        )?;
+        if let Some(attempt) = retried {
+            self.conn.execute(
+                "INSERT INTO plan_step_retry_refusals VALUES (?1,?2,?3)",
+                &[
+                    Value::Text(&attempt),
+                    Value::Text(&detail),
+                    Value::Int(to_db(event.0)?),
+                ],
+            )?;
+            return Ok(());
+        }
         self.conn.execute(
             "INSERT OR IGNORE INTO plan_step_refusals VALUES (?1,?2,?3,?4,?5)",
             &[

@@ -524,6 +524,13 @@ pub(crate) fn event_summary(
         "PlanStepHeld" => format!("{} waits for you", step_label(c, field(1))?),
         "PlanStepRefused" => format!("{} could not start", step_label(c, field(1))?),
         "PlanStepRepairDecided" => format!("{} will be repaired", step_label(c, field(1))?),
+        "PlanStepRetried" => {
+            let how = match field(2) {
+                "Repair" => "be repaired",
+                _ => "start again",
+            };
+            format!("{} will {how} on your word", step_label(c, field(1))?)
+        }
         "StepReviewAccepted" => {
             format!(
                 "Review of {} started on {}",
@@ -621,6 +628,7 @@ pub(crate) fn event_category(kind: &str, payload: &str) -> &'static str {
         | "StepQuestionAnswered"
         | "StepQuestionDispositionChanged"
         | "PlanRunControl"
+        | "PlanStepRetried"
         | "SchedulerControl" => "Decision",
         "PlanStepIntegrated" | "LocalRepositoryRegistered" => "Git",
         "ContinuationPlanRecorded" => "Recovery",
@@ -1214,6 +1222,7 @@ mod tests {
             ("WorktreeReady", "", "Git"),
             ("PlanStepRefused", "", "Error"),
             ("PlanRunStarted", "", "Plan"),
+            ("PlanStepRetried", "", "Decision"),
             ("LeadTurnAccepted", "", "Chat"),
             ("ArtifactVersionCreated", "", "Document"),
             ("ProjectSaved", "", "Setup"),

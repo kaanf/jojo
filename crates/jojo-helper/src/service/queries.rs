@@ -187,7 +187,7 @@ impl Service {
                 }
                 let q = protocol::PlanDetailQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_plan_detail(q.plan))
+                    .read(|v| v.ipc_plan_detail(q.plan, e.minor >= 13))
                     .map_err(|e| e.to_string())
             }
             RequestKind::AttemptDetail => {

@@ -327,6 +327,8 @@ public final class WorkspaceModel {
     public private(set) var candidateBase = ""
     public private(set) var diff = ""
     public private(set) var agentLog: [String] = []
+    /// M6: the newest log records of the attempts Execution Plan follows live, by attempt.
+    public internal(set) var stepLogs: [String: StepLog] = [:]
     public private(set) var validationReport = ""
     private var candidateLoad = 0
     /// The events read for Activity & Audit, oldest first and without gaps. Read only when
@@ -358,6 +360,9 @@ public final class WorkspaceModel {
     /// Protocol 1.7: whether the Dashboard is the shown destination; only then does it read
     /// the features, attempts, executables and events it shows.
     public var dashboardShown = false
+    /// M6: Execution Plan follows a running step live; the attempts (and their newest
+    /// activity) are read for it.
+    public var followingStep = false
     /// Whether Feature Chat holds a feature and is shown; it reads the features too, for
     /// the feature's stages and counts.
     public var chatShown = false

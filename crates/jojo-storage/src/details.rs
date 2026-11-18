@@ -182,7 +182,10 @@ impl ReadView<'_> {
     /// plan's run, else from the step's newest attempt), whether it could start now, its
     /// attempts and what blocks it; and the plan checks (a cycle, missing prerequisites,
     /// steps whose write scopes overlap). `null` when the core has no such plan.
-    pub fn ipc_plan_detail(&self, plan: ArtifactId) -> Result<Json, StorageError> {
+    /// M6 (`retries`, protocol 1.13): each step also says how the human may start it again
+    /// (`retry`: the actions and the attempt they follow) and which retry its newest attempt
+    /// is (`retried`).
+    pub fn ipc_plan_detail(&self, plan: ArtifactId, retries: bool) -> Result<Json, StorageError> {
         let c = self.conn;
         let id = id_to_text(plan.0);
         let Some(revision) = c
@@ -375,6 +378,32 @@ impl ReadView<'_> {
                 ),
                 ("blockers", Json::List(blockers)),
             ]);
+            if retries {
+                let from_run = run
+                    .as_ref()
+                    .and_then(|r| r.steps.iter().find(|s| s.step == *node).map(|s| (r, s)));
+                let (actions, held, retried) = match from_run {
+                    Some((r, s)) => (
+                        s.retry_actions(&r.control),
+                        s.attempt,
+                        s.retry.map(|a| text(a.name())),
+                    ),
+                    None => (Vec::new(), None, None),
+                };
+                fields.extend([
+                    (
+                        "retry",
+                        object([
+                            (
+                                "actions",
+                                texts(actions.iter().map(|a| a.name().to_owned())),
+                            ),
+                            ("attempt", held.map_or(Json::Null, identity)),
+                        ]),
+                    ),
+                    ("retried", retried.unwrap_or(Json::Null)),
+                ]);
+            }
             steps.push(object(fields));
         }
         let (feature, feature_name) = feature_fields(c, document_feature(c, &id)?)?;

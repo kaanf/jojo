@@ -193,6 +193,7 @@ impl Service {
                     .map(receipt)
                     .map_err(rejected)
             }
+            RequestKind::RetryPlanStep => self.retry_plan_step(request, p),
             RequestKind::RequestExternal => self.request_external(request, p),
             RequestKind::AuthorizeExternal => self.authorize_external(request, p, origin),
             RequestKind::InspectExternal => self.inspect_external(request, p),
@@ -231,6 +232,45 @@ impl Service {
             fields.push(("dispatch".into(), text("not repeated")));
         }
         Ok(Json::Object(fields))
+    }
+    /// M6 (protocol 1.13): the human starts again a plan step that waits for them. What the
+    /// new attempt is told is composed here from the step as the core holds it; the
+    /// transaction checks again that the step is still as the human saw it.
+    fn retry_plan_step(&mut self, request: CommandRequest, p: &Json) -> Result<Json, String> {
+        let c = protocol::RetryPlanStepCommand::parse(p)?;
+        let action = RetryAction::named(&c.action).ok_or("UnknownAction")?;
+        let run = self
+            .engine
+            .reader()
+            .and_then(|mut r| r.read(|v| v.plan_run(c.plan)))
+            .map_err(|e| e.to_string())?
+            .ok_or("UnknownPlanRun: this plan was never started")?;
+        let failure = run
+            .steps
+            .iter()
+            .find(|s| s.step.id == c.step)
+            .and_then(|s| s.failure.clone())
+            .filter(|_| action == RetryAction::Repair);
+        let (failure, changed) = match (failure, c.attempt) {
+            (Some(failure), Some(attempt)) => {
+                let (failure, changed) = self.failure_evidence(attempt, failure)?;
+                (Some(failure), changed)
+            }
+            _ => (None, Vec::new()),
+        };
+        let retry = RetryRequest {
+            plan: c.plan,
+            step: c.step,
+            held: c.attempt,
+            action,
+            attempt: self.ids.next_id().map_err(|_| "IDs exhausted")?,
+            section: jojo_domain::repair::retry_section(failure.as_ref(), &changed, &c.note),
+            note: c.note,
+        };
+        self.engine
+            .execute(request, move |tx| tx.retry_plan_step(&retry))
+            .map(receipt)
+            .map_err(rejected)
     }
     fn register_repository(&mut self, request: CommandRequest, p: &Json) -> Result<Json, String> {
         let slice = self.config.slice.as_ref().ok_or("SliceNotConfigured")?;

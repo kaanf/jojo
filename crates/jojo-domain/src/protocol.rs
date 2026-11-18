@@ -76,6 +76,7 @@ pub enum RequestKind {
     ProjectDetail,
     BriefTurn,
     Workspace,
+    RetryPlanStep,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,7 +139,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 57] = [
+pub const SPECS: [Spec; 58] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -196,6 +197,7 @@ pub const SPECS: [Spec; 57] = [
     spec(K::ProjectDetail, "ProjectDetail", Query, 11, false, Exact, &["project"]),
     spec(K::BriefTurn, "BriefTurn", Mutation, 12, false, Exact, &["repository", "provider", "message"]),
     spec(K::Workspace, "Workspace", Query, 12, false, Exact, &[]),
+    spec(K::RetryPlanStep, "RetryPlanStep", Mutation, 13, false, Exact, &["plan", "step", "attempt", "action", "note"]),
 ];
 
 impl RequestKind {
@@ -827,6 +829,39 @@ impl ControlPlanCommand {
     }
 }
 
+/// Protocol 1.13 (M6): the human starts again a plan step that waits for them. `attempt` is
+/// the step's newest attempt as shown (`null` when it never started); `action` is `Repair`
+/// or `Restart`; `note` may be empty.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RetryPlanStepCommand {
+    pub plan: ArtifactId,
+    pub step: OpaqueId,
+    pub attempt: Option<OpaqueId>,
+    pub action: String,
+    pub note: String,
+}
+impl RetryPlanStepCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        let plan = ArtifactId(id(get(p, "plan")?)?);
+        let step = id(get(p, "step")?)?;
+        let attempt = match get(p, "attempt")? {
+            Json::Null => None,
+            other => Some(id(other)?),
+        };
+        let action = string(get(p, "action")?)?;
+        if !matches!(action, "Repair" | "Restart") {
+            return Err("UnknownAction".into());
+        }
+        Ok(Self {
+            plan,
+            step,
+            attempt,
+            action: action.to_owned(),
+            note: string(get(p, "note")?)?.to_owned(),
+        })
+    }
+}
+
 /// What the human does with one question the lead asked.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QuestionAction {
@@ -1168,16 +1203,18 @@ mod tests {
         // 1.10 (M5): the external actions query and its four commands.
         // 1.11: the recovery detail and project detail queries.
         // 1.12 (step 7): the brief turn and the workspace query.
-        for minor in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] {
+        // 1.13 (M6): the retry of a held plan step.
+        for minor in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] {
             let v110 = if minor >= 10 {
                 " RequestExternal AuthorizeExternal InspectExternal ResolveExternal"
             } else {
                 ""
             };
             let v112 = if minor >= 12 { " BriefTurn" } else { "" };
+            let v113 = if minor >= 13 { " RetryPlanStep" } else { "" };
             assert_eq!(
                 names(Mutation, minor),
-                format!("{v12_commands} SaveProject RunPlan ControlPlan{v110}{v112}")
+                format!("{v12_commands} SaveProject RunPlan ControlPlan{v110}{v112}{v113}")
             );
             let v14 = if minor >= 4 { " Executables" } else { "" };
             let v15 = if minor >= 5 { " Repairs" } else { "" };
@@ -1207,6 +1244,11 @@ mod tests {
             );
         }
         assert_eq!(RequestKind::of_frame("BriefTurn", 11), None);
+        assert_eq!(RequestKind::of_frame("RetryPlanStep", 12), None);
+        assert_eq!(
+            RequestKind::of_frame("RetryPlanStep", 13),
+            Some(K::RetryPlanStep)
+        );
         assert_eq!(RequestKind::of_frame("Workspace", 12), Some(K::Workspace));
         assert_eq!(RequestKind::of_frame("Executables", 3), None);
         assert_eq!(RequestKind::of_frame("Repairs", 4), None);

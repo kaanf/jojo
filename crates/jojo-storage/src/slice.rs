@@ -630,7 +630,8 @@ impl Tx<'_> {
         }
         let revision = Value::Int(crate::model::to_db(request.step.revision.0)?);
         // M4: a step that already ran starts again only as the repair recorded for its
-        // newest, sealed attempt, under exactly the identity recorded with it.
+        // newest, sealed attempt, under exactly the identity recorded with it; M6: or as the
+        // human's retry recorded after that attempt.
         let newest = self.conn.query_optional(
             "SELECT attempt,sealed FROM scheduler_attempts WHERE step=?1 AND step_revision=?2
              ORDER BY rowid DESC LIMIT 1",
@@ -639,7 +640,10 @@ impl Tx<'_> {
         )?;
         if let Some((newest, sealed)) = newest {
             let repair = crate::repairs::repair_of(self.conn, request.attempt)?;
-            if !sealed || repair.is_none_or(|r| id_to_text(r.failed) != newest) {
+            let retry = crate::runner::retry_of(self.conn, request.attempt)?;
+            let decided = repair.is_some_and(|r| id_to_text(r.failed) == newest)
+                || retry.is_some_and(|(held, _)| held.as_deref() == Some(newest.as_str()));
+            if !sealed || !decided {
                 return Err(deny("DuplicateStart: this step was already started"));
             }
         }
@@ -764,8 +768,12 @@ pub fn slice_launch_spec(
                 &[Value::Text(&id_to_text(request.step.id))],
                 |r| Ok((r.text(0)?, r.text(1)?)),
             )?;
-            // M4: a repair attempt is told what failed, as recorded with the repair.
-            let repair = v.repair_of(request.attempt)?.map(|r| r.section);
+            // M4: a repair attempt is told what failed, as recorded with the repair; M6: a
+            // retry of the human's what was recorded with it, if anything.
+            let repair = match v.repair_of(request.attempt)? {
+                Some(r) => Some(r.section),
+                None => v.retry_section(request.attempt)?,
+            };
             Ok((record, vector, decisions, plan, prd, body(s.adr)?, body(s.validation)?, (step, repair)))
         })
         .map_err(|e| e.to_string())?;

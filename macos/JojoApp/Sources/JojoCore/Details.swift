@@ -247,6 +247,11 @@ public struct PlanStepDetail: Equatable, Sendable, Identifiable {
     public let eligible: Bool
     public let attempts: [StepAttempt]
     public let blockers: [StepBlocker]
+    /// Protocol 1.13 (M6): how the human may start the step again (`Repair`, `Restart`) and
+    /// the attempt that follows; which retry of the human's the newest attempt is.
+    public let retryActions: [String]
+    public let retryAttempt: String?
+    public let retried: String?
 
     public init?(_ p: JSON) {
         guard let id = p["step"]?.string, let state = p["state"]?.string else { return nil }
@@ -259,17 +264,21 @@ public struct PlanStepDetail: Equatable, Sendable, Identifiable {
                   attempts: (p["attempts"]?.items ?? []).compactMap(StepAttempt.init),
                   blockers: (p["blockers"]?.items ?? []).compactMap { b in
                       b["kind"]?.string.flatMap { k in b["reason"]?.string.map { StepBlocker(kind: k, reason: $0) } }
-                  })
+                  },
+                  retryActions: (p["retry"]?["actions"]?.items ?? []).compactMap(\.string),
+                  retryAttempt: p["retry"]?["attempt"]?.string, retried: p["retried"]?.string)
     }
 
     public init(id: String, key: String? = nil, title: String? = nil, kind: String? = nil, provider: String? = nil,
                 dependsOn: [String] = [], wave: Int64? = 1, writeScope: [String] = [], baseline: [String] = [],
                 tests: [String] = [], command: [String] = [], state: String = "Waiting", detail: String = "",
-                eligible: Bool = false, attempts: [StepAttempt] = [], blockers: [StepBlocker] = []) {
+                eligible: Bool = false, attempts: [StepAttempt] = [], blockers: [StepBlocker] = [],
+                retryActions: [String] = [], retryAttempt: String? = nil, retried: String? = nil) {
         (self.id, self.key, self.title, self.kind, self.provider) = (id, key, title, kind, provider)
         (self.dependsOn, self.wave, self.writeScope, self.baseline) = (dependsOn, wave, writeScope, baseline)
         (self.tests, self.command, self.state, self.detail) = (tests, command, state, detail)
         (self.eligible, self.attempts, self.blockers) = (eligible, attempts, blockers)
+        (self.retryActions, self.retryAttempt, self.retried) = (retryActions, retryAttempt, retried)
     }
 
     /// The step's key, else its place.

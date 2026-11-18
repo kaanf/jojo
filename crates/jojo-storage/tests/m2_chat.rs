@@ -3109,3 +3109,189 @@ fn s7_a_brief_turn_is_refused_beside_another_lead_turn_and_the_workspace_lists_r
         .expect("the registered sample is listed");
     assert!(!str_of(sample, &["name"]).is_empty());
 }
+
+// ---- M6: a step that waits for the human starts again on their word ----
+
+impl H {
+    fn ok13(&mut self, kind: &str, payload: Json) -> Json {
+        let r = self.at(13, kind, payload);
+        assert_eq!(r.kind, "Response", "{kind}: {:?}", r.payload);
+        r.payload
+    }
+
+    /// The first step of the plan detail at 1.13.
+    fn detail_step(&mut self, plan: &Json) -> Json {
+        let detail = self.ok13("PlanDetail", object([("plan", plan.clone())]));
+        items(field(&detail, &["steps"]))[0].clone()
+    }
+
+    /// Sends `RetryPlanStep` for the first step; the response or the refusal's code.
+    fn retry(&mut self, plan: &Json, attempt: Json, action: &str, note: &str) -> String {
+        let step = self.step_field(plan, 0, "step");
+        let r = self.at(
+            13,
+            "RetryPlanStep",
+            object([
+                ("plan", plan.clone()),
+                ("step", step),
+                ("attempt", attempt),
+                ("action", text(action)),
+                ("note", text(note)),
+            ]),
+        );
+        match r.kind.as_str() {
+            "Response" => str_of(&r.payload, &["response"]).to_owned(),
+            _ => str_of(&r.payload, &["code"]).to_owned(),
+        }
+    }
+}
+
+#[test]
+fn m6_a_held_step_is_repaired_on_the_humans_word_and_held_again_when_that_fails() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let plan = h.approved_one_step(&repository, "lead-never", 0, false);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.run_until(&plan, |s| s[0] == "NeedsHuman");
+    let held = h.step_field(&plan, 0, "attempt");
+    // At 1.13 the plan detail says what the human may do; at 1.12 it does not.
+    let step = h.detail_step(&plan);
+    assert_eq!(
+        field(&step, &["retry", "actions"]),
+        &Json::List(vec![text("Repair"), text("Restart")])
+    );
+    assert_eq!(field(&step, &["retry", "attempt"]), &held);
+    assert_eq!(field(&step, &["retried"]), &Json::Null);
+    let older = h.at(12, "PlanDetail", object([("plan", plan.clone())]));
+    let old_step = &items(field(&older.payload, &["steps"]))[0];
+    assert!(matches!(old_step, Json::Object(f) if !f.iter().any(|(k, _)| k == "retry")));
+    // A retry of an attempt that is not the newest is refused; nothing is recorded.
+    assert!(
+        h.retry(
+            &plan,
+            text("00000000000000000000000000000099"),
+            "Repair",
+            ""
+        )
+        .starts_with("StaleRetry")
+    );
+    assert_eq!(
+        h.retry(&plan, held.clone(), "Repair", "Keep the file name."),
+        "repair recorded"
+    );
+    // The runner starts it as recorded; it fails again and is held, not repaired.
+    h.run_until(&plan, |s| s[0] == "Repairing");
+    h.run_until(&plan, |s| s[0] == "NeedsHuman");
+    let attempt = h.step_attempt(&plan);
+    assert_ne!(identity(attempt), held);
+    assert_eq!(h.step_field(&plan, 0, "repairs"), number(0));
+    assert_eq!(
+        h.step_field(&plan, 0, "detail"),
+        text("the repair you asked for failed: host validation failed")
+    );
+    let section = h
+        .read(|v| v.retry_section(attempt))
+        .expect("a retry section");
+    assert!(
+        section.starts_with("\n# Repair on the product owner's word\n"),
+        "{section}"
+    );
+    assert!(section.contains("## Host validation failed\n"), "{section}");
+    assert!(
+        section.ends_with("## Note from the product owner\nKeep the file name.\n"),
+        "{section}"
+    );
+    let step = h.detail_step(&plan);
+    assert_eq!(str_of(&step, &["retried"]), "Repair");
+    assert_eq!(field(&step, &["retry", "attempt"]), &identity(attempt));
+    // Its events read as the human's decisions.
+    let sentences: Vec<String> = h
+        .all_events(13)
+        .iter()
+        .filter(|e| str_of(e, &["type"]) == "PlanStepRetried")
+        .map(|e| format!("{} {}", str_of(e, &["category"]), str_of(e, &["summary"])))
+        .collect();
+    assert_eq!(
+        sentences,
+        ["Decision never · fixture: develop-never src/never.txt will be repaired on your word"]
+    );
+    // A cancelled run offers nothing, and refuses a retry.
+    assert_eq!(h.control(&plan, "Cancel"), "plan run CANCELLED");
+    let step = h.detail_step(&plan);
+    assert_eq!(field(&step, &["retry", "actions"]), &Json::List(vec![]));
+    assert!(
+        h.retry(&plan, identity(attempt), "Restart", "")
+            .starts_with("RetryRefused")
+    );
+}
+
+#[test]
+fn m6_a_rejected_step_restarts_fresh_and_a_refused_restart_can_be_restarted() {
+    let mut h = H::new();
+    let repository = h.ready();
+    let plan = h.approved_one_step(&repository, "lead-review", 0, false);
+    h.ok3("RunPlan", object([("plan", plan.clone())]));
+    h.run_until(&plan, |s| s[0] == "Review");
+    // A step that waits for the human's decision offers no retry.
+    assert_eq!(
+        field(&h.detail_step(&plan), &["retry", "actions"]),
+        &Json::List(vec![])
+    );
+    let attempt = h.step_field(&plan, 0, "attempt");
+    let candidate = h.step_field(&plan, 0, "candidate");
+    let r = h.at(
+        2,
+        "CandidateDecision",
+        object([
+            ("attempt", attempt.clone()),
+            ("candidate", candidate),
+            ("receipt", Json::Null),
+            ("action", text("Reject")),
+        ]),
+    );
+    assert_eq!(r.kind, "Response", "{:?}", r.payload);
+    h.run_until(&plan, |s| s[0] == "NeedsHuman");
+    // The restart cannot start: the step's provider is not configured now. The refusal is
+    // the retry's, and the step can be restarted again.
+    let claude = h.s().claude.take();
+    assert_eq!(
+        h.retry(&plan, attempt.clone(), "Restart", ""),
+        "restart recorded"
+    );
+    h.run_until(&plan, |s| s[0] == "Refused");
+    let step = h.detail_step(&plan);
+    assert_eq!(
+        field(&step, &["retry", "actions"]),
+        &Json::List(vec![text("Restart")])
+    );
+    assert_eq!(str_of(&step, &["retried"]), "Restart");
+    assert!(
+        h.retry(&plan, attempt.clone(), "Repair", "")
+            .starts_with("RetryRefused")
+    );
+    h.s().claude = claude;
+    assert_eq!(
+        h.retry(&plan, attempt.clone(), "Restart", ""),
+        "restart recorded"
+    );
+    h.run_until(&plan, |s| s[0] == "Review");
+    // A fresh attempt, told nothing of the earlier one.
+    let restarted = h.step_attempt(&plan);
+    assert_ne!(identity(restarted), attempt);
+    assert_eq!(h.read(|v| v.retry_section(restarted)), None);
+    assert_eq!(h.step_field(&plan, 0, "detail"), text(""));
+    let sentences: Vec<String> = h
+        .all_events(13)
+        .iter()
+        .filter(|e| ["PlanStepRetried", "PlanStepRefused"].contains(&str_of(e, &["type"])))
+        .map(|e| str_of(e, &["summary"]).to_owned())
+        .collect();
+    assert_eq!(
+        sentences,
+        [
+            "rev · fixture: develop-repaired src/rev.txt will start again on your word",
+            "rev · fixture: develop-repaired src/rev.txt could not start",
+            "rev · fixture: develop-repaired src/rev.txt will start again on your word"
+        ]
+    );
+}

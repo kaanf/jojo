@@ -114,6 +114,11 @@ impl MigrationPlan {
                 name: "project briefs and the turns that write them",
                 sql: SCHEMA_V17,
             },
+            Migration {
+                version: 18,
+                name: "retries of held plan steps on the human's word",
+                sql: SCHEMA_V18,
+            },
         ])
     }
 
@@ -1357,6 +1362,34 @@ CREATE TRIGGER project_briefs_immutable BEFORE UPDATE ON project_briefs BEGIN SE
 CREATE TRIGGER project_briefs_keep BEFORE DELETE ON project_briefs BEGIN SELECT RAISE(ABORT,'immutable brief'); END;
 "#;
 
+/// M6: a step that waits for the human (held, refused or in conflict) starts again only on
+/// the human's word. A retry is decided and recorded before it starts, like a repair:
+/// `REPAIR` tells the next attempt what failed, `RESTART` starts it fresh from the plan
+/// branch; either may carry the human's note. `held` is the step's newest attempt when the
+/// human decided (none for a step that never started). A retry whose start is refused
+/// records that here, since a step keeps one refusal of the runner's own.
+const SCHEMA_V18: &str = r#"
+CREATE TABLE plan_step_retries (
+ plan TEXT NOT NULL, revision INTEGER NOT NULL, step TEXT NOT NULL CHECK(length(step)=32),
+ held TEXT REFERENCES scheduler_attempts(attempt),
+ attempt TEXT NOT NULL UNIQUE CHECK(length(attempt)=32),
+ action TEXT NOT NULL CHECK(action IN ('REPAIR','RESTART')),
+ note TEXT NOT NULL CHECK(length(note)<=4096),
+ section TEXT NOT NULL,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ CHECK(action='RESTART' OR held IS NOT NULL),
+ FOREIGN KEY(plan, revision) REFERENCES plan_runs(plan, revision));
+CREATE INDEX plan_step_retries_step ON plan_step_retries(plan, revision, step);
+CREATE TABLE plan_step_retry_refusals (
+ attempt TEXT PRIMARY KEY REFERENCES plan_step_retries(attempt),
+ detail TEXT NOT NULL,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq));
+CREATE TRIGGER plan_step_retries_immutable BEFORE UPDATE ON plan_step_retries BEGIN SELECT RAISE(ABORT,'immutable retry'); END;
+CREATE TRIGGER plan_step_retries_keep BEFORE DELETE ON plan_step_retries BEGIN SELECT RAISE(ABORT,'immutable retry'); END;
+CREATE TRIGGER plan_step_retry_refusals_immutable BEFORE UPDATE ON plan_step_retry_refusals BEGIN SELECT RAISE(ABORT,'immutable retry'); END;
+CREATE TRIGGER plan_step_retry_refusals_keep BEFORE DELETE ON plan_step_retry_refusals BEGIN SELECT RAISE(ABORT,'immutable retry'); END;
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -1368,7 +1401,7 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 17));
+        assert_eq!((report.from_version, report.to_version), (0, 18));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);

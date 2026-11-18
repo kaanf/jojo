@@ -9,6 +9,9 @@
 //! `jojo_domain::repair` decides which. A step whose host validation passed is reviewed
 //! once by the other provider before the human decides. Neither a repair nor a review is
 //! ever an external action; nothing here pushes or opens a pull request.
+//!
+//! M6: a step that waits for the human starts again only on their word (`RetryPlanStep`),
+//! as a recorded retry the runner starts like a repair; if that attempt fails, it is held.
 use super::*;
 use jojo_domain::provider::MAX_PROMPT_BYTES;
 use jojo_domain::repair::{self, Failure, RepairDecision, RepairPolicy};
@@ -168,7 +171,19 @@ impl Service {
             limit: run.repair_limit,
         };
         let (plan, revision, id) = (run.plan, run.revision, step.step.id);
-        match repair::decide(&failure, step.repairs, policy) {
+        // M6: an attempt the human started again is held when it fails; it is never
+        // repaired on its own.
+        let decision = match step.retry {
+            Some(action) => RepairDecision::Hold {
+                reason: format!(
+                    "the {} you asked for failed: {}",
+                    action.name().to_lowercase(),
+                    step.detail
+                ),
+            },
+            None => repair::decide(&failure, step.repairs, policy),
+        };
+        match decision {
             RepairDecision::Hold { reason } => self
                 .command("HoldPlanStep", id, move |tx| {
                     tx.hold_plan_step(plan, revision, id, failed, &reason)
@@ -195,7 +210,7 @@ impl Service {
 
     /// The failure as the next attempt is told it: a failed validation with the output
     /// the host recorded, and the paths the failed attempt changed.
-    fn failure_evidence(
+    pub(super) fn failure_evidence(
         &self,
         attempt: OpaqueId,
         failure: Failure,

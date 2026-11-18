@@ -5,6 +5,9 @@ import SwiftUI
 // the held feature's execution plan by waves, its gates, filters and plan checks, and in
 // the inspector one step or gate. Protocol 1.9 (`PlanDetail`); the run is `PlanRun` (1.3),
 // a step is started by hand with `Start` from the approved plan (`ApprovedPlan`).
+// M6: the inspector follows a running step's log live (`Log`), decides a step that waits
+// for the human's decision (`CandidateDecision`) and starts again a step that waits for the
+// human (`RetryPlanStep`, 1.13).
 
 /// The grid's filters, as the board's aside draws them.
 struct PlanFilters: Equatable {
@@ -45,6 +48,11 @@ struct ExecutionPlanState: Equatable {
     var filters = PlanFilters()
     var selected: PlanNode?
     var reportsDetail = true
+    /// M6: the candidate the workspace loaded, the selected step's live log and the newest
+    /// activity of its attempt.
+    var candidate: CandidateReview?
+    var log: StepLog?
+    var activity: AttemptActivity?
 
     var link: RecoveryCenterState.Link { coreLink(connection) }
     var admissionClosed: Bool { link == .connected && !admission.isEmpty && admission != "Open" }
@@ -159,6 +167,46 @@ struct ExecutionPlanState: Equatable {
         return (steps.filter { $0.attempts.last?.validation == "Passed" }.count, steps.count)
     }
 
+    /// M6: a step whose newest attempt runs, is repaired, validated or reviewed: its log is
+    /// followed live.
+    static func live(_ step: PlanStepDetail) -> Bool {
+        step.attempts.last != nil && ["Running", "Repairing", "Validating", "Reviewing"].contains(step.state)
+    }
+
+    /// M6: the candidate of a step that waits for the human's decision, once it is loaded.
+    func decision(_ step: PlanStepDetail) -> CandidateReview? {
+        guard step.state == "Review", let newest = step.attempts.last, candidate?.attempt == newest.id else { return nil }
+        return candidate
+    }
+
+    /// Why Accept or Reject cannot be sent for a step; nil when it can.
+    func decideBlocked(_ step: PlanStepDetail, accept: Bool) -> String? {
+        if link != .connected { return "Unavailable: the core is not connected." }
+        guard let c = decision(step), c.candidate != nil else { return "Loading the candidate." }
+        if c.decision != "NONE" { return "Already decided: \(c.decision)." }
+        if accept, !c.canAccept { return "Unavailable: the core accepts only a passing host validation of exactly this candidate." }
+        if commandPending { return "Unavailable while a command awaits the core." }
+        return nil
+    }
+
+    /// Why a retry cannot be sent for a step; nil when it can. What the step allows is the core's.
+    func retryBlocked(_ step: PlanStepDetail) -> String? {
+        if link != .connected { return "Unavailable: the core is not connected." }
+        if slice == false { return "The core has no slice configuration; it cannot start a step." }
+        if commandPending { return "Unavailable while a command awaits the core." }
+        if step.retryActions.isEmpty { return "The core offers no way to start this step again." }
+        return nil
+    }
+
+    /// What the human is told before a retry is sent.
+    static func retryWords(_ action: String) -> (button: String, title: String, sentence: String) {
+        action == "Repair"
+            ? ("Repair Once More", "Repair this step once more?",
+               "A new attempt is told what failed and your note. It starts when capacity allows. If it fails, the step waits for you again; it is not repaired on its own.")
+            : ("Restart Step", "Restart this step?",
+               "A new attempt starts fresh from the plan branch as it is now, with your note if you give one. It starts when capacity allows. If it fails, the step waits for you again.")
+    }
+
     func title(_ key: String) -> String? { detail?.steps.first { $0.key == key }?.title }
     func state(_ key: String) -> PlanStepDetail? { detail?.steps.first { $0.key == key } }
 
@@ -180,6 +228,8 @@ struct ExecutionPlanActions {
     var evidence: (String) -> Void = { _ in }
     var compare: () -> Void = {}
     var review: () -> Void = {}
+    var decide: (CandidateAction) -> Void = { _ in }
+    var retry: (PlanStepDetail, String, String) -> Void = { _, _, _ in }
 }
 
 struct ExecutionPlanScreen: View {
@@ -199,6 +249,38 @@ struct ExecutionPlanScreen: View {
             .onChange(of: model.workspace.snapshotSeq) { if visible { read() } }
             .onChange(of: chosenPlan) { selected = nil; if visible { read() } }
             .onChange(of: model.workspace.documents) { if visible { read() } }
+            // M6: the selected step's log every two seconds while it runs and is shown.
+            .task(id: liveAttempt) {
+                guard let attempt = liveAttempt else {
+                    model.workspace.followingStep = false
+                    return
+                }
+                model.workspace.followingStep = true
+                while !Task.isCancelled {
+                    model.workspace.tailLog(attempt)
+                    model.workspace.loadAttempts()
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
+            // M6: the candidate of a step that waits for the human's decision.
+            .task(id: reviewAttempt) {
+                if let attempt = reviewAttempt, model.workspace.candidate?.attempt != attempt {
+                    model.workspace.loadCandidate(attempt)
+                }
+            }
+    }
+
+    private var selectedStep: PlanStepDetail? {
+        guard visible else { return nil }
+        return state.step
+    }
+
+    private var liveAttempt: String? {
+        selectedStep.flatMap { ExecutionPlanState.live($0) ? $0.attempts.last?.id : nil }
+    }
+
+    private var reviewAttempt: String? {
+        selectedStep.flatMap { $0.state == "Review" ? $0.attempts.last?.id : nil }
     }
 
     static func plans(_ workspace: WorkspaceModel, scope: FeatureScope) -> [DocumentSummary] {
@@ -211,16 +293,23 @@ struct ExecutionPlanScreen: View {
         let plans = Self.plans(workspace, scope: scope)
         let plan = plans.first { $0.id == chosenPlan } ?? plans.first
         let review = workspace.review
+        let detail = plan.flatMap { workspace.planDetails[$0.id] }
+        let newest: String? = {
+            guard case .step(let id)? = selected else { return nil }
+            return detail?.steps.first { $0.id == id }?.attempts.last?.id
+        }()
         return ExecutionPlanState(
             connection: model.client.connection, admission: workspace.admission, slice: model.client.hello?.slice,
             scope: scope, plans: plans, chosenPlan: chosenPlan,
-            detail: plan.flatMap { workspace.planDetails[$0.id] }, detailLoad: plan.flatMap { workspace.planDetailLoads[$0.id] } ?? .idle,
+            detail: detail, detailLoad: plan.flatMap { workspace.planDetailLoads[$0.id] } ?? .idle,
             run: plan.flatMap { workspace.planRuns[$0.id] }, approved: workspace.plans, commandPending: workspace.commandPending,
             outcome: workspace.startOutcome,
             reviewCurrent: review != nil && review?.subject == plan?.id && review?.revision == plan?.revision && !workspace.reviewStale,
             decisionOutstanding: model.client.outstandingCommands.values.contains("HumanDecision"),
             filters: filters, selected: selected,
-            reportsDetail: model.client.hello.map { $0.queries.contains("PlanDetail") } ?? true)
+            reportsDetail: model.client.hello.map { $0.queries.contains("PlanDetail") } ?? true,
+            candidate: workspace.candidate, log: newest.flatMap { workspace.stepLogs[$0] },
+            activity: newest.flatMap { workspace.attempts?[$0]?.activity })
     }
 
     private func read() {
@@ -258,6 +347,11 @@ struct ExecutionPlanScreen: View {
             review: {
                 if let plan = state.plan { workspace.loadReview(plan.id) }
                 open(.approvalInbox)
+            },
+            decide: { workspace.decideCandidate($0) },
+            retry: { step, action, note in
+                guard let plan = state.plan else { return }
+                workspace.retryPlanStep(plan.id, step: step.id, attempt: step.retryAttempt, action: action, note: note)
             })
     }
 }
@@ -266,6 +360,10 @@ struct ExecutionPlanView: View {
     @Environment(\.theme) private var theme
     let state: ExecutionPlanState
     var actions = ExecutionPlanActions()
+    /// M6: the note the human gives a retry, and the retry or rejection being confirmed.
+    @State private var note = ""
+    @State private var confirming: (step: PlanStepDetail, action: String)?
+    @State private var rejecting = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -578,6 +676,9 @@ struct ExecutionPlanView: View {
                     .background(theme.redBg, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
+            if ExecutionPlanState.live(step) { liveLog }
+            if step.state == "Review" { decisionSection(step) }
+            if !step.retryActions.isEmpty { retrySection(step) }
             DefinitionCard(rows: [
                 Definition(key: "Description", value: step.kind.map { "Kind: \($0). A description is not reported." } ?? "Not reported"),
                 Definition(key: "Acceptance", value: "Not reported"),
@@ -609,6 +710,91 @@ struct ExecutionPlanView: View {
                     Button("Answer in Feature Chat") { actions.open(.featureChat) }.buttonStyle(.jojo(.primary, compact: true))
                 }
             }
+        }
+    }
+
+    /// M6: the newest records of the step's log, read every two seconds while it is shown.
+    private var liveLog: some View {
+        LabeledSection(title: "Live log") {
+            VStack(alignment: .leading, spacing: 6) {
+                if let activity = state.activity {
+                    Text(activity.text).textStyle(.secondary).foregroundStyle(theme.text2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                let lines = state.log?.lines ?? []
+                if lines.isEmpty {
+                    NotReported("No log records yet.")
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                                Text(line).font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.text)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(8)
+                    }
+                    .defaultScrollAnchor(.bottom)
+                    .frame(maxHeight: 180)
+                    .background(theme.fill, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+
+    /// M6: Accept or Reject the step's candidate, as on Verification & Evidence.
+    private func decisionSection(_ step: PlanStepDetail) -> some View {
+        let accept = state.decideBlocked(step, accept: true)
+        let reject = state.decideBlocked(step, accept: false)
+        return LabeledSection(title: "Your decision") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("The candidate passed host validation\(step.detail.isEmpty ? "" : " and was \(step.detail)"). Accepting puts it on the plan branch; nothing is pushed.")
+                    .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                FlowRow(spacing: 6) {
+                    Button("Accept Candidate") { actions.decide(.Accept) }.buttonStyle(.jojo(.primary, compact: true))
+                        .disabled(accept != nil).help(accept ?? "Accepts this exact candidate.")
+                    Button("Reject Candidate…") { rejecting = true }.buttonStyle(.jojo(.ghost, compact: true))
+                        .disabled(reject != nil).help(reject ?? "Rejects it; the step then waits for you.")
+                }
+            }
+        }
+        .confirmationDialog("Reject this candidate?", isPresented: $rejecting, titleVisibility: .visible) {
+            Button("Reject Candidate", role: .destructive) { actions.decide(.Reject) }
+            Button("Keep Undecided", role: .cancel) {}
+        } message: {
+            Text("The step then waits for you: you can have it repaired or restarted here.")
+        }
+    }
+
+    /// M6: start again a step that waits for the human, with an optional note.
+    private func retrySection(_ step: PlanStepDetail) -> some View {
+        let blocked = state.retryBlocked(step)
+        return LabeledSection(title: "Start it again") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Nothing more happens to this step without you. Its automatic repairs are used up or do not apply.")
+                    .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                TextArea(prompt: "A note for the agent (optional)", text: $note, lines: 2)
+                FlowRow(spacing: 6) {
+                    ForEach(step.retryActions, id: \.self) { action in
+                        Button(ExecutionPlanState.retryWords(action).button) { confirming = (step, action) }
+                            .buttonStyle(.jojo(action == "Repair" ? .primary : .secondary, compact: true))
+                            .disabled(blocked != nil).help(blocked ?? ExecutionPlanState.retryWords(action).sentence)
+                    }
+                }
+            }
+        }
+        .confirmationDialog(confirming.map { ExecutionPlanState.retryWords($0.action).title } ?? "",
+                            isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+                            titleVisibility: .visible) {
+            if let confirming {
+                Button(ExecutionPlanState.retryWords(confirming.action).button) {
+                    actions.retry(confirming.step, confirming.action, note)
+                    note = ""
+                }
+                Button("Keep Waiting", role: .cancel) {}
+            }
+        } message: {
+            Text(confirming.map { ExecutionPlanState.retryWords($0.action).sentence } ?? "")
         }
     }
 

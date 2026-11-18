@@ -241,7 +241,7 @@ extension WorkspaceModel {
     /// details). Read with the repairs, only while Agent Runs or the Dashboard is shown,
     /// and again with each new snapshot.
     public func loadAttempts() {
-        guard attemptsLoad != .loading, snapshotSeq != nil, repairsShown || dashboardShown else { return }
+        guard attemptsLoad != .loading, snapshotSeq != nil, repairsShown || dashboardShown || followingStep else { return }
         attemptsLoad = .loading
         onChange?()
         client.query(.Attempts, ["before": .null]) { [weak self] reply in

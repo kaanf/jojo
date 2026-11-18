@@ -1,9 +1,9 @@
 {
-  "artifact": "gate-s7",
-  "scope": "Tree after step 7: Onboarding and New Project from their Mac boards; protocol 1.12 (BriefTurn, Workspace, a project's briefs in ProjectDetail, briefs in Documents), schema 17 (project briefs and the turns that write them); the app starts the helper from the setup Onboarding saves.",
+  "artifact": "gate-m6",
+  "scope": "Tree after M6: a held, refused or conflicting plan step starts again on the human's word (RetryPlanStep: Repair or Restart, with a note; a failed retry is held again), protocol 1.13 (RetryPlanStep; at 1.13 a PlanDetail step carries its retry actions), schema 18 (plan_step_retries, plan_step_retry_refusals); Execution Plan follows a running step's log live, decides a step in review and offers the core's retries.",
   "boundary_tests_min": 109,
   "rust": {
-    "passed_min": 503,
+    "passed_min": 506,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -110,7 +110,10 @@
       "brief::tests::a_brief_reads_and_renders",
       "brief::tests::a_brief_is_refused_when_it_strays",
       "s7_a_brief_is_proposed_by_a_read_only_turn_approved_by_the_human_and_then_prompted",
-      "s7_a_brief_turn_is_refused_beside_another_lead_turn_and_the_workspace_lists_repositories"
+      "s7_a_brief_turn_is_refused_beside_another_lead_turn_and_the_workspace_lists_repositories",
+      "m6_a_held_step_is_repaired_on_the_humans_word_and_held_again_when_that_fails",
+      "m6_a_rejected_step_restarts_fresh_and_a_refused_restart_can_be_restarted",
+      "m6_a_retry_tells_a_repair_its_failure_and_either_retry_the_humans_note"
     ],
     "ignored": [
       "child_fixture",
@@ -128,7 +131,7 @@
     ]
   },
   "swift": {
-    "tests_min": 148
+    "tests_min": 153
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,

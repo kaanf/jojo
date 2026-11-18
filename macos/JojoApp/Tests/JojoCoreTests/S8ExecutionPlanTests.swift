@@ -47,7 +47,7 @@ final class S8ExecutionPlanTests: XCTestCase {
                            filters: filters, selected: selected)
     }
 
-    func test_s8_a_plan_decodes_at_1_9_step_by_step_with_its_checks() throws {
+    func test_s8_a_plan_decodes_at_1_13_step_by_step_with_its_checks() throws {
         let conflict = JSON.object(["steps": .list([.text("api"), .text("usage")]), "paths": .list([.text("src")])])
         let detail = try XCTUnwrap(PlanDetail(PlanRows.detail(conflicts: [conflict])))
         XCTAssertEqual(detail.steps.map(\.label), ["api", "usage", "join"])
@@ -56,7 +56,7 @@ final class S8ExecutionPlanTests: XCTestCase {
         XCTAssertEqual(detail.steps[0].writeScope, ["src/api.txt"])
         XCTAssertEqual(detail.steps[1].attempts.first?.validation, "Passed")
         XCTAssertEqual(detail.conflicts.first?.steps, ["api", "usage"])
-        XCTAssertEqual(Request.PlanDetail.minor, 9)
+        XCTAssertEqual(Request.PlanDetail.minor, 13)
         XCTAssertNil(PlanDetail(["plan": .text("x")]))
     }
 

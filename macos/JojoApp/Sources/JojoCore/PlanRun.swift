@@ -157,6 +157,24 @@ public struct ProjectList: Equatable, Sendable {
     }
 }
 
+/// M6: the newest records of one attempt's log as Execution Plan follows it: at most 64
+/// lines, each one line of at most 240 characters, and where the next read starts.
+public struct StepLog: Equatable, Sendable {
+    public static let kept = 64
+    public private(set) var lines: [String] = []
+    /// The sequence the next read asks for first.
+    public internal(set) var next: Int64 = 1
+    var loading = false
+
+    public init(lines: [String] = [], next: Int64 = 1) { (self.lines, self.next) = (lines, next) }
+
+    mutating func append(_ line: String) {
+        let flat = line.split(whereSeparator: \.isNewline).joined(separator: " ")
+        lines.append(flat.count > 240 ? String(flat.prefix(239)) + "…" : flat)
+        if lines.count > Self.kept { lines.removeFirst(lines.count - Self.kept) }
+    }
+}
+
 extension WorkspaceModel {
     /// The run of every plan held, one `PlanRun` query per plan. A plan never started has
     /// no entry; a read that fails leaves the plan without one.
@@ -185,6 +203,44 @@ extension WorkspaceModel {
             self?.loadPlans()
             return "Plan \(plan.prefix(12)) started; the core starts its ready steps up to the capacity"
         } refused: { "Run refused (\($0)); nothing was started" }
+    }
+
+    /// M6 (protocol 1.13): the human starts again a step that waits for them, as `Repair`
+    /// or `Restart`, after the attempt shown (`nil` for a step that never started).
+    public func retryPlanStep(_ plan: String, step: String, attempt: String?, action: String, note: String) {
+        guard Identity.valid(plan), Identity.valid(step) else { return }
+        let held: JSON = attempt.map { .text($0) } ?? .null
+        slice(.RetryPlanStep, ["plan": .text(plan), "step": .text(step), "attempt": held, "action": .text(action),
+                                "note": .text(note)],
+              sent: "\(action) sent; awaiting acknowledgement") { [weak self] p in
+            self?.loadPlans()
+            self?.loadPlanDetail(plan)
+            return p["response"]?.string ?? "\(action) recorded"
+        } refused: { "\(action) refused (\($0)); the step is unchanged" }
+    }
+
+    /// M6: reads one attempt's log forward from where the last read stopped, at most 64
+    /// records a read, keeping the newest 64 lines. A record not there yet ends the read.
+    public func tailLog(_ attempt: String) {
+        guard Identity.valid(attempt), stepLogs[attempt]?.loading != true else { return }
+        var log = stepLogs[attempt] ?? StepLog()
+        log.loading = true
+        stepLogs[attempt] = log
+        func finish(_ sequence: Int64) {
+            stepLogs[attempt]?.next = sequence
+            stepLogs[attempt]?.loading = false
+            onChange?()
+        }
+        func read(_ sequence: Int64, _ count: Int) {
+            guard count < StepLog.kept else { return finish(sequence) }
+            client.query(.Log, ["attempt": .text(attempt), "sequence": .int(sequence), "offset": .int(0)]) { [weak self] reply in
+                guard let self else { return }
+                guard case .response(let p) = reply, let text = p["text"]?.string else { return finish(sequence) }
+                self.stepLogs[attempt]?.append("\(p["type"]?.string ?? "?"): \(text)")
+                read(sequence + 1, count + 1)
+            }
+        }
+        read(log.next, 0)
     }
 
     /// Pause, Resume or Cancel the run of a plan.

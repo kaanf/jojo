@@ -21,6 +21,7 @@ public enum Request: String, CaseIterable, Sendable {
     case ExternalActions, RequestExternal, AuthorizeExternal, InspectExternal, ResolveExternal
     case RecoveryDetail, ProjectDetail
     case BriefTurn, Workspace
+    case RetryPlanStep
 
     public var fields: [String] {
         switch self {
@@ -79,6 +80,7 @@ public enum Request: String, CaseIterable, Sendable {
         case .ProjectDetail: return ["project"]
         case .BriefTurn: return ["repository", "provider", "message"]
         case .Workspace: return []
+        case .RetryPlanStep: return ["plan", "step", "attempt", "action", "note"]
         }
     }
 
@@ -100,12 +102,15 @@ public enum Request: String, CaseIterable, Sendable {
     /// event carries its category and project (`Request.attributedEvents`). The brief turn
     /// and the workspace query exist only from 1.12 (step 7), and at 1.12 a project's
     /// repositories carry their briefs and the documents answer lists the briefs, so
-    /// `ProjectDetail` and `Documents` are read there.
+    /// `ProjectDetail` and `Documents` are read there. The retry of a held plan step exists
+    /// only from 1.13 (M6), and at 1.13 a plan detail step says how it can be started again,
+    /// so `PlanDetail` is read there.
     public var minor: Int64 {
         let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText]
         let runner: [Request] = [.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun]
         let external: [Request] = [.ExternalActions, .RequestExternal, .AuthorizeExternal, .InspectExternal,
                                    .ResolveExternal]
+        if [.RetryPlanStep, .PlanDetail].contains(self) { return 13 }
         if [.BriefTurn, .Workspace, .ProjectDetail, .Documents].contains(self) { return 12 }
         if self == .RecoveryDetail { return 11 }
         if external.contains(self) { return 10 }

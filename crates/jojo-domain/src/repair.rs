@@ -133,6 +133,41 @@ pub fn repair_section(ordinal: u8, limit: u8, failure: &Failure, changed: &[Stri
          start again from the same commit; nothing of that attempt is in this directory. \
          Do the step again and fix what is reported below. Stay inside the scope.\n"
     );
+    failure_report(&mut out, failure, changed);
+    out
+}
+
+/// M6: what a retry the human decided tells its attempt. A repair reports the failure as a
+/// repair does; a restart reports nothing of the earlier attempt. The human's note follows
+/// either. A restart without a note is told nothing more than a first attempt.
+pub fn retry_section(failure: Option<&Failure>, changed: &[String], note: &str) -> String {
+    let note = note.trim();
+    let mut out = match failure {
+        Some(failure) => {
+            let mut out = String::from(
+                "\n# Repair on the product owner's word\nAn earlier attempt at this step did \
+                 not pass and the product owner asked for one more try. You start again from \
+                 the plan branch as it is now; nothing of that attempt is in this directory. \
+                 Do the step again and fix what is reported below. Stay inside the scope.\n",
+            );
+            failure_report(&mut out, failure, changed);
+            out
+        }
+        None if note.is_empty() => return String::new(),
+        None => String::from(
+            "\n# Restart on the product owner's word\nAn earlier try at this step was set \
+             aside. Do the step from the start. Stay inside the scope.\n",
+        ),
+    };
+    if !note.is_empty() {
+        out.push_str("\n## Note from the product owner\n");
+        out.push_str(note);
+        out.push('\n');
+    }
+    out
+}
+
+fn failure_report(out: &mut String, failure: &Failure, changed: &[String]) {
     let output = |out: &mut String, title: &str, text: &str| {
         let shown = tail(text, MAX_FAILURE_BYTES);
         out.push_str(&format!("\n## {title}"));
@@ -144,7 +179,7 @@ pub fn repair_section(ordinal: u8, limit: u8, failure: &Failure, changed: &[Stri
         out.push_str("\n```\n");
     };
     match failure {
-        Failure::AttemptFailed { reason } => output(&mut out, "Why the attempt failed", reason),
+        Failure::AttemptFailed { reason } => output(out, "Why the attempt failed", reason),
         Failure::NoChange => {
             out.push_str("\n## What went wrong\nThe attempt ended without changing any file.\n")
         }
@@ -157,15 +192,15 @@ pub fn repair_section(ordinal: u8, limit: u8, failure: &Failure, changed: &[Stri
                 out.push_str(&format!("- {reason}\n"));
             }
             if !text.trim().is_empty() {
-                output(&mut out, "Output of the validation command", text);
+                output(out, "Output of the validation command", text);
             }
         }
         Failure::ReviewRejected { notes } => output(
-            &mut out,
+            out,
             "The reviewer rejected it; the notes are your fix list",
             notes,
         ),
-        other => output(&mut out, "What went wrong", &format!("{other:?}")),
+        other => output(out, "What went wrong", &format!("{other:?}")),
     }
     if !changed.is_empty() {
         out.push_str("\n## Paths the earlier attempt changed\n");
@@ -179,5 +214,4 @@ pub fn repair_section(ordinal: u8, limit: u8, failure: &Failure, changed: &[Stri
             ));
         }
     }
-    out
 }

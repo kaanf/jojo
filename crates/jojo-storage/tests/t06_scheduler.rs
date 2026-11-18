@@ -980,7 +980,7 @@ fn t06_schema_four_upgrade_preserves_claims_and_command_receipts() {
     drop(e);
     let e = Engine::start(EngineConfig::new(dir.db(), clock)).unwrap();
     let report = &e.startup_report().migration;
-    assert_eq!((report.from_version, report.to_version), (4, 17));
+    assert_eq!((report.from_version, report.to_version), (4, 18));
     assert!(report.backup.as_ref().unwrap().exists());
     let s = e.reader().unwrap().snapshot().unwrap();
     assert_eq!(s.live_claims.len(), 1);

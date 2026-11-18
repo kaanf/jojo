@@ -238,3 +238,32 @@ fn m4_review_is_not_a_chat_turn_kind() {
     assert_eq!(TurnKind::named("Review"), None);
     assert_eq!(TurnKind::Review.name(), "Review");
 }
+
+#[test]
+fn m6_a_retry_tells_a_repair_its_failure_and_either_retry_the_humans_note() {
+    let failure = Failure::NoChange;
+    let repair = retry_section(
+        Some(&failure),
+        &["src/a.txt".into()],
+        "  Use the old name.  ",
+    );
+    assert!(
+        repair.starts_with("\n# Repair on the product owner's word\n"),
+        "{repair}"
+    );
+    assert!(repair.contains("## What went wrong\nThe attempt ended without changing any file.\n"));
+    assert!(repair.contains("## Paths the earlier attempt changed\n- src/a.txt\n"));
+    assert!(
+        repair.ends_with("\n## Note from the product owner\nUse the old name.\n"),
+        "{repair}"
+    );
+    // A restart is told nothing of the earlier attempt; without a note, nothing at all.
+    assert_eq!(retry_section(None, &["src/a.txt".into()], " \n"), "");
+    let restart = retry_section(None, &[], "Start from the README.");
+    assert!(
+        restart.starts_with("\n# Restart on the product owner's word\n"),
+        "{restart}"
+    );
+    assert!(!restart.contains("src/a.txt"));
+    assert!(restart.ends_with("## Note from the product owner\nStart from the README.\n"));
+}

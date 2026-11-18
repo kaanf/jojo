@@ -269,7 +269,7 @@ struct DashboardState: Equatable {
         "ArtifactVersionCreated": .info, "ReviewDocumentCreated": .info, "LeadTurnAccepted": .info,
         "LeadTurnFinished": nil, "QuestionAsked": .warn, "QuestionAnswered": .ok, "PlanRunStarted": .info,
         "PlanRunControl": .warn, "PlanStepIntegrated": .ok, "PlanStepHeld": .danger, "PlanStepRefused": .danger,
-        "PlanStepRepairDecided": .warn, "StepReviewFinished": .review, "RecoveryResolved": .ok, "ProjectSaved": nil,
+        "PlanStepRepairDecided": .warn, "PlanStepRetried": .warn, "StepReviewFinished": .review, "RecoveryResolved": .ok, "ProjectSaved": nil,
     ]
 
     static func symbol(_ kind: String) -> String {

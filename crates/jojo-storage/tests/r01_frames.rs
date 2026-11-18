@@ -165,8 +165,8 @@ fn record(h: &mut H) {
     h.at("hello 1.0", 0, "Hello", object([]));
     // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2, 1.5
     // since D3, 1.7 since 1.6, 1.8 since 1.7, 1.9 since 1.8, 1.10 since 1.9, 1.11 since
-    // 1.10, 1.12 since 1.11, 1.13 since 1.12).
-    h.at("hello 1.13", 13, "Hello", object([("junk", n(1))]));
+    // 1.10, 1.12 since 1.11, 1.13 since 1.12, 1.14 since 1.13).
+    h.at("hello 1.14", 14, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1363,6 +1363,36 @@ fn record(h: &mut H) {
         "ProjectDetail",
         object([("project", hex(41))]),
     );
+    // 1.13 (M6): the retry of a held plan step, and the plan detail it is read with.
+    let retry = |action: &str| {
+        object([
+            ("plan", hex(43)),
+            ("step", hex(44)),
+            ("attempt", Json::Null),
+            ("action", text(action)),
+            ("note", text("")),
+        ])
+    };
+    h.at("retry at 1.12", 12, "RetryPlanStep", retry("Restart"));
+    h.at(
+        "retry without note",
+        13,
+        "RetryPlanStep",
+        object([
+            ("plan", hex(43)),
+            ("step", hex(44)),
+            ("attempt", Json::Null),
+            ("action", text("Restart")),
+        ]),
+    );
+    h.at("retry unknown action", 13, "RetryPlanStep", retry("Skip"));
+    h.at("retry of no run", 13, "RetryPlanStep", retry("Restart"));
+    h.at(
+        "plan detail unknown at 1.13",
+        13,
+        "PlanDetail",
+        object([("plan", hex(43))]),
+    );
 }
 
 #[test]
@@ -1379,7 +1409,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.13 => 1.12 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan RequestExternal AuthorizeExternal InspectExternal ResolveExternal BriefTurn","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features Document Decisions PlanDetail AttemptDetail ExternalActions RecoveryDetail ProjectDetail Workspace","slice":true}
+hello 1.14 => 1.13 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan RequestExternal AuthorizeExternal InspectExternal ResolveExternal BriefTurn RetryPlanStep","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features Document Decisions PlanDetail AttemptDetail ExternalActions RecoveryDetail ProjectDetail Workspace","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
@@ -1626,4 +1656,9 @@ brief turn at 1.11 => 1.11 Error {"code":"UnknownType"}
 brief turn without provider => 1.12 Error {"code":"InvalidPayload: unexpected or missing fields"}
 brief turn unknown provider => 1.12 Error {"code":"UnknownProvider"}
 project detail unknown at 1.12 => 1.12 Response null
+retry at 1.12 => 1.12 Error {"code":"UnknownType"}
+retry without note => 1.13 Error {"code":"InvalidPayload: unexpected or missing fields"}
+retry unknown action => 1.13 Error {"code":"UnknownAction"}
+retry of no run => 1.13 Error {"code":"UnknownPlanRun: this plan was never started"}
+plan detail unknown at 1.13 => 1.13 Response null
 "#;

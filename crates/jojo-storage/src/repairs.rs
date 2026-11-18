@@ -587,6 +587,12 @@ impl ReadView<'_> {
             .map(|id| id_from_text(&id))
             .transpose()
     }
+    /// M6: what a retry of the human's tells its attempt; `None` when nothing.
+    pub fn retry_section(&self, attempt: OpaqueId) -> Result<Option<String>, StorageError> {
+        Ok(crate::runner::retry_of(self.conn, attempt)?
+            .map(|(_, section)| section)
+            .filter(|s| !s.is_empty()))
+    }
     pub fn repair_of(&self, attempt: OpaqueId) -> Result<Option<RepairRecord>, StorageError> {
         repair_of(self.conn, attempt)
     }
