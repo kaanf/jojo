@@ -65,6 +65,9 @@ public struct LeadQuestion: Equatable, Sendable, Identifiable {
     public let answeredBy: String?
     /// The key of the one plan step the question is about; nil for the whole feature.
     public let step: String?
+    /// Protocol 1.14: the options the lead named; empty for none or from an older helper.
+    /// A choice only fills in the written answer.
+    public internal(set) var choices: [String] = []
 
     /// A blocking question without an answer from a human holds what it is about.
     public var open: Bool { blocking && answeredBy != "HUMAN" }
@@ -132,6 +135,14 @@ public struct LeadTurn: Equatable, Sendable, Identifiable {
     /// older helper, and the end while it runs.
     public let started: Date?
     public let ended: Date?
+    /// Protocol 1.14: how the run used the provider session (`Fresh`, `Continued`,
+    /// `Fallback`, or `Continuing` while a continuation runs); nil from an older helper.
+    public let session: String?
+    /// Protocol 1.14: the failed turn this one repairs, and the turn that repaired this one.
+    public let repairs: String?
+    public let repairedBy: String?
+    /// Protocol 1.14: the human may ask for this failed turn again.
+    public let repairable: Bool
 
     public var running: Bool { state == "Running" || state == "Stopping" }
 
@@ -151,8 +162,18 @@ public struct LeadTurn: Equatable, Sendable, Identifiable {
             guard let draft = LeadPlanDraft(planValue) else { return nil }
             plan = draft
         }
-        let questions = items.compactMap(LeadQuestion.init)
+        var questions = items.compactMap(LeadQuestion.init)
         guard questions.count == items.count else { return nil }
+        if let lists = r["choices"]?.items {
+            guard lists.count == questions.count else { return nil }
+            for (index, list) in lists.enumerated() {
+                guard let options = list.items?.compactMap(\.string) else { return nil }
+                questions[index].choices = options
+            }
+        }
+        session = r["session"]?.string
+        (repairs, repairedBy) = (r["repairs"]?.string, r["repaired_by"]?.string)
+        repairable = r["repairable"]?.boolean ?? false
         (self.id, self.ordinal, self.kind, self.provider, self.base) = (id, ordinal, kind, provider, base)
         (self.message, self.messageComplete, self.state, self.detail, self.summary) = (message, complete, state, detail, summary)
         (self.prd, self.plan, self.questions) = (prd, plan, questions)
@@ -164,7 +185,8 @@ public struct LeadTurn: Equatable, Sendable, Identifiable {
             && a.message == b.message && a.messageComplete == b.messageComplete && a.state == b.state
             && a.detail == b.detail && a.summary == b.summary && a.prd?.document == b.prd?.document
             && a.prd?.revision == b.prd?.revision && a.plan == b.plan && a.questions == b.questions
-            && a.started == b.started && a.ended == b.ended
+            && a.started == b.started && a.ended == b.ended && a.session == b.session
+            && a.repairs == b.repairs && a.repairedBy == b.repairedBy && a.repairable == b.repairable
     }
 }
 
@@ -399,6 +421,23 @@ extension WorkspaceModel {
             self?.loadChat()
             return "\(word) committed for the question; it binds the next turn"
         } refused: { "\(word) refused (\($0)); the question is unchanged. Reload before answering again." }
+    }
+
+    /// Protocol 1.14: the human asks for a failed turn again; the new turn is told why the
+    /// failed one failed, with the note when there is one.
+    public func repairTurn(_ turn: String, note: String) {
+        guard Identity.valid(turn) else { return }
+        if !commandPending { turnOutcome = .sent }
+        slice(.RepairTurn, ["turn": .text(turn), "note": .text(note)],
+              sent: "Repair sent; awaiting acknowledgement") { [weak self] p in
+            let repair = p["turn"]?.string ?? "?", dispatch = p["dispatch"]?.string ?? "?"
+            self?.turnOutcome = .accepted(attempt: repair, dispatch: dispatch)
+            self?.loadChat()
+            return "Repair turn \(repair) accepted (\(dispatch)); it is told why the turn failed"
+        } refused: { [weak self] code in
+            self?.turnOutcome = .refused(code)
+            return "Repair refused (\(code)); nothing was run"
+        }
     }
 
     /// The human's stop of the running turn. The turn ends with its result.

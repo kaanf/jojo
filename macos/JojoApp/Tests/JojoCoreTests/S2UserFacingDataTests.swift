@@ -57,7 +57,7 @@ final class S2UserFacingDataTests: XCTestCase {
         XCTAssertEqual(Request.Attempts.fields, ["before"])
         let (h, model) = ready()
         XCTAssertEqual(h.fake.last("Snapshot")?.minor, 1)
-        XCTAssertEqual(h.fake.last("Documents")?.minor, 12, "every snapshot reads the documents for the sidebar counter")
+        XCTAssertEqual(h.fake.last("Documents")?.minor, 14, "every snapshot reads the documents for the sidebar counter")
         XCTAssertEqual(h.fake.last("Documents")?.payload, ["before": .null])
         model.pollEvents()
         XCTAssertEqual(h.fake.last("Events")?.minor, 1, "polling keeps its 1.1 frame")

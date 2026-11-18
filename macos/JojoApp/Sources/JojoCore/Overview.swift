@@ -204,13 +204,18 @@ public struct PendingCandidate: Equatable, Sendable, Identifiable {
 }
 
 /// The answer of `Documents`: documents newest first, the candidates that wait, the push
-/// and pull request requests that wait (1.10), and how many things wait for the human.
+/// and pull request requests that wait (1.10), and how many things wait for the human. At
+/// 1.14 also the plan steps that wait for the human and each feature's open questions, the
+/// sidebar counters of Execution Plan and Feature Chat; an older answer has neither (zero).
 public struct DocumentList: Equatable, Sendable {
     public let documents: [DocumentSummary]
     public let candidates: [PendingCandidate]
     public let external: [PendingExternal]
     public let pending: Int64
     public let more: Bool
+    public let stepsWaiting: Int64
+    /// Questions no human has answered, by feature identity.
+    public let openQuestions: [String: Int64]
 
     public init?(_ p: [String: JSON]) {
         guard let items = p["documents"]?.items, let waiting = p["candidates"]?.items,
@@ -223,13 +228,22 @@ public struct DocumentList: Equatable, Sendable {
               external.count == requests.count else { return nil }
         (self.documents, self.candidates, self.external, self.pending) = (documents, candidates, external, pending)
         more = p["next"]?.integer != nil
+        stepsWaiting = p["steps_waiting"]?.integer ?? 0
+        var open: [String: Int64] = [:]
+        for row in p["open_questions"]?.items ?? [] {
+            guard let feature = row["feature"]?.string, let count = row["count"]?.integer else { return nil }
+            open[feature] = count
+        }
+        openQuestions = open
     }
 
     public init(documents: [DocumentSummary], candidates: [PendingCandidate] = [],
-                external: [PendingExternal] = [], pending: Int64? = nil, more: Bool = false) {
+                external: [PendingExternal] = [], pending: Int64? = nil, more: Bool = false,
+                stepsWaiting: Int64 = 0, openQuestions: [String: Int64] = [:]) {
         (self.documents, self.candidates, self.external, self.more) = (documents, candidates, external, more)
         self.pending = pending ?? Int64(documents.filter { $0.approval == "Pending" }.count + candidates.count
                                         + external.count)
+        (self.stepsWaiting, self.openQuestions) = (stepsWaiting, openQuestions)
     }
 
     public subscript(document: String) -> DocumentSummary? { documents.first { $0.id == document } }

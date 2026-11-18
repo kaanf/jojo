@@ -93,8 +93,8 @@ final class S12ExternalActionsTests: XCTestCase {
         XCTAssertEqual(Request.allCases.filter { $0.minor == 10 },
                        [.ExternalActions, .RequestExternal, .AuthorizeExternal, .InspectExternal, .ResolveExternal])
         let (h, model) = ready()
-        // Step 7: the documents answer lists the briefs from 1.12, so it is read there.
-        XCTAssertEqual(h.fake.last("Documents")?.minor, 12)
+        // Step 7: the documents answer lists the briefs from 1.12; since 1.14 it counts what waits.
+        XCTAssertEqual(h.fake.last("Documents")?.minor, 14)
         model.loadExternalActions()
         XCTAssertEqual(h.fake.last("ExternalActions")?.minor, 10)
         XCTAssertEqual(h.fake.last("ExternalActions")?.payload, ["plan": .null])

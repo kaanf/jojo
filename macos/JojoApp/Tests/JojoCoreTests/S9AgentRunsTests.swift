@@ -71,7 +71,7 @@ final class S9AgentRunsTests: XCTestCase {
         XCTAssertEqual(detail.events.map(\.seq), [1, 2, 3])
         XCTAssertEqual(detail.validations.first?.ordinal, 1)
         XCTAssertEqual(detail.executableVersion, "2.1.311")
-        XCTAssertEqual(Request.AttemptDetail.minor, 9)
+        XCTAssertEqual(Request.AttemptDetail.minor, 14)
         XCTAssertNil(AttemptDetail(["key": .text("api")]))
     }
 

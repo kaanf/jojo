@@ -36,6 +36,8 @@ struct FeatureChatState: Equatable {
     var unreadable: [String] = []
     /// Answers as typed, by question.
     var answers: [String: String] = [:]
+    /// Protocol 1.14: the note of a repair, as typed.
+    var repairNote = ""
 
     /// The held feature's name: the features answer's (1.7), else the chat index's (1.6).
     var featureName: String? {
@@ -158,7 +160,34 @@ struct FeatureChatState: Equatable {
     func separator(_ turn: LeadTurn) -> String {
         let n = turns.filter { $0.kind == turn.kind && $0.ordinal <= turn.ordinal }.count
         let day = turn.started.map { $0.formatted(.dateTime.month(.abbreviated).day()) }
-        return (["\(Self.kind(turn.kind)) rev \(n)"] + [day].compactMap { $0 }).joined(separator: " · ")
+        return (["\(Self.kind(turn.kind)) rev \(n)"] + [day, Self.session(turn.session)].compactMap { $0 })
+            .joined(separator: " · ")
+    }
+
+    /// Protocol 1.14: how a turn used the provider session, in words; nil for a fresh one.
+    static func session(_ word: String?) -> String? {
+        switch word {
+        case "Continued": return "Continued session"
+        case "Continuing": return "Continuing session"
+        case "Fallback": return "New session (the continuation failed)"
+        default: return nil
+        }
+    }
+
+    /// "T2": a turn's place in the chat.
+    func turnNumber(_ turn: String) -> String {
+        "T\((turns.firstIndex { $0.id == turn } ?? 0) + 1)"
+    }
+
+    /// Why a repair of `turn` cannot be asked for, or nil when it can.
+    func repairBlocked(_ turn: LeadTurn) -> String? {
+        if link != .connected { return "Unavailable: the core is not connected." }
+        if admissionClosed { return "Admission is closed. The core refuses a turn until it is open." }
+        if commandPending { return "Unavailable while a command awaits the core." }
+        if running != nil { return "A turn is running. Stop it or wait for its result." }
+        if !turn.repairable { return "Only the newest failed turn can be repaired." }
+        if repairNote.utf8.count > 4096 { return "The note takes at most 4 KiB." }
+        return nil
     }
 
     /// Why a turn of `kind` cannot be sent, or nil when it can. The helper decides the rest.
@@ -242,6 +271,9 @@ struct FeatureChatActions {
     var send: (String) -> Void = { _ in }
     var stop: () -> Void = {}
     var answer: (LeadQuestion, QuestionAnswer) -> Void = { _, _ in }
+    /// Protocol 1.14: the repair note, and the repair of one failed turn.
+    var editRepairNote: (String) -> Void = { _ in }
+    var repair: (String) -> Void = { _ in }
     /// Loads a document's review in the Approval Inbox and opens it.
     var review: (String) -> Void = { _ in }
 }
@@ -320,6 +352,7 @@ struct FeatureChatScreen: View {
     @State private var attachments: [ReferenceFile] = []
     @State private var unattached: [String] = []
     @State private var answers: [String: String] = [:]
+    @State private var repairNote = ""
 
     var body: some View {
         let workspace = model.workspace
@@ -409,7 +442,7 @@ struct FeatureChatScreen: View {
             commandPending: workspace.commandPending, outcome: workspace.turnOutcome,
             summary: workspace.features?.features.first { $0.id == workspace.chatFeature },
             documents: workspace.documents, projects: workspace.projects, message: message,
-            attachments: attachments, unreadable: unattached, answers: answers)
+            attachments: attachments, unreadable: unattached, answers: answers, repairNote: repairNote)
     }
 
     private var chat: some View {
@@ -436,6 +469,11 @@ struct FeatureChatScreen: View {
                     workspace.answer(question, action)
                     answers[question.id] = nil
                 },
+                editRepairNote: { repairNote = $0 },
+                repair: { turn in
+                    workspace.repairTurn(turn, note: state.repairNote)
+                    repairNote = ""
+                },
                 review: { document in
                     workspace.loadReview(document)
                     open(.approvalInbox)
@@ -453,6 +491,7 @@ struct FeatureChatView: View {
     @State private var resolvedShown = false
     @State private var draftShown = false
     @State private var attaching = false
+    @State private var repairing: LeadTurn?
     @FocusState private var focused: String?
 
     var body: some View {
@@ -600,9 +639,38 @@ struct FeatureChatView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
+                    if turn.repairable { repairRow(turn) }
                 }
             }
             receipts(turn)
+        }
+    }
+
+    /// Protocol 1.14: a failed turn is asked for again on the human's word, told why it
+    /// failed and, if the human writes one, a note. A confirmation comes first.
+    private func repairRow(_ turn: LeadTurn) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                LineField(prompt: "Note for the repair (optional)", size: 12,
+                          text: Binding(get: { state.repairNote }, set: { actions.editRepairNote($0) }), submit: {})
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 30)
+                    .background(theme.card, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.sep, lineWidth: 0.5))
+                Button("Repair Turn") { repairing = turn }
+                    .buttonStyle(.jojo(.primary, compact: true))
+                    .disabled(state.repairBlocked(turn) != nil)
+            }
+            if let reason = state.repairBlocked(turn), turn.repairable, state.link == .connected {
+                DisabledReason(reason)
+            }
+        }
+        .confirmationDialog("Repair \(state.turnNumber(turn.id))?", isPresented: Binding(
+            get: { repairing?.id == turn.id }, set: { if !$0 { repairing = nil } })) {
+            Button("Repair Turn") { actions.repair(turn.id); repairing = nil }
+            Button("Cancel", role: .cancel) { repairing = nil }
+        } message: {
+            Text("\(FeatureChatState.provider(turn.provider)) runs the same \(FeatureChatState.kind(turn.kind).lowercased()) turn again, read-only, and is told why it failed.")
         }
     }
 
@@ -628,6 +696,12 @@ struct FeatureChatView: View {
             Receipt(tone: .info, text: plan.drafted ? "ADR, plan and validation drafted · \(plan.steps.count) steps"
                         : "ADR drafted · the plan follows its approval", link: "Review") { actions.review(plan.adr) }
         }
+        if let failed = turn.repairs {
+            Receipt(tone: .info, text: "Repairs \(state.turnNumber(failed)) on your word")
+        }
+        if let repair = turn.repairedBy {
+            Receipt(tone: .neutral, text: "Repaired by \(state.turnNumber(repair))")
+        }
     }
 
     /// Once the requirements are approved and no plan was drafted: Draft Plan.
@@ -639,8 +713,9 @@ struct FeatureChatView: View {
         }
     }
 
-    /// An open question in the conversation: its number, what it blocks, the prompt and a
-    /// written answer. The board's choices are not built: the core reports none.
+    /// An open question in the conversation: its number, what it blocks, the prompt, the
+    /// lead's choices as radio rows with "Write my own answer" last (1.14), and a written
+    /// answer. A choice only fills in the answer; the answer sent is always the text.
     private func openQuestion(_ question: LeadQuestion) -> some View {
         LeadBubble(highlighted: focused == question.id) {
             HStack(spacing: 8) {
@@ -649,6 +724,18 @@ struct FeatureChatView: View {
             }
             Text(question.prompt).font(.system(size: 15, weight: .semibold)).foregroundStyle(theme.text)
                 .fixedSize(horizontal: false, vertical: true)
+            if !question.choices.isEmpty {
+                let typed = state.answers[question.id] ?? ""
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(question.choices, id: \.self) { choice in
+                        radio(choice, selected: typed == choice) { actions.editAnswer(question.id, choice) }
+                    }
+                    radio("Write my own answer", selected: !typed.isEmpty && !question.choices.contains(typed)) {
+                        if question.choices.contains(typed) { actions.editAnswer(question.id, "") }
+                        focused = question.id
+                    }
+                }
+            }
             HStack(spacing: 8) {
                 LineField(prompt: "Write your answer", size: 13,
                           text: Binding(get: { state.answers[question.id] ?? "" }, set: { actions.editAnswer(question.id, $0) }),
@@ -663,6 +750,21 @@ struct FeatureChatView: View {
                     .disabled(state.answerBlocked(question) != nil)
             }
         }
+    }
+
+    /// One radio row of a question's choices.
+    private func radio(_ label: String, selected: Bool, choose: @escaping () -> Void) -> some View {
+        Button(action: choose) {
+            HStack(spacing: 8) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selected ? theme.accent : theme.text3)
+                Text(label).font(.system(size: 13)).foregroundStyle(theme.text)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -777,7 +879,7 @@ struct FeatureChatView: View {
             assumptionsSection
             decisionsSection
             historySection
-            NoteLine("Suggestions, spikes, a verified state of an assumption, choices for a question and what a question affects are not reported.")
+            NoteLine("Suggestions, spikes, a verified state of an assumption and what a question affects are not reported.")
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)

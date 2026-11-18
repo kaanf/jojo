@@ -83,7 +83,7 @@ final class M2FeatureChatTests: XCTestCase {
         XCTAssertEqual(h.fake.last("ChatIndex")?.minor, 6)
         XCTAssertEqual(h.fake.last("ChatIndex")?.payload, [:])
         model.openChat(ChatRows.feature)
-        XCTAssertEqual(h.fake.last("FeatureChat")?.minor, 8)
+        XCTAssertEqual(h.fake.last("FeatureChat")?.minor, 14, "since 1.14 it carries choices, sessions and repairs")
         model.loadPlans()
         XCTAssertEqual(h.fake.last("ApprovedPlan")?.minor, 1, "a 1.1 query keeps its 1.1 frame")
     }

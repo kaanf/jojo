@@ -317,6 +317,8 @@ struct ApprovalInboxActions {
     var type: (InboxType) -> Void = { _ in }
     /// M5: authorizes (true) or declines (false) one push or pull request request.
     var authorize: (ExternalAction, Bool) -> Void = { _, _ in }
+    /// Protocol 1.14: the other provider's review of a document's revision.
+    var requestReview: (String, Int64) -> Void = { _, _ in }
 }
 
 struct ApprovalInboxScreen: View {
@@ -383,7 +385,8 @@ struct ApprovalInboxScreen: View {
             },
             filter: { filter = $0 },
             type: { type = $0 },
-            authorize: { workspace.decideExternal($0, authorize: $1) })
+            authorize: { workspace.decideExternal($0, authorize: $1) },
+            requestReview: { workspace.reviewDocument($0, revision: $1) })
     }
 }
 
@@ -612,6 +615,12 @@ struct ApprovalInboxView: View {
                     evidenceRow("Questions and answers in Feature Chat") { actions.open(.featureChat) }
                 }
                 .cardElevation(radius: 14)
+            }
+            if let detail = state.detail, detail.id == d.id, ["Prd", "Adr", "ExecutionPlan"].contains(d.kind) {
+                let blocked = Advisory.blocked(link: state.link, commandPending: state.commandPending, offer: detail.advisory)
+                AdvisorySection(offer: detail.advisory, subject: "revision \(detail.revision)", blocked: blocked) {
+                    if blocked == nil { actions.requestReview(detail.id, detail.revision) }
+                }
             }
             decisionBar(d, kind: kind, previous: previous)
         }

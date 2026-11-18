@@ -47,8 +47,16 @@ struct SpecificationsState: Equatable {
     /// Whether the core lists `Document` in its Hello answer.
     var reportsDetail = true
     var now = Date()
+    var commandPending = false
 
     var link: RecoveryCenterState.Link { coreLink(connection) }
+
+    /// Protocol 1.14: a requirements document, decision or plan a lead drafted can be
+    /// reviewed by the other provider; nil when the second opinion is not shown.
+    var reviewable: Bool { ["Prd", "Adr", "ExecutionPlan"].contains(detail?.kind ?? "") }
+    var reviewBlocked: String? {
+        Advisory.blocked(link: link, commandPending: commandPending, offer: detail?.advisory)
+    }
 
     /// The held feature's documents, newest first; every document when none is held.
     var listed: [DocumentSummary] {
@@ -202,6 +210,8 @@ struct SpecificationsActions {
     var approve: () -> Void = {}
     var requestChanges: () -> Void = {}
     var reload: () -> Void = {}
+    /// Protocol 1.14: the other provider's review of the shown revision.
+    var requestReview: () -> Void = {}
 }
 
 struct SpecificationsScreen: View {
@@ -227,7 +237,8 @@ struct SpecificationsScreen: View {
             documents: workspace.documents, review: workspace.review, reviewStale: workspace.reviewStale,
             decisionOutstanding: model.client.outstandingCommands.values.contains("HumanDecision"),
             detail: workspace.document, detailLoad: workspace.documentLoad, comparison: workspace.comparison, mode: mode,
-            reportsDetail: model.client.hello.map { $0.queries.contains("Document") } ?? true)
+            reportsDetail: model.client.hello.map { $0.queries.contains("Document") } ?? true,
+            commandPending: workspace.commandPending)
     }
 
     /// The chosen document's revision and, for Compare, the one before it; a document is
@@ -265,7 +276,11 @@ struct SpecificationsScreen: View {
                 workspace.chatDraft = state.changeRequest
                 open(.featureChat)
             },
-            reload: { read() })
+            reload: { read() },
+            requestReview: {
+                guard state.reviewBlocked == nil, let detail = workspace.document else { return }
+                workspace.reviewDocument(detail.id, revision: detail.revision)
+            })
     }
 }
 
@@ -470,6 +485,10 @@ struct SpecificationsView: View {
         GlassInspector {
             if let detail = state.detail {
                 approvalScope(detail)
+                if state.reviewable {
+                    AdvisorySection(offer: detail.advisory, subject: "revision \(detail.revision)",
+                                    blocked: state.reviewBlocked, request: actions.requestReview)
+                }
                 history(detail)
                 validation(detail)
                 traceability(detail)

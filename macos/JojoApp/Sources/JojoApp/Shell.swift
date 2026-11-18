@@ -161,15 +161,27 @@ struct AppShell<Content: View>: View {
     }
 
     /// Work on hold needs the human; attempts are a plain count; Source Control counts the
-    /// loaded attempt's changed paths outside the write scope.
+    /// loaded attempt's changed paths outside the write scope. Since 1.14 Execution Plan
+    /// counts the plan steps that wait for the human and Feature Chat the held feature's
+    /// questions no human has answered.
     private var counters: [Screen: SidebarCounter] {
-        [.recoveryCenter: SidebarCounter(count: model.workspace.recovery.count, tone: .warn),
+        [.executionPlan: SidebarCounter(count: Int(model.workspace.documents?.stepsWaiting ?? 0), tone: .warn),
+         .featureChat: SidebarCounter(count: SidebarCounts.openQuestions(model.workspace), tone: .info),
+         .recoveryCenter: SidebarCounter(count: model.workspace.recovery.count, tone: .warn),
          .agentRuns: SidebarCounter(count: AgentRunsState.counter(model.workspace.attempts, rows: model.workspace.rows), tone: .neutral),
          .sourceControl: SidebarCounter(count: SourceControlState.violations(in: model.workspace.changedFiles).count, tone: .warn),
          .approvalInbox: SidebarCounter(count: Int(model.workspace.documents?.pending ?? 0), tone: .review),
          .specifications: SidebarCounter(count: SpecificationsState.proposed(model.workspace.documents,
                                                                                scope: FeatureScope(workspace: model.workspace)),
                                          tone: .info)]
+    }
+}
+
+enum SidebarCounts {
+    /// The held feature's open questions, as the documents answer counts them (1.14).
+    @MainActor static func openQuestions(_ workspace: WorkspaceModel) -> Int {
+        guard let feature = workspace.chatFeature else { return 0 }
+        return Int(workspace.documents?.openQuestions[feature] ?? 0)
     }
 }
 

@@ -78,6 +78,12 @@ struct VerificationState: Equatable {
         return pending
     }
 
+    /// Protocol 1.14: why the other provider cannot be asked to review the loaded candidate.
+    var reviewBlocked: String? {
+        if candidate?.candidate == nil { return "No sealed candidate." }
+        return Advisory.blocked(link: link, commandPending: commandPending, offer: detail?.advisory)
+    }
+
     /// The requirements of a seal, met or not, from what the core reports.
     var sealChecks: [(String, Bool, String)] {
         let failed = runs.filter { !$0.passed }.count
@@ -117,6 +123,8 @@ struct VerificationActions {
     var decide: (CandidateAction) -> Void = { _ in }
     var open: (Screen) -> Void = { _ in }
     var export: () -> Void = {}
+    /// Protocol 1.14: the other provider's review of the loaded candidate.
+    var requestReview: () -> Void = {}
 }
 
 struct VerificationScreen: View {
@@ -132,7 +140,11 @@ struct VerificationScreen: View {
             validate: { workspace.validateCandidate() },
             decide: { workspace.decideCandidate($0) },
             open: open,
-            export: { exporting = true }))
+            export: { exporting = true },
+            requestReview: {
+                guard state.reviewBlocked == nil, let c = workspace.candidate, let candidate = c.candidate else { return }
+                workspace.reviewAttempt(c.attempt, candidate: candidate)
+            }))
             .onAppear { if visible { read() } }
             .onChange(of: visible) { if visible { read() } }
             .onChange(of: workspace.snapshotSeq) { if visible { read() } }
@@ -387,6 +399,10 @@ struct VerificationView: View {
                         Text(why).font(.system(size: 11)).foregroundStyle(theme.text2).fixedSize(horizontal: false, vertical: true)
                     }
                 }
+            }
+            if state.candidate != nil {
+                AdvisorySection(offer: state.detail?.advisory, subject: "this candidate", blocked: state.reviewBlocked,
+                                request: actions.requestReview)
             }
             LabeledSection(title: "Seal evidence") {
                 Text("Sealing would make the manifest immutable for this candidate. The core has no seal yet.")

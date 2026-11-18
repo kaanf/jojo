@@ -99,6 +99,59 @@ public struct DocumentFinding: Equatable, Sendable {
     public init(path: String, problem: String) { (self.path, self.problem) = (path, problem) }
 }
 
+/// Protocol 1.14: an advisory review by the provider that did not do the work. Its verdict
+/// approves nothing, rejects nothing and holds nothing back.
+public struct AdvisoryReview: Equatable, Sendable {
+    public let id: String
+    public let provider: String
+    /// `Running`, `Stopping`, `Approved`, `Rejected`, `Failed`, `Cancelled` or `Interrupted`.
+    public let state: String
+    public let notes: String
+    public let objection: String?
+    public let detail: String
+    public let requested: Date?
+    public let finished: Date?
+
+    public var running: Bool { state == "Running" || state == "Stopping" }
+
+    init?(_ p: JSON) {
+        guard let id = p["review"]?.string, let provider = p["provider"]?.string, let state = p["state"]?.string,
+              let notes = p["notes"]?.string, let detail = p["detail"]?.string else { return nil }
+        self.init(id: id, provider: provider, state: state, notes: notes, objection: p["objection"]?.string,
+                  detail: detail, requested: helperDate(p["requested_at_unix_ms"]?.integer),
+                  finished: helperDate(p["finished_at_unix_ms"]?.integer))
+    }
+
+    public init(id: String, provider: String, state: String, notes: String = "", objection: String? = nil,
+                detail: String = "", requested: Date? = nil, finished: Date? = nil) {
+        (self.id, self.provider, self.state, self.notes, self.objection) = (id, provider, state, notes, objection)
+        (self.detail, self.requested, self.finished) = (detail, requested, finished)
+    }
+}
+
+/// Protocol 1.14: the newest advisory review of a subject, whether one may be asked for now,
+/// by whom, and if not, why.
+public struct AdvisoryOffer: Equatable, Sendable {
+    public let review: AdvisoryReview?
+    public let available: Bool
+    public let reviewer: String?
+    public let reason: String?
+
+    init?(_ p: JSON?) {
+        guard let p, let available = p["available"]?.boolean else { return nil }
+        var review: AdvisoryReview?
+        if let value = p["review"], !value.isNull {
+            guard let parsed = AdvisoryReview(value) else { return nil }
+            review = parsed
+        }
+        self.init(review: review, available: available, reviewer: p["reviewer"]?.string, reason: p["reason"]?.string)
+    }
+
+    public init(review: AdvisoryReview? = nil, available: Bool, reviewer: String? = nil, reason: String? = nil) {
+        (self.review, self.available, self.reviewer, self.reason) = (review, available, reviewer, reason)
+    }
+}
+
 /// The answer of `Document`, with its text read to the end.
 public struct DocumentDetail: Equatable, Sendable {
     public let id: String
@@ -121,6 +174,8 @@ public struct DocumentDetail: Equatable, Sendable {
     public var text: String
     /// The whole text was read.
     public var complete: Bool
+    /// Protocol 1.14: the advisory review of this revision; nil from an older helper.
+    public var advisory: AdvisoryOffer?
 
     public init?(_ p: [String: JSON]) {
         guard let id = p["document"]?.string, let kind = p["kind"]?.string, let revision = p["revision"]?.integer,
@@ -142,6 +197,7 @@ public struct DocumentDetail: Equatable, Sendable {
                   } },
                   criteria: p["criteria"]?.items.map { $0.compactMap(DocumentCriterion.init) }, text: text,
                   complete: complete)
+        advisory = AdvisoryOffer(p["advisory"])
     }
 
     public init(id: String, kind: String, title: String? = nil, feature: String? = nil, featureName: String? = nil,
@@ -406,9 +462,13 @@ public struct AttemptDetail: Equatable, Sendable {
     public let validations: [ValidationRunDetail]
     public let executableVersion: String?
     public let evidenceRecords: Int64
+    /// Protocol 1.14: the advisory review of a candidate started by hand; nil from an older
+    /// helper.
+    public var advisory: AdvisoryOffer?
 
     public init?(_ p: [String: JSON]) {
         guard let id = p["attempt"]?.string else { return nil }
+        defer { advisory = AdvisoryOffer(p["advisory"]) }
         let strings = { (name: String) in (p[name]?.items ?? []).compactMap(\.string) }
         self.init(id: id, key: p["key"]?.string, title: p["title"]?.string, plan: p["plan"]?.string,
                   featureName: p["feature_name"]?.string, ordinal: p["ordinal"]?.integer,
@@ -458,6 +518,7 @@ public struct AttemptDetail: Equatable, Sendable {
         a.id == b.id && a.events == b.events && a.validations == b.validations && a.pid == b.pid
             && a.candidateHead == b.candidateHead && a.heartbeat == b.heartbeat
             && a.claims.map(\.resource) == b.claims.map(\.resource) && a.claims.map(\.state) == b.claims.map(\.state)
+            && a.advisory == b.advisory
     }
 }
 
@@ -568,6 +629,30 @@ extension WorkspaceModel {
             }
             self.onChange?()
         }
+    }
+
+    /// Protocol 1.14: asks the other provider to review the sealed candidate of an attempt
+    /// started by hand. The verdict decides nothing; the attempt detail shows it.
+    public func reviewAttempt(_ attempt: String, candidate: String) {
+        guard Identity.valid(attempt) else { return }
+        slice(.ReviewAttempt, ["attempt": .text(attempt), "candidate": .text(candidate)],
+              sent: "Review request sent; awaiting acknowledgement") { [weak self] p in
+            self?.attemptDetailKey = ""
+            self?.loadAttemptDetail(attempt)
+            return "Review \(p["review"]?.string ?? "?") accepted (\(p["dispatch"]?.string ?? "?")); it decides nothing"
+        } refused: { "Review refused (\($0)); nothing was run" }
+    }
+
+    /// Protocol 1.14: asks the provider that did not draft it to review one revision of a
+    /// document. The verdict holds nothing back; the document detail shows it.
+    public func reviewDocument(_ document: String, revision: Int64) {
+        guard Identity.valid(document) else { return }
+        slice(.ReviewDocument, ["document": .text(document), "revision": .int(revision)],
+              sent: "Review request sent; awaiting acknowledgement") { [weak self] p in
+            self?.documentKey = ""
+            self?.loadDocument(document, revision: revision)
+            return "Review \(p["review"]?.string ?? "?") accepted (\(p["dispatch"]?.string ?? "?")); it holds nothing back"
+        } refused: { "Review refused (\($0)); nothing was run" }
     }
 
     /// Protocol 1.9: one attempt beyond `Attempts`. Read by Agent Runs, Source Control and

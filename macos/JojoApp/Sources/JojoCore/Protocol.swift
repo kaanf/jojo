@@ -22,6 +22,7 @@ public enum Request: String, CaseIterable, Sendable {
     case RecoveryDetail, ProjectDetail
     case BriefTurn, Workspace
     case RetryPlanStep
+    case RepairTurn, ReviewAttempt, ReviewDocument
 
     public var fields: [String] {
         switch self {
@@ -81,6 +82,9 @@ public enum Request: String, CaseIterable, Sendable {
         case .BriefTurn: return ["repository", "provider", "message"]
         case .Workspace: return []
         case .RetryPlanStep: return ["plan", "step", "attempt", "action", "note"]
+        case .RepairTurn: return ["turn", "note"]
+        case .ReviewAttempt: return ["attempt", "candidate"]
+        case .ReviewDocument: return ["document", "revision"]
         }
     }
 
@@ -104,14 +108,20 @@ public enum Request: String, CaseIterable, Sendable {
     /// repositories carry their briefs and the documents answer lists the briefs, so
     /// `ProjectDetail` and `Documents` are read there. The retry of a held plan step exists
     /// only from 1.13 (M6), and at 1.13 a plan detail step says how it can be started again,
-    /// so `PlanDetail` is read there.
+    /// so `PlanDetail` is read there. The repair of a lead turn and the two advisory reviews
+    /// exist only from 1.14 (follow-ups), and at 1.14 the documents answer counts the waiting
+    /// plan steps and open questions (the sidebar counters), a feature chat carries choices,
+    /// sessions and repairs, and the attempt and document details their advisory review, so
+    /// those four are read there.
     public var minor: Int64 {
         let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText]
         let runner: [Request] = [.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun]
         let external: [Request] = [.ExternalActions, .RequestExternal, .AuthorizeExternal, .InspectExternal,
                                    .ResolveExternal]
+        if [.RepairTurn, .ReviewAttempt, .ReviewDocument, .Documents, .FeatureChat, .AttemptDetail,
+            .Document].contains(self) { return 14 }
         if [.RetryPlanStep, .PlanDetail].contains(self) { return 13 }
-        if [.BriefTurn, .Workspace, .ProjectDetail, .Documents].contains(self) { return 12 }
+        if [.BriefTurn, .Workspace, .ProjectDetail].contains(self) { return 12 }
         if self == .RecoveryDetail { return 11 }
         if external.contains(self) { return 10 }
         if [.Document, .Decisions, .PlanDetail, .AttemptDetail].contains(self) { return 9 }

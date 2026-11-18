@@ -67,7 +67,7 @@ final class S5FeatureChatTests: XCTestCase {
         let old = try XCTUnwrap(FeatureChatPage(ChatRows.page([ChatRows.turn(1)])))
         XCTAssertNil(old.assumptions)
         XCTAssertNil(old.turns[0].started)
-        XCTAssertEqual(Request.FeatureChat.minor, 8)
+        XCTAssertEqual(Request.FeatureChat.minor, 14)
     }
 
     func test_s5_the_chat_names_the_feature_dates_its_rounds_and_runs_on_the_project_provider() {

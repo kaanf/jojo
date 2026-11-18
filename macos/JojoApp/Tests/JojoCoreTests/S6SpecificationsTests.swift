@@ -127,7 +127,7 @@ final class S6SpecificationsTests: XCTestCase {
         XCTAssertEqual(detail.counts?["acceptance_criteria"], 2)
         XCTAssertEqual(detail.criteria?.first?.useCases, ["UC-1"])
         XCTAssertEqual(detail.downstream.first?.kind, "Adr")
-        XCTAssertEqual(Request.Document.minor, 9)
+        XCTAssertEqual(Request.Document.minor, 14)
         XCTAssertEqual(Request.Document.fields, ["document", "revision", "offset"])
         XCTAssertNil(DocumentDetail(["document": .text("x")]), "an answer without its fields is not a document")
     }
