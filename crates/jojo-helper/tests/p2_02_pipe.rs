@@ -175,7 +175,7 @@ fn p2_02_real_pipe_negotiates_1_1_and_keeps_1_0_clients_on_1_0() {
         "UnknownType"
     );
     // A later minor is diagnostics only.
-    let newer = p.send(11, "Hello", object([]));
+    let newer = p.send(12, "Hello", object([]));
     assert_eq!(
         get(&newer.payload, "compatible").unwrap(),
         &Json::Bool(false)

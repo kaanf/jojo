@@ -72,6 +72,8 @@ pub enum RequestKind {
     AuthorizeExternal,
     InspectExternal,
     ResolveExternal,
+    RecoveryDetail,
+    ProjectDetail,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,7 +136,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 53] = [
+pub const SPECS: [Spec; 55] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -188,6 +190,8 @@ pub const SPECS: [Spec; 53] = [
     spec(K::AuthorizeExternal, "AuthorizeExternal", Mutation, 10, false, Exact, &["action", "digest", "decision"]),
     spec(K::InspectExternal, "InspectExternal", Mutation, 10, false, Exact, &["action"]),
     spec(K::ResolveExternal, "ResolveExternal", Mutation, 10, false, Exact, &["action"]),
+    spec(K::RecoveryDetail, "RecoveryDetail", Query, 11, false, Exact, &[]),
+    spec(K::ProjectDetail, "ProjectDetail", Query, 11, false, Exact, &["project"]),
 ];
 
 impl RequestKind {
@@ -479,6 +483,19 @@ impl ExternalActionsQuery {
                 Json::Null => None,
                 v => Some(ArtifactId(id(v)?)),
             },
+        })
+    }
+}
+
+/// Protocol 1.11: what the core derives about one project's repositories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectDetailQuery {
+    pub project: OpaqueId,
+}
+impl ProjectDetailQuery {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            project: id(get(p, "project")?)?,
         })
     }
 }
@@ -1121,7 +1138,8 @@ mod tests {
         // 1.7: the features query, after everything 1.6 knows.
         // 1.9: the document, decision, plan and attempt detail queries (1.8 added none).
         // 1.10 (M5): the external actions query and its four commands.
-        for minor in [3, 4, 5, 6, 7, 8, 9, 10, 11] {
+        // 1.11: the recovery detail and project detail queries.
+        for minor in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
             let v110 = if minor >= 10 {
                 " RequestExternal AuthorizeExternal InspectExternal ResolveExternal"
             } else {
@@ -1145,9 +1163,14 @@ mod tests {
                 ""
             };
             let v110q = if minor >= 10 { " ExternalActions" } else { "" };
+            let v111 = if minor >= 11 {
+                " RecoveryDetail ProjectDetail"
+            } else {
+                ""
+            };
             assert_eq!(
                 names(Query, minor),
-                format!("{v12_queries} Projects PlanRun{v14}{v15}{v16}{v17}{v19}{v110q}")
+                format!("{v12_queries} Projects PlanRun{v14}{v15}{v16}{v17}{v19}{v110q}{v111}")
             );
         }
         assert_eq!(RequestKind::of_frame("Executables", 3), None);
@@ -1162,6 +1185,11 @@ mod tests {
             Some(K::AttemptDetail)
         );
         assert_eq!(RequestKind::of_frame("ExternalActions", 9), None);
+        assert_eq!(RequestKind::of_frame("RecoveryDetail", 10), None);
+        assert_eq!(
+            RequestKind::of_frame("ProjectDetail", 11),
+            Some(K::ProjectDetail)
+        );
         assert_eq!(
             RequestKind::of_frame("AuthorizeExternal", 10),
             Some(K::AuthorizeExternal)

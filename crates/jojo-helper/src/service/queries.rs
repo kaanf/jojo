@@ -41,7 +41,9 @@ impl Service {
             RequestKind::Events => {
                 let q = protocol::EventsQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_events(q.after, q.limit, e.minor >= 6, e.minor >= 7))
+                    .read(|v| {
+                        v.ipc_events(q.after, q.limit, e.minor >= 6, e.minor >= 7, e.minor >= 11)
+                    })
                     .map_err(|e| e.to_string())
             }
             RequestKind::EventDetail => {
@@ -195,6 +197,16 @@ impl Service {
                 let q = protocol::AttemptDetailQuery::parse(p)?;
                 reader
                     .read(|v| v.ipc_attempt_detail(q.attempt))
+                    .map_err(|e| e.to_string())
+            }
+            // Protocol 1.11: the inspection this helper holds, with what it derives.
+            RequestKind::RecoveryDetail => {
+                if !kind.shaped(p) {
+                    return Err("InvalidPayload: unexpected or missing fields".into());
+                }
+                let (inspection, at) = (&self.recovery, self.recovery_at);
+                reader
+                    .read(|v| v.ipc_recovery_detail(inspection, at))
                     .map_err(|e| e.to_string())
             }
             _ => unreachable!("not a snapshot query: {kind:?}"),
@@ -361,6 +373,14 @@ impl Service {
             ("digest", text(self.recovery.digest())),
             ("rows", Json::List(rows)),
         ]))
+    }
+    /// Protocol 1.11: what the core derives about one project's repositories.
+    pub(super) fn project_detail(&mut self, e: &Envelope) -> Result<Json, String> {
+        if !RequestKind::ProjectDetail.shaped(&e.payload) {
+            return Err("InvalidPayload: unexpected or missing fields".into());
+        }
+        let q = protocol::ProjectDetailQuery::parse(&e.payload)?;
+        jojo_storage::project_detail(&self.engine, q.project)
     }
     /// Protocol 1.1: a fresh inspection; its digest binds the next resolution.
     pub(super) fn recovery_inspect(&mut self) -> Result<Json, String> {

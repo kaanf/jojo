@@ -66,6 +66,7 @@ pub struct Engine {
     jobs: Option<mpsc::Sender<Job>>,
     writer_thread: Option<JoinHandle<()>>,
     report: StartupReport,
+    clock: Arc<dyn Clock>,
     lock: OwnershipLock,
 }
 
@@ -81,6 +82,7 @@ impl Engine {
             recognise(conn, &config.migrations).map(drop)
         })?;
         let migration = migrate(&conn, lock.db_path(), &config.migrations)?;
+        let clock = config.clock.clone();
         let (writer, epoch) =
             Writer::establish(conn, config.clock, config.faults, migration.to_version)?;
         lock.describe_owner(&format!(
@@ -106,8 +108,14 @@ impl Engine {
                 migration,
                 sqlite_version_number: library_version_number(),
             },
+            clock,
             lock,
         })
+    }
+
+    /// The time on the clock this engine records events with (the injected one in tests).
+    pub fn now_unix_ms(&self) -> i64 {
+        self.clock.now().unix_millis
     }
 
     pub fn epoch(&self) -> EngineEpoch {

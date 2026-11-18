@@ -165,8 +165,8 @@ fn record(h: &mut H) {
     h.at("hello 1.0", 0, "Hello", object([]));
     // A frame newer than the helper (1.2 until protocol 1.2 existed, 1.3 since M2, 1.5
     // since D3, 1.7 since 1.6, 1.8 since 1.7, 1.9 since 1.8, 1.10 since 1.9, 1.11 since
-    // 1.10).
-    h.at("hello 1.11", 11, "Hello", object([("junk", n(1))]));
+    // 1.10, 1.12 since 1.11).
+    h.at("hello 1.12", 12, "Hello", object([("junk", n(1))]));
     h.send(
         "close command while incompatible",
         "CancelClose",
@@ -1296,6 +1296,33 @@ fn record(h: &mut H) {
         "Documents",
         object([("before", Json::Null)]),
     );
+    // 1.11: recovery detail, project detail, and events with a category and a project.
+    h.at("recovery detail at 1.10", 10, "RecoveryDetail", object([]));
+    h.at("recovery detail", 11, "RecoveryDetail", object([]));
+    h.at(
+        "recovery detail with a field",
+        11,
+        "RecoveryDetail",
+        object([("x", n(1))]),
+    );
+    h.at(
+        "project detail unknown",
+        11,
+        "ProjectDetail",
+        object([("project", hex(41))]),
+    );
+    h.at(
+        "project detail without project",
+        11,
+        "ProjectDetail",
+        object([]),
+    );
+    h.at(
+        "events at 1.11",
+        11,
+        "Events",
+        object([("after", n(0)), ("limit", n(2))]),
+    );
 }
 
 #[test]
@@ -1312,7 +1339,7 @@ fn r01_every_recorded_frame_is_answered_exactly_as_before_typed_messages() {
 const EXPECTED: &str = r#"
 snapshot before hello => 1.1 Error {"code":"HandshakeRequired"}
 hello 1.0 => 1.0 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision","compatible":true,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery","slice":false}
-hello 1.11 => 1.10 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan RequestExternal AuthorizeExternal InspectExternal ResolveExternal","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features Document Decisions PlanDetail AttemptDetail ExternalActions","slice":true}
+hello 1.12 => 1.11 Response {"admission":"closed until reviewed recovery start","commands":"PrepareClose CancelClose ConfirmClose CancelAttempt HumanDecision RegisterRepository ImportBundle Start RecoveryResolve RecoveryStart Validate CandidateDecision ChatTurn AnswerQuestion CancelTurn SaveProject RunPlan ControlPlan RequestExternal AuthorizeExternal InspectExternal ResolveExternal","compatible":false,"epoch":1,"max_frame":65536,"max_page":8,"queries":"Snapshot Events EventDetail Log Receipt CloseStatus ReviewBundle ShutdownReceipt Recovery RecoveryInspect Candidate CandidateChanges CandidateDiff ValidationReport ApprovedPlan FeatureChat ChatText ChatIndex Projects PlanRun Executables Repairs Attempts Documents Features Document Decisions PlanDetail AttemptDetail ExternalActions RecoveryDetail ProjectDetail","slice":true}
 close command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 decision while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}
 slice command while incompatible => 1.1 Error {"code":"ProtocolMismatch: diagnostics only"}

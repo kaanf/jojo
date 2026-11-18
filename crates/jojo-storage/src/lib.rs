@@ -83,6 +83,7 @@ mod projects;
 mod runner;
 pub use runner::*;
 mod details;
+pub use details::project_detail;
 mod features;
 mod overview;
 mod repairs;

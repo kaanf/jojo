@@ -233,6 +233,45 @@ pub fn repository_head(repository: &LocalRepository) -> IoResult<String> {
     }
 }
 
+/// Protocol 1.11: a registered repository as Projects shows it right now, read with the
+/// same local Git as everything else and writing nothing.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RepositoryState {
+    /// Why the repository could not be read, or its identity no longer matches.
+    pub problem: Option<String>,
+    /// The commit HEAD names; `None` when it names none.
+    pub head: Option<String>,
+    /// The branch HEAD is on; `None` when HEAD is detached.
+    pub branch: Option<String>,
+    /// The configured URL of `origin`; nothing is read from the remote.
+    pub origin: Option<String>,
+}
+
+pub fn repository_state(path: &Path, id: RepositoryId) -> RepositoryState {
+    let repository = match LocalRepository::inspect(path) {
+        Ok(r) if r.id == id => r,
+        Ok(_) => {
+            return RepositoryState {
+                problem: Some("repository identity changed".into()),
+                ..RepositoryState::default()
+            };
+        }
+        Err(why) => {
+            return RepositoryState {
+                problem: Some(why),
+                ..RepositoryState::default()
+            };
+        }
+    };
+    let read = |args: &[&str]| git(&repository.path, args, None).and_then(line).ok();
+    RepositoryState {
+        problem: None,
+        head: read(&["rev-parse", "--verify", "HEAD^{commit}"]).filter(|h| oid(h)),
+        branch: read(&["symbolic-ref", "--quiet", "--short", "HEAD"]).filter(|b| !b.is_empty()),
+        origin: read(&["config", "--get", "remote.origin.url"]).filter(|u| !u.is_empty()),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorktreeRoot {
     path: PathBuf,

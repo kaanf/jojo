@@ -249,13 +249,15 @@ impl ReadView<'_> {
     /// Events use a bounded detail projection, explicitly marked when the detail needs a
     /// separate chunk query. Sequence/aggregate identity are never omitted. `attributed`
     /// (protocol 1.6) adds the time an event was recorded and who caused it; `summarized`
-    /// (1.7) adds a sentence that says what it recorded.
+    /// (1.7) adds a sentence that says what it recorded; `categorized` (1.11) its category
+    /// and the project it concerns.
     pub fn ipc_events(
         &self,
         after: u64,
         limit: u32,
         attributed: bool,
         summarized: bool,
+        categorized: bool,
     ) -> Result<Json, StorageError> {
         if limit == 0 || limit > 8 {
             return Err(bad("invalid event page"));
@@ -274,6 +276,29 @@ impl ReadView<'_> {
                 )?)
             } else {
                 None
+            };
+            let categories = if categorized {
+                let project =
+                    crate::features::event_project(self.conn, seq, ai.as_deref(), &payload)?;
+                vec![
+                    (
+                        "category".to_owned(),
+                        text(crate::features::event_category(&kind, &payload)),
+                    ),
+                    (
+                        "project".to_owned(),
+                        match &project {
+                            Some((id, _)) => crate::overview::identity_text(id)?,
+                            None => Json::Null,
+                        },
+                    ),
+                    (
+                        "project_name".to_owned(),
+                        project.map_or(Json::Null, |(_, name)| text(name)),
+                    ),
+                ]
+            } else {
+                Vec::new()
             };
             let Json::Object(mut fields) = object([
                 ("seq", Json::Int(seq)),
@@ -295,6 +320,7 @@ impl ReadView<'_> {
             if let Some(summary) = summary {
                 fields.push(("summary".into(), text(summary)));
             }
+            fields.extend(categories);
             out.push(Json::Object(fields));
         }
         Ok(Json::List(out))

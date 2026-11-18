@@ -19,7 +19,9 @@ pub const MAJOR: i64 = 1;
 /// 1.9 adds the document, decisions, plan detail and attempt detail queries.
 /// 1.10 (M5) adds the external actions query and the push and pull request commands; at
 /// 1.10 the documents answer lists the external requests that wait.
-pub const MINOR: i64 = 10;
+/// 1.11 adds the recovery detail and project detail queries; at 1.11 an event carries a
+/// category and the project it concerns.
+pub const MINOR: i64 = 11;
 pub const MAX_FRAME: usize = 64 * 1024;
 pub const MAX_PAGE: u32 = 8;
 

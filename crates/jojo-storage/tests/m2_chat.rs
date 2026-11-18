@@ -2802,3 +2802,157 @@ fn m5_an_ssh_or_missing_origin_is_refused_before_anything_is_recorded() {
     assert!(items(field(&h.external(&plan), &["actions"])).is_empty());
     assert_eq!(h.events_of("ExternalActionRequested"), 0);
 }
+
+// ---- Step 6 (protocol 1.11): project detail and events with a category and a project ----
+
+impl H {
+    fn project_detail(&mut self) -> Json {
+        let r = self.at(
+            11,
+            "ProjectDetail",
+            object([("project", identity(OpaqueId(3001)))]),
+        );
+        assert_eq!(r.kind, "Response", "{:?}", r.payload);
+        r.payload
+    }
+}
+
+fn texts_of(v: &Json) -> Vec<String> {
+    items(v)
+        .iter()
+        .map(|t| string(t).unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn s6_project_detail_reads_branch_head_worktrees_origin_and_what_is_missing() {
+    let mut h = H::new();
+    let _plan = h.finished_plan();
+    let d = h.project_detail();
+    assert_eq!(str_of(&d, &["name"]), "Sample");
+    let repos = items(field(&d, &["repositories"])).to_vec();
+    assert_eq!(repos.len(), 1);
+    let repo = &repos[0];
+    assert_eq!(str_of(repo, &["branch"]), "main");
+    assert_eq!(str_of(repo, &["head"]), h.git_out(&["rev-parse", "HEAD"]));
+    // The plan's one attempt owned a worktree; it is sealed, so none is active.
+    assert!(uint(field(repo, &["worktrees"])).unwrap() >= 1);
+    assert_eq!(field(repo, &["active_worktrees"]), &number(0));
+    // Without origin nothing can be pushed: the repository is not healthy and the project
+    // says what it lacks. The record has a test command and no CI command.
+    assert_eq!(field(repo, &["origin"]), &Json::Null);
+    assert_eq!(field(repo, &["healthy"]), &Json::Bool(false));
+    let missing = |d: &Json| -> Vec<String> {
+        items(field(d, &["missing"]))
+            .iter()
+            .map(|m| str_of(m, &["text"]).to_owned())
+            .collect()
+    };
+    let name = str_of(repo, &["name"]).to_owned();
+    assert_eq!(
+        missing(&d),
+        [
+            "No CI command is recorded".to_owned(),
+            format!("{name}: No origin remote: push and pull request are not possible"),
+        ]
+    );
+    // A file origin is healthy.
+    h.origin();
+    let d = h.project_detail();
+    let repo = items(field(&d, &["repositories"]))[0].clone();
+    assert_eq!(str_of(&repo, &["origin_kind"]), "File");
+    assert_eq!(field(&repo, &["healthy"]), &Json::Bool(true));
+    assert_eq!(texts_of(field(&repo, &["issues"])), Vec::<String>::new());
+    assert_eq!(missing(&d), ["No CI command is recorded"]);
+    // A user name and password in the URL never leave the core.
+    git(
+        &h.repository,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://someone:secret@github.com/someone/sample.git",
+        ],
+    );
+    let d = h.project_detail();
+    let repo = items(field(&d, &["repositories"]))[0].clone();
+    assert_eq!(
+        str_of(&repo, &["origin"]),
+        "https://github.com/someone/sample.git"
+    );
+    assert_eq!(str_of(&repo, &["origin_kind"]), "Https");
+    assert!(!encode(&d).contains("secret"));
+    // An SSH origin is refused by M5, and said so here.
+    git(
+        &h.repository,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "git@github.com:someone/sample.git",
+        ],
+    );
+    let d = h.project_detail();
+    let repo = items(field(&d, &["repositories"]))[0].clone();
+    assert_eq!(str_of(&repo, &["origin_kind"]), "Ssh");
+    assert_eq!(
+        texts_of(field(&repo, &["issues"])),
+        ["origin is an SSH URL: Jojo pushes over HTTPS only"]
+    );
+    // An unknown project is null; a frame before 1.11 does not know the query.
+    let r = h.at(
+        11,
+        "ProjectDetail",
+        object([("project", identity(OpaqueId(3999)))]),
+    );
+    assert_eq!(r.payload, Json::Null);
+    let r = h.at(
+        10,
+        "ProjectDetail",
+        object([("project", identity(OpaqueId(3001)))]),
+    );
+    assert_eq!(str_of(&r.payload, &["code"]), "UnknownType");
+}
+
+#[test]
+fn s6_events_at_1_11_carry_a_category_and_the_project_they_concern() {
+    let mut h = H::new();
+    let _plan = h.finished_plan();
+    let events = h.all_events(11);
+    for e in &events {
+        assert!(!str_of(e, &["category"]).is_empty(), "{e:?}");
+        assert!(matches!(field(e, &["project"]), Json::Null | Json::Text(_)));
+    }
+    let first = |kind: &str| {
+        events
+            .iter()
+            .find(|e| str_of(e, &["type"]) == kind)
+            .unwrap_or_else(|| panic!("no {kind}"))
+            .clone()
+    };
+    let started = first("EngineStarted");
+    assert_eq!(str_of(&started, &["category"]), "Session");
+    assert_eq!(field(&started, &["project"]), &Json::Null);
+    for (kind, category) in [
+        ("HumanDecision", "Approval"),
+        ("PlanStepIntegrated", "Git"),
+        ("CandidateAccepted", "Decision"),
+        ("ProjectSaved", "Setup"),
+    ] {
+        let e = first(kind);
+        assert_eq!(str_of(&e, &["category"]), category, "{kind}");
+        assert_eq!(str_of(&e, &["project_name"]), "Sample", "{kind}");
+        assert_eq!(field(&e, &["project"]), &identity(OpaqueId(3001)), "{kind}");
+    }
+    // Before 1.11 an event has neither.
+    for e in h.all_events(10) {
+        let Json::Object(fields) = e else {
+            panic!("an event is an object")
+        };
+        assert!(
+            !fields
+                .iter()
+                .any(|(k, _)| k == "category" || k == "project")
+        );
+    }
+}

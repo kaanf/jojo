@@ -422,6 +422,8 @@ pub struct Service {
     compatible: bool,
     finalized: bool,
     recovery: RecoveryInspection,
+    /// When `recovery` was inspected, on the engine's clock (protocol 1.11).
+    recovery_at: i64,
     config: ServiceConfig,
     /// Budget of the host validation command. Fixed in production; tests shorten it.
     pub validation_budget: ValidationBudget,
@@ -553,6 +555,7 @@ impl Service {
             .map_or_else(OsProcessInspector::default, |ps| OsProcessInspector { ps });
         // Inspection never opens admission or adopts/signals old processes.
         let recovery = inspect_recovery(&engine, &inspector, &|_| None)?;
+        let recovery_at = engine.now_unix_ms();
         Ok(Self {
             engine,
             ids,
@@ -563,6 +566,7 @@ impl Service {
             compatible: false,
             finalized: false,
             recovery,
+            recovery_at,
             config,
             validation_budget: ValidationBudget::DEFAULT,
             guard: None,
@@ -643,6 +647,7 @@ impl Service {
             .clone()
             .map_or_else(OsProcessInspector::default, |ps| OsProcessInspector { ps });
         self.recovery = inspect_recovery(&self.engine, &inspector, &|_| None)?;
+        self.recovery_at = self.engine.now_unix_ms();
         Ok(())
     }
     pub fn launch(
@@ -769,6 +774,11 @@ impl Service {
             RequestKind::ExternalActions => {
                 drop(reader);
                 self.external_actions(e)
+            }
+            // Protocol 1.11: reads Git after the read snapshot is released.
+            RequestKind::ProjectDetail => {
+                drop(reader);
+                self.project_detail(e)
             }
             RequestKind::Candidate
             | RequestKind::CandidateChanges

@@ -1033,6 +1033,112 @@ fn r01_recovery_rows_carry_the_assessment_as_structured_fields_for_1_1_only() {
     assert!(assessment.ends_with("choices: [Hold] }"), "{assessment}");
 }
 
+#[test]
+fn s6_recovery_detail_counts_the_inspection_and_lists_each_fact_and_what_was_resolved() {
+    let mut h = H::new();
+    let hooks: Hooks = Box::new(|| LaunchHooks {
+        after_issue: Some(Box::new(|| panic!("helper killed between issue and spawn"))),
+        ..LaunchHooks::default()
+    });
+    h.open(Some(h.codex()), Some(ps()), Some(hooks));
+    let repository = h.register();
+    h.import_and_approve(&repository, "Codex");
+    h.open_admission();
+    assert_eq!(dispatch(&h.start(900)), "launched");
+    until(|| h.s().workers.reap());
+    h.crash(Some(ps()));
+
+    // Before 1.11 the query does not exist.
+    assert_eq!(
+        code(&h.frame(5_100, 10, "RecoveryDetail", object([]))),
+        "UnknownType"
+    );
+    assert_eq!(
+        code(&h.frame(5_101, 11, "RecoveryDetail", object([("x", number(1))]))),
+        "InvalidPayload: unexpected or missing fields"
+    );
+    let detail = |h: &mut H, request: u128| {
+        let r = h.frame(request, 11, "RecoveryDetail", object([]));
+        assert_eq!(r.kind, "Response", "{:?}", r.payload);
+        r.payload
+    };
+    let (digest, subjects) = h.inspect();
+    assert_eq!(subjects, 1);
+    let d = detail(&mut h, 5_102);
+    // The same inspection the resolution binds, with the time it ran.
+    assert_eq!(string(get(&d, "digest").unwrap()).unwrap(), digest);
+    assert!(uint(get(&d, "inspected_at_unix_ms").unwrap()).is_ok());
+    let counts = get(&d, "counts").unwrap();
+    let count = |k: &str| uint(get(counts, k).unwrap()).unwrap();
+    assert_eq!(count("examined"), 1);
+    assert!(count("worktrees_intact") <= count("worktrees"));
+    for k in [
+        "snapshot_mismatches",
+        "unknown_effects",
+        "stale_approvals",
+        "evidence_gaps",
+        "claims",
+    ] {
+        assert!(uint(get(counts, k).unwrap()).is_ok(), "{k}");
+    }
+    let Json::List(rows) = get(&d, "subjects").unwrap() else {
+        panic!("subjects is a list")
+    };
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(get(row, "attempt").unwrap(), &identity(OpaqueId(900)));
+    // Killed between issue and spawn: no root identity was registered.
+    assert_eq!(
+        string(get(row, "stage").unwrap()).unwrap(),
+        "IssuedWithoutIdentity"
+    );
+    let state = |k: &str| {
+        string(get(get(row, k).unwrap(), "state").unwrap())
+            .unwrap()
+            .to_owned()
+    };
+    assert!(["Intact", "NotCreated", "Changed", "Problem"].contains(&state("worktree").as_str()));
+    assert!(["Matches", "Mismatch", "None"].contains(&state("snapshot").as_str()));
+    assert!(["Recorded", "NotRecorded", "Unsupported"].contains(&state("session").as_str()));
+    for k in [
+        "processes",
+        "evidence_gaps",
+        "stale_approvals",
+        "unknown_effects",
+        "claims",
+    ] {
+        assert!(matches!(get(row, k).unwrap(), Json::List(_)), "{k}");
+    }
+    // The assessment as the 1.1 Recovery row carries it.
+    assert_eq!(
+        get(row, "choices").unwrap(),
+        &Json::List(vec![text("Hold")])
+    );
+    assert_eq!(get(&d, "settled").unwrap(), &Json::List(vec![]));
+
+    // A resolution of this session is listed with its choice and time.
+    let held = h.send(
+        "RecoveryResolve",
+        object([
+            ("digest", text(&digest)),
+            ("attempt", identity(OpaqueId(900))),
+            ("choice", text("Hold")),
+        ]),
+    );
+    assert_eq!(held.kind, "Response", "{:?}", held.payload);
+    let d = detail(&mut h, 5_103);
+    let Json::List(settled) = get(&d, "settled").unwrap() else {
+        panic!("settled is a list")
+    };
+    assert_eq!(settled.len(), 1);
+    assert_eq!(string(get(&settled[0], "choice").unwrap()).unwrap(), "HOLD");
+    assert_eq!(
+        get(&settled[0], "attempt").unwrap(),
+        &identity(OpaqueId(900))
+    );
+    assert!(uint(get(&settled[0], "at_unix_ms").unwrap()).is_ok());
+}
+
 // M1: the same slice with a Claude Code step. "Claude Code" is the same private fixture
 // executable, which speaks the Claude Code stream dialect when it is launched with the
 // Claude Code argument vector. The installed CLI is never named, located or executed.

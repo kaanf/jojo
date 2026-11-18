@@ -3,7 +3,9 @@
 //! attempts, its repository and project, its host validation and its newest provider
 //! record. Read-only and derived from what the core already records; nothing is stored.
 use crate::model::{id_from_text, to_db};
-use crate::overview::{approval_state, cut, feature_name, identity_text, optional, time_of};
+use crate::overview::{
+    approval_state, cut, document_feature, feature_name, identity_text, optional, time_of,
+};
 use crate::sqlite::{Connection, Value};
 use crate::validation::{ValidationState, rejected, state};
 use crate::{ReadView, StorageError};
@@ -58,7 +60,7 @@ fn counted(n: usize, word: &str) -> String {
 }
 
 /// The last component of a repository's path.
-fn repository_name(path: &str) -> String {
+pub(crate) fn repository_name(path: &str) -> String {
     let trimmed = path.trim_end_matches('/');
     trimmed.rsplit('/').next().unwrap_or(trimmed).to_owned()
 }
@@ -250,7 +252,7 @@ fn step_label(c: &Connection, step: &str) -> Result<String, StorageError> {
 }
 
 /// "T4 · attempt 2", or "Attempt 2" without a key; `None` for an unknown attempt.
-fn attempt_label(c: &Connection, attempt: &str) -> Result<Option<String>, StorageError> {
+pub(crate) fn attempt_label(c: &Connection, attempt: &str) -> Result<Option<String>, StorageError> {
     let row = c.query_optional(
         "SELECT a.step, (SELECT key FROM lead_plan_steps WHERE step=a.step LIMIT 1)
          FROM scheduler_attempts a WHERE a.attempt=?1",
@@ -556,6 +558,151 @@ pub(crate) fn event_summary(
         },
     };
     Ok(cut(&sentence))
+}
+
+/// Protocol 1.11: the kind of thing an event recorded, as Activity & Audit filters it:
+/// `Session`, `Attempt`, `Recovery`, `Validation`, `Decision`, `Approval`, `Git`,
+/// `Evidence`, `Chat`, `Document`, `Plan`, `Setup`, `Error` or `Core`.
+pub(crate) fn event_category(kind: &str, payload: &str) -> &'static str {
+    let starts = |prefixes: &[&str]| prefixes.iter().any(|p| kind.starts_with(p));
+    match kind {
+        "EngineStopped" if payload.contains("UNCLEAN") => "Error",
+        "PlanStepRefused" | "WorktreeBlocked" | "NotReady" | "SchedulerNotStarted" => "Error",
+        "ExternalActionObserved" if payload.contains("REJECTED") => "Error",
+        "HumanDecision"
+        | "ExternalActionRequested"
+        | "ExternalActionAuthorized"
+        | "ExternalActionDeclined"
+        | "PermissionRequested" => "Approval",
+        "CandidateAccepted"
+        | "CandidateRejected"
+        | "QuestionAnswered"
+        | "QuestionDispositionChanged"
+        | "StepQuestionAnswered"
+        | "StepQuestionDispositionChanged"
+        | "PlanRunControl"
+        | "SchedulerControl" => "Decision",
+        "PlanStepIntegrated" | "LocalRepositoryRegistered" => "Git",
+        "ContinuationPlanRecorded" => "Recovery",
+        "ProjectSaved" | "ResourceConfigurationChanged" => "Setup",
+        "ArtifactVersionCreated"
+        | "ReviewDocumentCreated"
+        | "ExecutionPlanCreated"
+        | "ValidationPlanStored" => "Document",
+        "UsageObserved" | "EffectObserved" => "Attempt",
+        _ if starts(&["Engine", "Shutdown", "CloseTicket", "AdmissionClosed"]) => "Session",
+        _ if starts(&["Recovery", "AttemptRecovery"]) => "Recovery",
+        _ if starts(&["Validation", "StepReview", "Review"]) => "Validation",
+        _ if starts(&["ExternalAction", "Worktree"]) => "Git",
+        _ if starts(&["Evidence"]) => "Evidence",
+        _ if starts(&["Executable"]) => "Setup",
+        _ if starts(&["LeadTurn", "Question", "StepQuestion", "Turn", "Tool"]) => "Chat",
+        _ if starts(&["PlanRun", "PlanStep", "Dependency"]) => "Plan",
+        _ if starts(&[
+            "Attempt",
+            "Process",
+            "Scheduler",
+            "ApprovalAttempt",
+            "ApprovalStop",
+        ]) =>
+        {
+            "Attempt"
+        }
+        _ => "Core",
+    }
+}
+
+/// Protocol 1.11: the project an event concerns, found through the first identity it
+/// names (the subject a decision or a document version of this event records, its
+/// aggregate, then each payload field) that leads to a registered repository: an
+/// attempt's worktree, a repository, a feature, a document, a plan run, an external
+/// action, or a project itself. `None` when nothing leads to one.
+pub(crate) fn event_project(
+    c: &Connection,
+    seq: i64,
+    aggregate: Option<&str>,
+    payload: &str,
+) -> Result<Option<(String, String)>, StorageError> {
+    let recorded = c
+        .query_optional(
+            "SELECT coalesce(
+               (SELECT subject FROM human_decisions WHERE seq=?1),
+               (SELECT artifact_id FROM artifact_versions WHERE created_event_seq=?1))",
+            &[Value::Int(seq)],
+            |r| r.optional_text(0),
+        )?
+        .flatten();
+    let candidates = recorded
+        .as_deref()
+        .into_iter()
+        .chain(aggregate)
+        .chain(payload.split('|'))
+        .map(str::trim)
+        .filter(|f| {
+            (f.len() == 32 && f.bytes().all(|b| b.is_ascii_hexdigit()))
+                || f.starts_with("external:")
+        });
+    for field in candidates {
+        if field.starts_with("external:") {
+            let repository = c.query_optional(
+                "SELECT repository FROM external_actions WHERE operation_key=?1",
+                &[Value::Text(field)],
+                |r| r.text(0),
+            )?;
+            if let Some(found) = project_of(c, repository)? {
+                return Ok(Some(found));
+            }
+            continue;
+        }
+        if let Some(record) = crate::projects::latest(c, id_from_text(field)?)? {
+            return Ok(Some((field.to_owned(), cut(&record.1.name))));
+        }
+        let repository = c
+            .query_optional(
+                "SELECT coalesce(
+                   (SELECT repository FROM owned_worktrees WHERE attempt=?1),
+                   (SELECT id FROM local_repositories WHERE id=?1),
+                   (SELECT repository FROM plan_runs WHERE plan=?1 ORDER BY revision DESC LIMIT 1))",
+                &[Value::Text(field)],
+                |r| r.optional_text(0),
+            )?
+            .flatten();
+        let repository = match repository {
+            Some(r) => Some(r),
+            None => {
+                let feature = match document_feature(c, field)? {
+                    Some(f) => Some(f),
+                    None => c.query_optional(
+                        "SELECT feature FROM lead_turns WHERE feature=?1 OR turn=?1 LIMIT 1",
+                        &[Value::Text(field)],
+                        |r| r.text(0),
+                    )?,
+                };
+                feature
+                    .map(|f| feature_repository(c, &f))
+                    .transpose()?
+                    .flatten()
+            }
+        };
+        if let Some(found) = project_of(c, repository)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
+/// The project a repository belongs to at its newest revision, by identity and name.
+fn project_of(
+    c: &Connection,
+    repository: Option<String>,
+) -> Result<Option<(String, String)>, StorageError> {
+    let Some(repository) = repository else {
+        return Ok(None);
+    };
+    Ok(
+        crate::projects::of_repository(c, RepositoryId(id_from_text(&repository)?))?
+            .map(|(id, _, record)| (crate::model::id_to_text(id), cut(&record.name))),
+    )
 }
 
 /// Protocol 1.8: when a lead turn was accepted and when its result was recorded.
@@ -999,7 +1146,42 @@ impl ReadView<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{activity_text, counted, humanized, merge_assumptions, repository_name};
+    use super::{
+        activity_text, counted, event_category, humanized, merge_assumptions, repository_name,
+    };
+
+    #[test]
+    fn s6_every_event_kind_has_a_category() {
+        for (kind, payload, category) in [
+            ("EngineStarted", "", "Session"),
+            ("EngineStopped", "shutdown=UNCLEAN", "Error"),
+            ("EngineStopped", "shutdown=CLEAN", "Session"),
+            ("HumanDecision", "", "Approval"),
+            ("ExternalActionAuthorized", "", "Approval"),
+            ("ExternalActionIssued", "", "Git"),
+            ("ExternalActionObserved", "REJECTED", "Error"),
+            ("CandidateAccepted", "", "Decision"),
+            ("QuestionAnswered", "", "Decision"),
+            ("ValidationEnded", "", "Validation"),
+            ("StepReviewFinished", "", "Validation"),
+            ("RecoveryResolved", "", "Recovery"),
+            ("AttemptRecoveryRequired", "", "Recovery"),
+            ("EvidenceBlobReferenced", "", "Evidence"),
+            ("PlanStepIntegrated", "", "Git"),
+            ("WorktreeReady", "", "Git"),
+            ("PlanStepRefused", "", "Error"),
+            ("PlanRunStarted", "", "Plan"),
+            ("LeadTurnAccepted", "", "Chat"),
+            ("ArtifactVersionCreated", "", "Document"),
+            ("ProjectSaved", "", "Setup"),
+            ("ExecutableChanged", "", "Setup"),
+            ("ProcessLaunchIssued", "", "Attempt"),
+            ("SchedulerReserved", "", "Attempt"),
+            ("SomethingNew", "", "Core"),
+        ] {
+            assert_eq!(event_category(kind, payload), category, "{kind} {payload}");
+        }
+    }
 
     #[test]
     fn s3_words_for_names_counts_and_records() {
