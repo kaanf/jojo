@@ -194,6 +194,9 @@ impl Service {
                     .map_err(rejected)
             }
             RequestKind::RetryPlanStep => self.retry_plan_step(request, p),
+            RequestKind::RepairTurn => self.repair_turn(request, e),
+            RequestKind::ReviewAttempt => self.review_attempt(request, e),
+            RequestKind::ReviewDocument => self.review_document(request, e),
             RequestKind::RequestExternal => self.request_external(request, p),
             RequestKind::AuthorizeExternal => self.authorize_external(request, p, origin),
             RequestKind::InspectExternal => self.inspect_external(request, p),
@@ -227,8 +230,18 @@ impl Service {
         ) {
             fields.push(("dispatch".into(), text("not repeated")));
         }
-        if matches!(kind, RequestKind::ChatTurn | RequestKind::BriefTurn) {
+        if matches!(
+            kind,
+            RequestKind::ChatTurn | RequestKind::BriefTurn | RequestKind::RepairTurn
+        ) {
             fields.push(("turn".into(), identity(e.request)));
+            fields.push(("dispatch".into(), text("not repeated")));
+        }
+        if matches!(
+            kind,
+            RequestKind::ReviewAttempt | RequestKind::ReviewDocument
+        ) {
+            fields.push(("review".into(), identity(e.request)));
             fields.push(("dispatch".into(), text("not repeated")));
         }
         Ok(Json::Object(fields))
@@ -870,7 +883,7 @@ impl Service {
             self.turn_stop.clone(),
         )
     }
-    fn dispatch_turn(
+    pub(super) fn dispatch_turn(
         &mut self,
         turn: OpaqueId,
         repository: &LocalRepository,
@@ -884,6 +897,32 @@ impl Service {
             adapter.variables(),
         )?;
         let launch = adapter.prepare_turn(&spec)?;
+        let continued = match continuation_spec(&self.engine, &spec)? {
+            Some(resumed) => {
+                let resumed_launch = adapter.prepare_turn(&resumed)?;
+                Some((resumed, resumed_launch, self.turn_hooks()))
+            }
+            None => None,
+        };
+        let hooks = self.turn_hooks();
+        let plan = StopPlan::new(adapter.capabilities(), StopBudgets::ACCEPTED);
+        self.turn_stop = Arc::new(AtomicBool::new(false));
+        self.workers.turn(
+            WorkerRuntime {
+                engine: self.engine.clone(),
+                ids: self.ids.clone(),
+                clock: self.clock.clone(),
+            },
+            spec,
+            launch,
+            continued,
+            plan,
+            hooks,
+            self.turn_stop.clone(),
+        )
+    }
+    /// The hooks of one supervised run, with this helper's inspector and guard.
+    fn turn_hooks(&mut self) -> LaunchHooks {
         let mut hooks = self
             .config
             .launch_hooks
@@ -895,20 +934,7 @@ impl Service {
         if hooks.guard.is_none() {
             hooks.guard = self.guard.clone();
         }
-        let plan = StopPlan::new(adapter.capabilities(), StopBudgets::ACCEPTED);
-        self.turn_stop = Arc::new(AtomicBool::new(false));
-        self.workers.turn(
-            WorkerRuntime {
-                engine: self.engine.clone(),
-                ids: self.ids.clone(),
-                clock: self.clock.clone(),
-            },
-            spec,
-            launch,
-            plan,
-            hooks,
-            self.turn_stop.clone(),
-        )
+        hooks
     }
     fn dispatch(&mut self, start: &StartRequest, adapter: &Adapter) -> Result<(), String> {
         provision_and_reserve(&self.ctx(), start)?;

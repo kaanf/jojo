@@ -97,7 +97,7 @@ impl Service {
                 }
                 let q = protocol::FeatureChatQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_feature_chat(q.feature, q.after, e.minor >= 8))
+                    .read(|v| v.ipc_feature_chat(q.feature, q.after, e.minor >= 8, e.minor >= 14))
                     .map_err(|e| e.to_string())
             }
             RequestKind::ChatText => {
@@ -157,7 +157,7 @@ impl Service {
                     .read(|v| match kind {
                         RequestKind::Attempts => v.ipc_attempts(q.before, e.minor >= 7),
                         RequestKind::Features => v.ipc_features(q.before),
-                        _ => v.ipc_documents(q.before, e.minor >= 10, e.minor >= 12),
+                        _ => v.ipc_documents(q.before, e.minor >= 10, e.minor >= 12, e.minor >= 14),
                     })
                     .map_err(|e| e.to_string())
             }
@@ -169,7 +169,7 @@ impl Service {
                 }
                 let q = protocol::DocumentQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_document(q.document, q.revision, q.offset))
+                    .read(|v| v.ipc_document(q.document, q.revision, q.offset, e.minor >= 14))
                     .map_err(|e| e.to_string())
             }
             RequestKind::Decisions => {
@@ -196,7 +196,7 @@ impl Service {
                 }
                 let q = protocol::AttemptDetailQuery::parse(p)?;
                 reader
-                    .read(|v| v.ipc_attempt_detail(q.attempt))
+                    .read(|v| v.ipc_attempt_detail(q.attempt, e.minor >= 14))
                     .map_err(|e| e.to_string())
             }
             // Protocol 1.11: the inspection this helper holds, with what it derives.

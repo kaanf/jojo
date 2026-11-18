@@ -119,6 +119,11 @@ impl MigrationPlan {
                 name: "retries of held plan steps on the human's word",
                 sql: SCHEMA_V18,
             },
+            Migration {
+                version: 19,
+                name: "question choices, lead turn sessions and repairs, advisory reviews",
+                sql: SCHEMA_V19,
+            },
         ])
     }
 
@@ -1390,6 +1395,83 @@ CREATE TRIGGER plan_step_retry_refusals_immutable BEFORE UPDATE ON plan_step_ret
 CREATE TRIGGER plan_step_retry_refusals_keep BEFORE DELETE ON plan_step_retry_refusals BEGIN SELECT RAISE(ABORT,'immutable retry'); END;
 "#;
 
+/// Follow-ups (protocol 1.14): the choices a lead question offers; the provider session a
+/// chat turn ran in and whether it continued the previous turn's; the human's repair of a
+/// failed turn; and advisory reviews by the other provider of an attempt started by hand
+/// or of a drafted document. A review approves nothing; all of it is history.
+const SCHEMA_V19: &str = r#"
+CREATE TABLE question_choices (
+ question TEXT NOT NULL CHECK(length(question)=32),
+ ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 1 AND 4),
+ choice TEXT NOT NULL CHECK(length(choice)>0 AND length(choice)<=256),
+ PRIMARY KEY(question, ordinal));
+CREATE TABLE lead_turn_continuations (
+ turn TEXT PRIMARY KEY REFERENCES lead_turns(turn),
+ previous TEXT NOT NULL REFERENCES lead_turns(turn),
+ session TEXT NOT NULL CHECK(length(session) BETWEEN 1 AND 64),
+ prompt TEXT NOT NULL CHECK(length(prompt)>0),
+ prompt_digest TEXT NOT NULL CHECK(length(prompt_digest)=64),
+ CHECK(previous<>turn));
+CREATE TABLE lead_turn_sessions (
+ turn TEXT PRIMARY KEY REFERENCES lead_turns(turn),
+ session TEXT CHECK(session IS NULL OR length(session) BETWEEN 1 AND 64),
+ mode TEXT NOT NULL CHECK(mode IN ('FRESH','CONTINUED','FALLBACK')),
+ detail TEXT NOT NULL CHECK(length(detail)<=1024));
+CREATE TABLE lead_turn_repairs (
+ turn TEXT PRIMARY KEY REFERENCES lead_turns(turn),
+ failed TEXT NOT NULL UNIQUE REFERENCES lead_turns(turn),
+ note TEXT NOT NULL CHECK(length(note)<=4096),
+ detail TEXT NOT NULL,
+ CHECK(failed<>turn));
+CREATE TABLE advisory_reviews (
+ review TEXT PRIMARY KEY CHECK(length(review)=32),
+ subject TEXT NOT NULL CHECK(subject IN ('ATTEMPT','DOCUMENT')),
+ attempt TEXT REFERENCES attempt_results(attempt),
+ candidate TEXT,
+ document TEXT CHECK(document IS NULL OR length(document)=32),
+ document_revision INTEGER CHECK(document_revision IS NULL OR document_revision>0),
+ provider TEXT NOT NULL CHECK(provider IN ('Codex','ClaudeCode')),
+ repository TEXT NOT NULL REFERENCES local_repositories(id),
+ base TEXT NOT NULL CHECK(length(base) IN (40,64)),
+ prompt TEXT NOT NULL CHECK(length(prompt)>0),
+ prompt_digest TEXT NOT NULL CHECK(length(prompt_digest)=64),
+ epoch INTEGER NOT NULL REFERENCES engine_sessions(epoch),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ CHECK((subject='ATTEMPT')=(attempt IS NOT NULL AND candidate IS NOT NULL)),
+ CHECK((subject='DOCUMENT')=(document IS NOT NULL AND document_revision IS NOT NULL)));
+CREATE INDEX advisory_reviews_attempt ON advisory_reviews(attempt);
+CREATE INDEX advisory_reviews_document ON advisory_reviews(document, document_revision);
+CREATE TABLE advisory_review_results (
+ review TEXT PRIMARY KEY REFERENCES advisory_reviews(review),
+ outcome TEXT NOT NULL CHECK(outcome IN ('APPROVED','REJECTED','FAILED','CANCELLED','INTERRUPTED')),
+ notes TEXT NOT NULL, objection TEXT, detail TEXT NOT NULL,
+ reply TEXT,
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq),
+ CHECK((outcome IN ('APPROVED','REJECTED'))=(length(notes)>0 AND reply IS NOT NULL)));
+CREATE TABLE advisory_review_stops (
+ review TEXT PRIMARY KEY REFERENCES advisory_reviews(review),
+ event INTEGER NOT NULL UNIQUE REFERENCES events(seq));
+CREATE TABLE advisory_review_executables (
+ review TEXT PRIMARY KEY REFERENCES advisory_reviews(review),
+ identity TEXT NOT NULL REFERENCES executable_identities(identity));
+CREATE TRIGGER question_choices_immutable BEFORE UPDATE ON question_choices BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER question_choices_keep BEFORE DELETE ON question_choices BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER lead_turn_continuations_immutable BEFORE UPDATE ON lead_turn_continuations BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER lead_turn_continuations_keep BEFORE DELETE ON lead_turn_continuations BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER lead_turn_sessions_immutable BEFORE UPDATE ON lead_turn_sessions BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER lead_turn_sessions_keep BEFORE DELETE ON lead_turn_sessions BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER lead_turn_repairs_immutable BEFORE UPDATE ON lead_turn_repairs BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER lead_turn_repairs_keep BEFORE DELETE ON lead_turn_repairs BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER advisory_reviews_immutable BEFORE UPDATE ON advisory_reviews BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER advisory_reviews_keep BEFORE DELETE ON advisory_reviews BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER advisory_review_results_immutable BEFORE UPDATE ON advisory_review_results BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER advisory_review_results_keep BEFORE DELETE ON advisory_review_results BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER advisory_review_stops_immutable BEFORE UPDATE ON advisory_review_stops BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER advisory_review_stops_keep BEFORE DELETE ON advisory_review_stops BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER advisory_review_executables_immutable BEFORE UPDATE ON advisory_review_executables BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER advisory_review_executables_keep BEFORE DELETE ON advisory_review_executables BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -1401,7 +1483,7 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 18));
+        assert_eq!((report.from_version, report.to_version), (0, 19));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);

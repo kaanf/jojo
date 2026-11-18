@@ -108,7 +108,8 @@ impl ReviewOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewRecord {
     pub review: OpaqueId,
-    pub attempt: OpaqueId,
+    /// The attempt reviewed; `None` for a document's advisory review.
+    pub attempt: Option<OpaqueId>,
     pub provider: ProviderKind,
     pub repository: RepositoryId,
     pub base: String,
@@ -118,18 +119,72 @@ pub struct ReviewRecord {
     pub outcome: Option<String>,
 }
 
+/// Follow-ups: where a review is kept. A plan step's (M4) and an advisory one (an attempt
+/// started by hand, or a drafted document) run the same way and are sealed the same way;
+/// only a plan step's verdict moves anything.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewTables {
+    pub(crate) reviews: &'static str,
+    results: &'static str,
+    stops: &'static str,
+    pub(crate) executables: &'static str,
+    finished: &'static str,
+    stop_requested: &'static str,
+}
+
+pub(crate) const STEP_REVIEWS: ReviewTables = ReviewTables {
+    reviews: "step_reviews",
+    results: "step_review_results",
+    stops: "step_review_stops",
+    executables: "review_executables",
+    finished: "StepReviewFinished",
+    stop_requested: "StepReviewStopRequested",
+};
+
+pub(crate) const ADVISORY_REVIEWS: ReviewTables = ReviewTables {
+    reviews: "advisory_reviews",
+    results: "advisory_review_results",
+    stops: "advisory_review_stops",
+    executables: "advisory_review_executables",
+    finished: "AdvisoryReviewFinished",
+    stop_requested: "AdvisoryReviewStopRequested",
+};
+
+/// The tables that hold review `id`, if any does.
+pub(crate) fn tables_of(c: &Connection, id: &str) -> Result<Option<ReviewTables>, StorageError> {
+    for tables in [STEP_REVIEWS, ADVISORY_REVIEWS] {
+        let found = c.query_optional(
+            &format!("SELECT 1 FROM {} WHERE review=?1", tables.reviews),
+            &[Value::Text(id)],
+            |r| r.int(0),
+        )?;
+        if found.is_some() {
+            return Ok(Some(tables));
+        }
+    }
+    Ok(None)
+}
+
 fn review(c: &Connection, id: OpaqueId) -> Result<Option<ReviewRecord>, StorageError> {
     let id = id_to_text(id);
+    let Some(t) = tables_of(c, &id)? else {
+        return Ok(None);
+    };
     let row = c.query_optional(
-        "SELECT r.review,r.attempt,r.provider,r.repository,r.base,r.prompt_digest,
-                EXISTS(SELECT 1 FROM step_review_stops s WHERE s.review=r.review),
-                (SELECT outcome FROM step_review_results x WHERE x.review=r.review)
-         FROM step_reviews r WHERE r.review=?1",
+        &format!(
+            "SELECT r.review,r.attempt,r.provider,r.repository,r.base,r.prompt_digest,
+                EXISTS(SELECT 1 FROM {stops} s WHERE s.review=r.review),
+                (SELECT outcome FROM {results} x WHERE x.review=r.review)
+             FROM {reviews} r WHERE r.review=?1",
+            stops = t.stops,
+            results = t.results,
+            reviews = t.reviews
+        ),
         &[Value::Text(&id)],
         |r| {
             Ok((
                 r.text(0)?,
-                r.text(1)?,
+                r.optional_text(1)?,
                 r.text(2)?,
                 r.text(3)?,
                 r.text(4)?,
@@ -143,7 +198,7 @@ fn review(c: &Connection, id: OpaqueId) -> Result<Option<ReviewRecord>, StorageE
         |(review, attempt, provider, repository, base, digest, stop, outcome)| {
             Ok(ReviewRecord {
                 review: id_from_text(&review)?,
-                attempt: id_from_text(&attempt)?,
+                attempt: attempt.as_deref().map(id_from_text).transpose()?,
                 provider: provider_named(&provider)
                     .ok_or_else(|| StorageError::corrupt("review provider"))?,
                 repository: RepositoryId(id_from_text(&repository)?),
@@ -157,13 +212,27 @@ fn review(c: &Connection, id: OpaqueId) -> Result<Option<ReviewRecord>, StorageE
     .transpose()
 }
 
+/// A review of either kind that has no result yet. One runs at a time.
+pub(crate) fn unfinished_review(c: &Connection) -> Result<Option<String>, StorageError> {
+    unfinished(c)
+}
+
 fn unfinished(c: &Connection) -> Result<Option<String>, StorageError> {
-    Ok(c.query_optional(
-        "SELECT r.review FROM step_reviews r
-         WHERE NOT EXISTS(SELECT 1 FROM step_review_results x WHERE x.review=r.review) LIMIT 1",
-        &[],
-        |r| r.text(0),
-    )?)
+    for t in [STEP_REVIEWS, ADVISORY_REVIEWS] {
+        let found = c.query_optional(
+            &format!(
+                "SELECT r.review FROM {} r
+                 WHERE NOT EXISTS(SELECT 1 FROM {} x WHERE x.review=r.review) LIMIT 1",
+                t.reviews, t.results
+            ),
+            &[],
+            |r| r.text(0),
+        )?;
+        if found.is_some() {
+            return Ok(found);
+        }
+    }
+    Ok(None)
 }
 
 /// The newest scheduler attempt of a step, and whether it is sealed.
@@ -221,8 +290,10 @@ pub(crate) fn repair_of(
 /// M4: unfinished reviews take one unit of the global capacity each, like a lead turn.
 pub(crate) fn active_reviews(c: &Connection) -> Result<u64, StorageError> {
     from_db(c.query_one(
-        "SELECT count(*) FROM step_reviews r
-         WHERE NOT EXISTS(SELECT 1 FROM step_review_results x WHERE x.review=r.review)",
+        "SELECT (SELECT count(*) FROM step_reviews r
+                 WHERE NOT EXISTS(SELECT 1 FROM step_review_results x WHERE x.review=r.review))
+              + (SELECT count(*) FROM advisory_reviews r
+                 WHERE NOT EXISTS(SELECT 1 FROM advisory_review_results x WHERE x.review=r.review))",
         &[],
         |r| r.int(0),
     )?)
@@ -422,9 +493,10 @@ impl Tx<'_> {
             return Err(deny("ReviewFinished"));
         }
         if !record.stop_requested {
-            let event = self.append_event("StepReviewStopRequested", None, &id_to_text(id))?;
+            let t = tables_of(self.conn, &id_to_text(id))?.ok_or_else(|| deny("UnknownReview"))?;
+            let event = self.append_event(t.stop_requested, None, &id_to_text(id))?;
             self.conn.execute(
-                "INSERT INTO step_review_stops VALUES (?1,?2)",
+                &format!("INSERT INTO {} VALUES (?1,?2)", t.stops),
                 &[Value::Text(&id_to_text(id)), Value::Int(to_db(event.0)?)],
             )?;
         }
@@ -454,8 +526,9 @@ impl Tx<'_> {
             (other, None) => other,
         };
         let detail: String = detail.chars().take(1024).collect();
+        let t = tables_of(self.conn, &id_to_text(id))?.ok_or_else(|| deny("UnknownReview"))?;
         let event = self.append_event(
-            "StepReviewFinished",
+            t.finished,
             None,
             &format!("{}|{}", id_to_text(id), outcome.name()),
         )?;
@@ -464,7 +537,7 @@ impl Tx<'_> {
             None => ("", None, None),
         };
         self.conn.execute(
-            "INSERT INTO step_review_results VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            &format!("INSERT INTO {} VALUES (?1,?2,?3,?4,?5,?6,?7)", t.results),
             &[
                 Value::Text(&id_to_text(id)),
                 Value::Text(outcome.name()),
@@ -576,9 +649,13 @@ impl ReadView<'_> {
         review(self.conn, id)
     }
     pub fn review_prompt(&self, id: OpaqueId) -> Result<Option<String>, StorageError> {
+        let id = id_to_text(id);
+        let Some(t) = tables_of(self.conn, &id)? else {
+            return Ok(None);
+        };
         Ok(self.conn.query_optional(
-            "SELECT prompt FROM step_reviews WHERE review=?1",
-            &[Value::Text(&id_to_text(id))],
+            &format!("SELECT prompt FROM {} WHERE review=?1", t.reviews),
+            &[Value::Text(&id)],
             |r| r.text(0),
         )?)
     }
@@ -633,6 +710,7 @@ pub fn review_spec(
         timeout_millis: TURN_TIMEOUT_MILLIS,
         max_output_bytes: TURN_MAX_OUTPUT_BYTES,
         max_frame_bytes: TURN_MAX_FRAME_BYTES,
+        resume: None,
     })
 }
 

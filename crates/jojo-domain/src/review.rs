@@ -133,6 +133,78 @@ pub fn review_prompt(input: &ReviewInput<'_>, limit: usize) -> String {
     out
 }
 
+/// Follow-ups (protocol 1.14): what an advisory review of a drafted document reads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DocumentReviewInput<'a> {
+    /// "requirements document" or "execution plan".
+    pub kind: &'a str,
+    pub revision: u64,
+    /// The document as the human sees it.
+    pub body: &'a str,
+    /// For a plan: the approved requirements it was drafted from, with their revision.
+    pub requirements: Option<(u64, &'a str)>,
+}
+
+/// Follow-ups (protocol 1.14): the prompt of an advisory review of a document the lead of
+/// another provider drafted. The verdict uses the step review's reply shape; it approves
+/// nothing and holds nothing back: the human still decides in the Approval Inbox. The
+/// document is cut to what fits in `limit` bytes, and the reviewer is told so.
+pub fn document_review_prompt(input: &DocumentReviewInput<'_>, limit: usize) -> String {
+    let mut head = format!(
+        "You are an adversarial reviewer of a {kind} that the lead engineer of another \
+         provider drafted for this repository. The product owner will decide whether to \
+         approve it; your notes help them. Find what is wrong, missing or unverifiable. Do \
+         not rewrite it.\n\n\
+         You may only read. The current directory is the repository the document is about; \
+         read what you need to check its claims. Change nothing, and do not try to work \
+         around a missing tool.\n",
+        kind = input.kind
+    );
+    if let Some((revision, requirements)) = input.requirements {
+        head.push_str(&format!(
+            "\n# Product requirements (approved revision {revision})\n{requirements}\n"
+        ));
+    }
+    let tail = format!(
+        "\n# What to check\n\
+         1. Completeness: what a reader needs and the document does not say.\n\
+         2. Testability: statements or checks that cannot be verified as written.\n\
+         3. Fit: claims about this repository that it does not bear out (paths, commands, \
+         existing behavior).\n\
+         4. Risk: decisions that would be expensive to reverse, unstated assumptions.\n\
+         Do not manufacture objections: if the document is fine, say so briefly.\n\n\
+         # Reply\n{REPLY_RULES}\n\
+         {{\"schema\":\"{REVIEW_SCHEMA}\",\"verdict\":\"approve\",\"notes\":\"...\",\
+         \"objection\":null}}\n\
+         where \"verdict\" is \"approve\" when you would approve it as it stands and \
+         \"reject\" otherwise. \"notes\" are specific (section, problem, what would fix it) \
+         or, for \"approve\", say in a few sentences what you checked. \"objection\" is the \
+         single strongest argument against it in one sentence, or null.\n\n\
+         # The {kind} (revision {revision})\n",
+        kind = input.kind,
+        revision = input.revision
+    );
+    let room = limit.saturating_sub(head.len() + tail.len() + PROMPT_MARGIN);
+    let mut out = head;
+    out.push_str(&tail);
+    if input.body.len() <= room {
+        out.push_str(input.body);
+        out.push('\n');
+    } else {
+        let mut end = room;
+        while !input.body.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.push_str(&format!(
+            "(Only the first {end} of {} bytes fit here; judge what you can see.)\n",
+            input.body.len()
+        ));
+        out.push_str(&input.body[..end]);
+        out.push('\n');
+    }
+    out
+}
+
 pub(crate) fn verdict(root: &Json) -> Result<Verdict, LeadError> {
     let mut members = Members::of(root, "")?;
     schema(&mut members, REVIEW_SCHEMA)?;

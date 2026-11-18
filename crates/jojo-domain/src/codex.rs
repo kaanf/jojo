@@ -99,6 +99,23 @@ pub fn discovery_argv(repository: &Path) -> Result<Vec<String>, ProviderError> {
     Ok(argv)
 }
 
+/// Follow-ups (session continuation): the vector of a chat turn. [`discovery_argv`] with
+/// the session kept on disk under the Codex home, and, for the next turn of the feature,
+/// the `resume` subcommand after the options with the thread the previous turn reported
+/// and `-` (the prompt on standard input). Observed on the pinned release (2026-11-18):
+/// the options before `resume` are accepted, and an unknown thread ends the run at once
+/// with no model call; the caller then runs the turn fresh.
+pub fn chat_argv(repository: &Path, resume: Option<&str>) -> Result<Vec<String>, ProviderError> {
+    let mut argv: Vec<String> = discovery_argv(repository)?
+        .into_iter()
+        .filter(|a| a != "--ephemeral")
+        .collect();
+    if let Some(thread) = resume {
+        argv.extend(["resume".to_owned(), thread.to_owned(), "-".to_owned()]);
+    }
+    Ok(argv)
+}
+
 /// Accepts only the byte-exact vector [`discovery_argv`] produces for `repository`.
 pub fn check_discovery_argv(args: &[String], repository: &Path) -> Result<(), ProviderError> {
     match discovery_argv(repository) {

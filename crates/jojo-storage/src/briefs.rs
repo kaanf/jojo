@@ -539,6 +539,7 @@ pub fn brief_spec(
         timeout_millis: TURN_TIMEOUT_MILLIS,
         max_output_bytes: TURN_MAX_OUTPUT_BYTES,
         max_frame_bytes: TURN_MAX_FRAME_BYTES,
+        resume: None,
     })
 }
 

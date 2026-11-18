@@ -155,6 +155,22 @@ pub fn discovery_argv() -> Vec<String> {
     .to_vec()
 }
 
+/// Follow-ups (session continuation): the vector of a chat turn. [`discovery_argv`] with
+/// the session kept, so that the next turn of the feature can continue it, and, for that
+/// next turn, `--resume` with the session the previous turn reported. Observed on the
+/// pinned release (2026-11-18): an unknown session ends the run at once with an error
+/// result and no model call; the caller then runs the turn fresh.
+pub fn chat_argv(resume: Option<&str>) -> Vec<String> {
+    let mut argv: Vec<String> = discovery_argv()
+        .into_iter()
+        .filter(|a| a != "--no-session-persistence")
+        .collect();
+    if let Some(session) = resume {
+        argv.extend(["--resume".to_owned(), session.to_owned()]);
+    }
+    argv
+}
+
 /// Accepts only the byte-exact vector [`discovery_argv`] produces.
 pub fn check_discovery_argv(args: &[String]) -> Result<(), ProviderError> {
     if discovery_argv() == args {

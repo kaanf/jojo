@@ -55,6 +55,7 @@ fn spec(provider: ProviderKind) -> TurnSpec {
         timeout_millis: 1000,
         max_output_bytes: 4096,
         max_frame_bytes: 1024,
+        resume: None,
     }
 }
 
@@ -487,7 +488,8 @@ fn m2_discovery_reply_is_read_strictly() {
         LeadQuestion {
             prompt: "From arguments, standard input, or both?".into(),
             blocking: true,
-            step: None
+            step: None,
+            choices: vec![]
         }
     );
     assert!(!d.questions[1].blocking);

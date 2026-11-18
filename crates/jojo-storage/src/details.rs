@@ -431,7 +431,11 @@ impl ReadView<'_> {
     /// resource claims, what its step's validation plan declares, the events about it with
     /// their sentences (oldest first, at most 64), its host validation runs ("V-n") and the
     /// executable it ran. `null` when the core has no such attempt.
-    pub fn ipc_attempt_detail(&self, attempt: OpaqueId) -> Result<Json, StorageError> {
+    pub fn ipc_attempt_detail(
+        &self,
+        attempt: OpaqueId,
+        followups: bool,
+    ) -> Result<Json, StorageError> {
         let c = self.conn;
         let id = id_to_text(attempt);
         let Some(step) = c.query_optional(
@@ -666,6 +670,10 @@ impl ReadView<'_> {
             |r| r.int(0),
         )?;
         fields.push(("evidence_records", Json::Int(evidence)));
+        // Follow-ups (1.14): the advisory review of a candidate started by hand.
+        if followups {
+            fields.push(("advisory", self.attempt_advisory(attempt)?));
+        }
         Ok(object(fields))
     }
 }

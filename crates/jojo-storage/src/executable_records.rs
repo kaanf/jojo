@@ -188,8 +188,10 @@ impl Tx<'_> {
         let identity = self
             .record_executable(fingerprint)?
             .ok_or_else(|| deny("ReviewRefused: not a production fingerprint"))?;
+        let tables = crate::repairs::tables_of(self.conn, &id_to_text(review))?
+            .ok_or_else(|| deny("UnknownReview"))?;
         self.conn.execute(
-            "INSERT INTO review_executables VALUES (?1,?2)",
+            &format!("INSERT INTO {} VALUES (?1,?2)", tables.executables),
             &[Value::Text(&id_to_text(review)), Value::Text(&identity)],
         )?;
         Ok(())
@@ -272,7 +274,8 @@ impl ReadView<'_> {
         let identity = self.conn.query_optional(
             "SELECT identity FROM attempt_executables WHERE attempt=?1
              UNION ALL SELECT identity FROM turn_executables WHERE turn=?1
-             UNION ALL SELECT identity FROM review_executables WHERE review=?1",
+             UNION ALL SELECT identity FROM review_executables WHERE review=?1
+             UNION ALL SELECT identity FROM advisory_review_executables WHERE review=?1",
             &[Value::Text(&id)],
             |r| r.text(0),
         )?;

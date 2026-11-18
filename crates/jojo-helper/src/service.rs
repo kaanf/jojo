@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 
 mod commands;
 mod external;
+mod followups;
 mod queries;
 mod runner;
 pub use external::{ExternalFault, RemoteConfig};
@@ -141,16 +142,22 @@ impl Workers {
     }
     /// M2: one lead agent turn. It is not an attempt and is not settled like one; capacity,
     /// close and drop wait for it exactly as for a launch. `stop` ends it early.
+    ///
+    /// Follow-ups (session continuation): with `continued`, the turn first continues the
+    /// previous turn's provider session; a continuation that ends on its own without a
+    /// reply is followed, in the same worker, by the fresh run of `spec` (`continuation_failed`).
+    #[allow(clippy::too_many_arguments)]
     pub fn turn(
         &mut self,
         runtime: WorkerRuntime,
         spec: TurnSpec,
         launch: ProcessLaunch,
+        continued: Option<(TurnSpec, ProcessLaunch, LaunchHooks)>,
         plan: StopPlan,
         mut hooks: LaunchHooks,
         stop: Arc<AtomicBool>,
     ) -> Result<(), String> {
-        hooks.emergency_stop = Some(stop);
+        hooks.emergency_stop = Some(stop.clone());
         let WorkerRuntime { engine, ids, clock } = runtime;
         let handle = std::thread::Builder::new()
             .name("jojo-turn".into())
@@ -161,8 +168,25 @@ impl Workers {
                     clock: clock.as_ref(),
                     poll: Duration::from_millis(10),
                 };
+                let Some((resumed, resumed_launch, mut resumed_hooks)) = continued else {
+                    let run = run_turn(&ctx, &spec, &launch, &plan, hooks);
+                    return settle_turn(&ctx, &spec, &run, SessionMode::Fresh, "").map(drop);
+                };
+                resumed_hooks.emergency_stop = Some(stop);
+                let run = run_turn(&ctx, &resumed, &resumed_launch, &plan, resumed_hooks);
+                if !continuation_failed(&run, resumed.kind) {
+                    return settle_turn(&ctx, &resumed, &run, SessionMode::Continued, "").map(drop);
+                }
+                let why = run
+                    .stop
+                    .clone()
+                    .or_else(|| match &run.conclusion {
+                        TurnConclusion::NotSpawned(why) => Some(format!("not spawned: {why}")),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "the continued session gave no reply".into());
                 let run = run_turn(&ctx, &spec, &launch, &plan, hooks);
-                settle_turn(&ctx, &spec, &run).map(drop)
+                settle_turn(&ctx, &spec, &run, SessionMode::Fallback, &why).map(drop)
             })
             .map_err(|e| e.to_string())?;
         self.handles.push((Work::Turn, handle));
@@ -645,6 +669,9 @@ impl Service {
                     tx.close_interrupted_briefs().map(|n| format!("closed {n}"))
                 })?;
             }
+            // Follow-ups: an integration worktree outlives no integration; what an earlier
+            // helper left is removed. A failure here is not a reason to refuse service.
+            let _ = jojo_storage::sweep_integrations(&service.engine);
             // M3: a run an earlier helper was running comes back paused; the human
             // resumes it after the recovery review.
             let running = service
@@ -806,6 +833,9 @@ impl Service {
             | RequestKind::RunPlan
             | RequestKind::ControlPlan
             | RequestKind::RetryPlanStep
+            | RequestKind::RepairTurn
+            | RequestKind::ReviewAttempt
+            | RequestKind::ReviewDocument
             | RequestKind::RequestExternal
             | RequestKind::AuthorizeExternal
             | RequestKind::InspectExternal

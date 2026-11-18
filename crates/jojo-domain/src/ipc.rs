@@ -23,7 +23,12 @@ pub const MAJOR: i64 = 1;
 /// category and the project it concerns.
 /// 1.13 (M6) adds the retry of a held plan step; at 1.13 a step of the plan detail says
 /// how the human may start it again.
-pub const MINOR: i64 = 13;
+/// 1.14 (follow-ups) adds the repair of a lead turn and the advisory review of an attempt
+/// started by hand or of a drafted document; at 1.14 the documents answer counts the plan
+/// steps and open questions that wait for the human, a question of the feature chat
+/// carries its choices and a turn its session, and the attempt and document details carry
+/// their advisory review.
+pub const MINOR: i64 = 14;
 pub const MAX_FRAME: usize = 64 * 1024;
 pub const MAX_PAGE: u32 = 8;
 

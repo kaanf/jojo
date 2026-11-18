@@ -229,6 +229,9 @@ fn claude_main(args: &[String], scenario: &str) {
 
 const LEAD_QUESTIONS: &str = r#"{"schema":"jojo-lead-discovery-v1","summary":"The repository has a slugify stub and its tests.","questions":[{"prompt":"Should the tool read from arguments, standard input, or both?","blocking":true},{"prompt":"Is packaging in scope?","blocking":false}],"prd":null}"#;
 
+/// Follow-ups: a discovery reply whose questions offer choices.
+const LEAD_CHOICES: &str = r#"{"schema":"jojo-lead-discovery-v1","summary":"Two choices to make first.","questions":[{"prompt":"Where does the title come from?","blocking":true,"choices":["Arguments","Standard input","Both"]},{"prompt":"Is packaging in scope?","blocking":false,"choices":[]}],"prd":null}"#;
+
 /// A discovery reply with a complete requirements draft titled `title` and no question.
 fn lead_draft(title: &str) -> String {
     format!(
@@ -320,6 +323,14 @@ fn lead(scenario: &str, prompt: &str, args: &[String]) -> Lead {
         "lead" => Lead::Reply(lead_draft("Slugify from the shell, revised")),
         // Step 7: a project brief of the sample repository.
         "lead-brief" => Lead::Reply(LEAD_BRIEF.into()),
+        // Follow-ups: questions with choices; and a turn whose continuation fails the way
+        // both CLIs fail on an unknown session, then runs fresh like `lead`.
+        "lead-choices" => Lead::Reply(LEAD_CHOICES.into()),
+        "lead-resume-fails" if args.iter().any(|a| a == "resume" || a == "--resume") => {
+            eprintln!("Error: no conversation found for this session (synthetic fixture text)");
+            std::process::exit(1);
+        }
+        "lead-resume-fails" => lead("lead", prompt, args),
         "lead-prose" => Lead::Reply("I looked around and could not decide.".into()),
         "lead-write" => Lead::Write(LEAD_QUESTIONS.into()),
         // What actually crossed the OS boundary, as seen from inside the child.

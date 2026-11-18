@@ -28,7 +28,7 @@ use jojo_domain::ipc::{identity, number, object, text};
 use jojo_domain::json::Json;
 use jojo_domain::planner::{
     self, Exchange, LeadReply, MAX_HUMAN_TEXT_BYTES, PlanDraft, TurnKind, TurnSpec,
-    discover_prompt, plan_prompt,
+    continued_prompt, discover_prompt, plan_prompt, with_repair_section,
 };
 use jojo_domain::protocol::{ChatPart, QuestionAction};
 use jojo_domain::provider::{
@@ -112,6 +112,44 @@ text_enum!(TurnOutcome {
     TurnOutcome::Cancelled => "CANCELLED",
     TurnOutcome::Interrupted => "INTERRUPTED",
 });
+
+/// Follow-ups (session continuation): how a chat turn's run used the provider session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionMode {
+    /// A new session.
+    Fresh,
+    /// The previous turn's session, continued.
+    Continued,
+    /// The continuation failed; the turn ran again in a new session.
+    Fallback,
+}
+
+text_enum!(SessionMode {
+    SessionMode::Fresh => "FRESH",
+    SessionMode::Continued => "CONTINUED",
+    SessionMode::Fallback => "FALLBACK",
+});
+
+impl SessionMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Fresh => "Fresh",
+            Self::Continued => "Continued",
+            Self::Fallback => "Fallback",
+        }
+    }
+}
+
+/// The session a turn reported, if it reported one.
+fn turn_session(conn: &Connection, turn: OpaqueId) -> Result<Option<String>, StorageError> {
+    Ok(conn
+        .query_optional(
+            "SELECT session FROM lead_turn_sessions WHERE turn=?1",
+            &[Value::Text(&id_to_text(turn))],
+            |r| r.optional_text(0),
+        )?
+        .flatten())
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TurnResult {
@@ -443,6 +481,98 @@ fn turn_project(
     Ok(Some((project, revision, record)))
 }
 
+/// Follow-ups (protocol 1.14): what a chat row carries beyond 1.8. The choices of each of
+/// the turn's questions, in the order of its `questions`; how the turn used the provider
+/// session; the turn it repairs and the one that repaired it; and whether the human may
+/// ask for it again (a failed or interrupted turn that is the newest of its feature).
+fn followup_fields(
+    conn: &Connection,
+    record: &TurnRecord,
+    newest: bool,
+) -> Result<Vec<(&'static str, Json)>, StorageError> {
+    let turn = id_to_text(record.turn);
+    let ids = conn.query(
+        "SELECT q.question_id FROM lead_turn_questions l
+         JOIN clarification_questions q ON q.question_id=l.question
+         WHERE l.turn=?1 ORDER BY q.created_event_seq",
+        &[Value::Text(&turn)],
+        |r| r.text(0),
+    )?;
+    let steps = conn.query(
+        "SELECT question FROM step_questions WHERE turn=?1 ORDER BY event",
+        &[Value::Text(&turn)],
+        |r| r.text(0),
+    )?;
+    let mut choices = Vec::new();
+    for question in ids.iter().chain(&steps) {
+        let list = conn.query(
+            "SELECT choice FROM question_choices WHERE question=?1 ORDER BY ordinal",
+            &[Value::Text(question)],
+            |r| r.text(0),
+        )?;
+        choices.push(Json::List(list.into_iter().map(text).collect()));
+    }
+    let session = conn.query_optional(
+        "SELECT mode FROM lead_turn_sessions WHERE turn=?1",
+        &[Value::Text(&turn)],
+        |r| r.text(0),
+    )?;
+    let session = match session {
+        Some(mode) => text(SessionMode::from_db(&mode)?.name()),
+        // A running turn that will try to continue says so before it ends.
+        None if record.result.is_none() => conn
+            .query_optional(
+                "SELECT 1 FROM lead_turn_continuations WHERE turn=?1",
+                &[Value::Text(&turn)],
+                |r| r.int(0),
+            )?
+            .map_or(Json::Null, |_| text("Continuing")),
+        None => Json::Null,
+    };
+    let link = |sql: &str| -> Result<Json, StorageError> {
+        conn.query_optional(sql, &[Value::Text(&turn)], |r| r.text(0))?
+            .map(|id| Ok(identity(id_from_text(&id)?)))
+            .transpose()
+            .map(|v| v.unwrap_or(Json::Null))
+    };
+    let repairs = link("SELECT failed FROM lead_turn_repairs WHERE turn=?1")?;
+    let repaired_by = link("SELECT turn FROM lead_turn_repairs WHERE failed=?1")?;
+    let repairable = newest
+        && repaired_by == Json::Null
+        && record
+            .result
+            .as_ref()
+            .is_some_and(|r| matches!(r.outcome, TurnOutcome::Failed | TurnOutcome::Interrupted));
+    Ok(vec![
+        ("choices", Json::List(choices)),
+        ("session", session),
+        ("repairs", repairs),
+        ("repaired_by", repaired_by),
+        ("repairable", Json::Bool(repairable)),
+    ])
+}
+
+/// Follow-ups (protocol 1.14): per feature, the questions no human has answered yet,
+/// feature questions and step questions alike, deferred ones included.
+pub(crate) fn open_question_counts(conn: &Connection) -> Result<Vec<(String, u64)>, StorageError> {
+    conn.query(
+        "SELECT feature, count(*) FROM (
+            SELECT q.feature_id AS feature FROM clarification_questions q
+             WHERE coalesce((SELECT author FROM clarification_answers x
+                             WHERE x.question_id=q.question_id
+                             ORDER BY x.ordinal DESC LIMIT 1), '')<>'HUMAN'
+            UNION ALL
+            SELECT t.feature FROM step_questions q JOIN lead_turns t ON t.turn=q.turn
+             WHERE NOT EXISTS(SELECT 1 FROM step_answers a WHERE a.question=q.question))
+         GROUP BY feature ORDER BY feature",
+        &[],
+        |r| Ok((r.text(0)?, r.int(1)?)),
+    )?
+    .into_iter()
+    .map(|(feature, n)| Ok((feature, from_db(n)?)))
+    .collect()
+}
+
 /// One turn as a chat page shows it, with the questions it asked.
 fn chat_row(conn: &Connection, record: &TurnRecord) -> Result<Json, StorageError> {
     let questions = conn
@@ -654,6 +784,72 @@ impl Tx<'_> {
     /// writer transaction, composes the prompt from stored content and keeps it with the
     /// turn. Nothing is launched here. `base` is the commit the repository's HEAD names.
     pub fn accept_turn(&mut self, request: &TurnRequest, base: &str) -> Result<String, TxError> {
+        self.accept_turn_as(request, base, None)
+    }
+
+    /// Follow-ups (protocol 1.14): the human asks for a failed or interrupted turn again.
+    /// It must be the newest turn of its feature and not repaired before; the new turn has
+    /// its kind, repository, provider and message, and its prompt says why it failed.
+    pub fn accept_turn_repair(
+        &mut self,
+        turn: OpaqueId,
+        failed: OpaqueId,
+        note: &str,
+        base: &str,
+    ) -> Result<String, TxError> {
+        let Some(record) = self::turn(self.conn, failed)? else {
+            return Err(deny("UnknownTurn"));
+        };
+        let detail = match &record.result {
+            Some(r) if matches!(r.outcome, TurnOutcome::Failed | TurnOutcome::Interrupted) => {
+                r.detail.clone()
+            }
+            Some(_) => return Err(deny("RepairRefused: only a failed turn is repaired")),
+            None => return Err(deny("RepairRefused: the turn is still running")),
+        };
+        if feature_turns(self.conn, record.feature)?
+            .last()
+            .is_some_and(|newest| newest.turn != failed)
+        {
+            return Err(deny(
+                "RepairRefused: a later turn of the feature was already asked for",
+            ));
+        }
+        if note.len() > 4096 || note.contains('\0') {
+            return Err(deny("RepairRefused: the note is too long or contains NUL"));
+        }
+        let request = TurnRequest {
+            turn,
+            feature: record.feature,
+            kind: record.kind,
+            repository: record.repository,
+            provider: record.provider,
+            message: record.message.clone(),
+        };
+        let receipt = self.accept_turn_as(&request, base, Some((&record, &detail, note)))?;
+        self.conn.execute(
+            "INSERT INTO lead_turn_repairs VALUES (?1,?2,?3,?4)",
+            &[
+                Value::Text(&id_to_text(turn)),
+                Value::Text(&id_to_text(failed)),
+                Value::Text(note),
+                Value::Text(&detail),
+            ],
+        )?;
+        self.append_event(
+            "LeadTurnRepairAccepted",
+            None,
+            &format!("{}|{}", id_to_text(turn), id_to_text(failed)),
+        )?;
+        Ok(receipt)
+    }
+
+    fn accept_turn_as(
+        &mut self,
+        request: &TurnRequest,
+        base: &str,
+        repair: Option<(&TurnRecord, &str, &str)>,
+    ) -> Result<String, TxError> {
         if self.admission()? != Admission::Open {
             return Err(deny("AdmissionClosed"));
         }
@@ -695,10 +891,13 @@ impl Tx<'_> {
                         "TurnRefused: the feature belongs to another repository",
                     ));
                 }
+                // A repaired first turn carries the objective, not a note.
+                let first_again = repair.is_some_and(|(failed, _, _)| failed.ordinal == 1);
                 let note = message
                     .chars()
                     .any(char::is_alphanumeric)
-                    .then_some(message);
+                    .then_some(message)
+                    .filter(|_| !first_again);
                 (first.message.clone(), note)
             }
         };
@@ -756,11 +955,33 @@ impl Tx<'_> {
                 return Err(deny("TurnRefused: a brief is not a chat turn"));
             }
         };
+        let prompt = match repair {
+            Some((_, detail, note)) => with_repair_section(&prompt, detail, Some(note)),
+            None => prompt,
+        };
         if prompt.len() > MAX_PROMPT_BYTES {
             return Err(deny(
                 "PromptTooLarge: the stored content exceeds the prompt limit",
             ));
         }
+        // Follow-ups (session continuation): the newest turn of the feature that replied
+        // on the same provider and reported its session is continued; the fresh prompt
+        // above stays the turn's prompt and is what runs if the continuation fails.
+        let continued = earlier
+            .iter()
+            .rev()
+            .find(|t| {
+                t.result
+                    .as_ref()
+                    .is_some_and(|r| r.outcome == TurnOutcome::Replied)
+            })
+            .filter(|t| t.provider == request.provider)
+            .map(|t| Ok::<_, TxError>((t.turn, turn_session(self.conn, t.turn)?)))
+            .transpose()?
+            .and_then(|(previous, session)| session.map(|s| (previous, s)))
+            .filter(|(_, session)| planner::plain_session(session))
+            .map(|(previous, session)| (previous, session, continued_prompt(&prompt)))
+            .filter(|(_, _, continued)| continued.len() <= MAX_PROMPT_BYTES);
         let id = id_to_text(request.turn);
         let feature = id_to_text(request.feature.0);
         let event = self.append_event(
@@ -796,6 +1017,18 @@ impl Tx<'_> {
                     Value::Text(&id),
                     Value::Text(&id_to_text(*project)),
                     Value::Int(to_db(*revision)?),
+                ],
+            )?;
+        }
+        if let Some((previous, session, continued)) = continued {
+            self.conn.execute(
+                "INSERT INTO lead_turn_continuations VALUES (?1,?2,?3,?4,?5)",
+                &[
+                    Value::Text(&id),
+                    Value::Text(&id_to_text(previous)),
+                    Value::Text(&session),
+                    Value::Text(&continued),
+                    Value::Text(&sha256_hex(&[continued.as_bytes()])),
                 ],
             )?;
         }
@@ -872,6 +1105,7 @@ impl Tx<'_> {
                         "INSERT INTO lead_turn_questions VALUES (?1,?2)",
                         &[Value::Text(&id_to_text(question_id.0)), Value::Text(&text)],
                     )?;
+                    self.record_choices(question_id.0, &question.choices)?;
                 }
                 if let Some(document) = &discovery.prd {
                     let prepared = PreparedPrd::from_document(document);
@@ -930,6 +1164,7 @@ impl Tx<'_> {
                             "INSERT INTO lead_turn_questions VALUES (?1,?2)",
                             &[Value::Text(&id_to_text(question_id.0)), Value::Text(&text)],
                         )?;
+                        self.record_choices(question_id.0, &question.choices)?;
                     }
                 } else {
                     let prd = feature_prd(self.conn, record.feature)?
@@ -1002,6 +1237,7 @@ impl Tx<'_> {
                                 Value::Int(to_db(event.0)?),
                             ],
                         )?;
+                        self.record_choices(question_id, &question.choices)?;
                     }
                     // The ADR is a draft at once; the plan and its validation follow when
                     // the human has approved the ADR (`advance_lead_plans`).
@@ -1223,6 +1459,45 @@ impl Tx<'_> {
         Ok(advanced)
     }
 
+    /// Follow-ups: the options a question offers, in the lead's order.
+    fn record_choices(&mut self, question: OpaqueId, choices: &[String]) -> Result<(), TxError> {
+        for (index, choice) in choices.iter().enumerate() {
+            self.conn.execute(
+                "INSERT INTO question_choices VALUES (?1,?2,?3)",
+                &[
+                    Value::Text(&id_to_text(question)),
+                    Value::Int(to_db(index as u64 + 1)?),
+                    Value::Text(choice),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Follow-ups (session continuation): the provider session a finished chat turn ran
+    /// in, as its stream reported it, and how: fresh, continued, or fresh after a
+    /// continuation that failed. Once per turn.
+    pub fn record_turn_session(
+        &mut self,
+        turn: OpaqueId,
+        session: Option<&str>,
+        mode: SessionMode,
+        detail: &str,
+    ) -> Result<(), TxError> {
+        let session = session.filter(|s| planner::plain_session(s));
+        let detail: String = detail.chars().take(MAX_DETAIL_BYTES / 4).collect();
+        self.conn.execute(
+            "INSERT INTO lead_turn_sessions VALUES (?1,?2,?3,?4)",
+            &[
+                Value::Text(&id_to_text(turn)),
+                session.map_or(Value::Null, Value::Text),
+                Value::Text(mode.as_db()),
+                Value::Text(&detail),
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Closes every turn an earlier helper left unfinished. Such a turn held no worktree,
     /// claim or effect; its process was the earlier helper's to stop.
     pub fn close_interrupted_turns(&mut self) -> Result<u64, TxError> {
@@ -1288,13 +1563,23 @@ impl ReadView<'_> {
         feature: FeatureId,
         after: u64,
         dated: bool,
+        followups: bool,
     ) -> Result<Json, StorageError> {
         let turns = feature_turns(self.conn, feature)?;
+        let newest = turns.last().map(|t| t.turn);
         let mut rows = Vec::new();
         let mut used = 0usize;
         let mut next = Json::Null;
         for record in turns.iter().filter(|t| t.ordinal > after) {
             let mut row = chat_row(self.conn, record)?;
+            if followups {
+                let Json::Object(fields) = &mut row else {
+                    unreachable!("a turn row is an object")
+                };
+                for (k, v) in followup_fields(self.conn, record, newest == Some(record.turn))? {
+                    fields.push((k.into(), v));
+                }
+            }
             if dated {
                 let Json::Object(fields) = &mut row else {
                     unreachable!("a turn row is an object")
@@ -1561,7 +1846,45 @@ pub fn turn_spec(
         timeout_millis: TURN_TIMEOUT_MILLIS,
         max_output_bytes: TURN_MAX_OUTPUT_BYTES,
         max_frame_bytes: TURN_MAX_FRAME_BYTES,
+        resume: None,
     })
+}
+
+/// Follow-ups (session continuation): the frozen request that continues the previous
+/// turn's provider session, when the turn was accepted as a continuation: `spec` with the
+/// stored continuation prompt and the session to resume. `None` runs `spec` alone.
+pub fn continuation_spec(engine: &Engine, spec: &TurnSpec) -> Result<Option<TurnSpec>, String> {
+    let mut reader = engine.reader().map_err(|e| e.to_string())?;
+    let row = reader
+        .read(|v| {
+            Ok(v.conn.query_optional(
+                "SELECT session,prompt,prompt_digest FROM lead_turn_continuations WHERE turn=?1",
+                &[Value::Text(&id_to_text(spec.turn))],
+                |r| Ok((r.text(0)?, r.text(1)?, r.text(2)?)),
+            )?)
+        })
+        .map_err(|e| e.to_string())?;
+    let Some((session, prompt, digest)) = row else {
+        return Ok(None);
+    };
+    if sha256_hex(&[prompt.as_bytes()]) != digest {
+        return Err("stored continuation prompt differs from its digest".into());
+    }
+    // Each run keeps its own raw streams: the fallback writes where `spec` says.
+    let mut directory = spec.raw_output_dir.clone().into_os_string();
+    directory.push("-continued");
+    let directory = PathBuf::from(directory);
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .map_err(|e| format!("turn directory: {e}"))?;
+    Ok(Some(TurnSpec {
+        prompt: prompt.into_bytes(),
+        prompt_digest: digest,
+        resume: Some(session),
+        raw_output_dir: directory,
+        ..spec.clone()
+    }))
 }
 
 /// How the supervised run of a turn ended.
@@ -1588,6 +1911,8 @@ pub struct TurnRun {
     pub evidence_lost: bool,
     /// The last message on standard output.
     pub reply: Option<String>,
+    /// Follow-ups: the provider session the stream reported, if it reported one.
+    pub session: Option<String>,
 }
 
 pub(crate) fn command<F>(
@@ -1637,6 +1962,7 @@ pub fn run_turn(
         protocol_failed: false,
         evidence_lost: false,
         reply: None,
+        session: None,
     };
     let emergency = || {
         hooks
@@ -1731,6 +2057,9 @@ pub fn run_turn(
                     }
                     match event.payload {
                         EventPayload::TextDelta(text) => run.reply = Some(text),
+                        EventPayload::SessionIdentified(session) if run.session.is_none() => {
+                            run.session = Some(session.session);
+                        }
                         EventPayload::ProviderTerminal { status, .. } if run.terminal.is_none() => {
                             run.terminal = Some(status);
                         }
@@ -1880,6 +2209,8 @@ pub fn settle_turn(
     ctx: &LaunchContext<'_>,
     spec: &TurnSpec,
     run: &TurnRun,
+    mode: SessionMode,
+    continuation: &str,
 ) -> Result<TurnOutcome, String> {
     let clean = run.conclusion == TurnConclusion::TreeAbsent
         && run.stop.is_none()
@@ -1940,19 +2271,26 @@ pub fn settle_turn(
         .map_err(|_| "reply identities exhausted".to_owned())?;
     let unconfirmed = matches!(run.conclusion, TurnConclusion::StopUnconfirmed(_));
     let id = spec.turn;
+    let session = run.session.clone();
+    let continuation = continuation.to_owned();
+    let record_session =
+        move |tx: &mut Tx<'_>| tx.record_turn_session(id, session.as_deref(), mode, &continuation);
     let applied = {
         let (detail, reply) = (detail.clone(), reply.clone());
+        let record_session = record_session.clone();
         command(ctx, "FinishLeadTurn", id, move |tx| {
             if unconfirmed {
                 tx.set_admission(Admission::Closed)?;
             }
-            tx.finish_turn(
+            let sealed = tx.finish_turn(
                 id,
                 outcome,
                 &detail,
                 reply.as_ref().map(|(raw, parsed)| (raw.as_str(), parsed)),
                 &ids,
-            )
+            )?;
+            record_session(tx)?;
+            Ok(sealed)
         })
     };
     match applied {
@@ -1962,10 +2300,33 @@ pub fn settle_turn(
         Err(why) if outcome == TurnOutcome::Replied => {
             let detail = format!("the reply could not be stored: {why}");
             command(ctx, "FinishLeadTurn", id, move |tx| {
-                tx.finish_turn(id, TurnOutcome::Failed, &detail, None, &[])
+                let sealed = tx.finish_turn(id, TurnOutcome::Failed, &detail, None, &[])?;
+                record_session(tx)?;
+                Ok(sealed)
             })?;
             Ok(TurnOutcome::Failed)
         }
         Err(why) => Err(why),
     }
+}
+
+/// Follow-ups (session continuation): whether a continuation run should be followed by a
+/// fresh run of the same turn. Only a run that ended on its own without a reply is; a
+/// stop, an unconfirmed stop or lost evidence is settled as it is.
+pub fn continuation_failed(run: &TurnRun, kind: TurnKind) -> bool {
+    let replied = run.conclusion == TurnConclusion::TreeAbsent
+        && run.stop.is_none()
+        && !run.protocol_failed
+        && run.terminal == Some(TerminalStatus::Success)
+        && run.exit.is_some_and(|e| e.code == Some(0))
+        && run
+            .reply
+            .as_deref()
+            .is_some_and(|text| planner::parse_reply(kind, text).is_ok());
+    let clean_failure = match &run.conclusion {
+        TurnConclusion::TreeAbsent => !run.cancelled && !run.evidence_lost && run.stop.is_none(),
+        TurnConclusion::NotSpawned(_) => !run.cancelled,
+        TurnConclusion::StopUnconfirmed(_) => false,
+    };
+    !replied && (clean_failure || run.protocol_failed && !run.cancelled && !run.evidence_lost)
 }

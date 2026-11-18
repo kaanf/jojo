@@ -332,7 +332,7 @@ impl Service {
         Ok(())
     }
 
-    fn dispatch_review(
+    pub(super) fn dispatch_review(
         &mut self,
         review: OpaqueId,
         repository: &LocalRepository,

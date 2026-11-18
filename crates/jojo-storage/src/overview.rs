@@ -336,6 +336,7 @@ impl ReadView<'_> {
         before: Option<u64>,
         external: bool,
         briefs: bool,
+        followups: bool,
     ) -> Result<Json, StorageError> {
         let c = self.conn;
         let before = before.map_or(Ok(i64::MAX), to_db)?;
@@ -438,6 +439,21 @@ impl ReadView<'_> {
             ));
         }
         fields.push(("pending", number(pending)));
+        // Follow-ups (1.14): the sidebar counters of Execution Plan and Feature Chat. They
+        // are not part of `pending`: neither is an approval.
+        if followups {
+            fields.push(("steps_waiting", number(self.steps_waiting()?)));
+            let open = crate::turns::open_question_counts(c)?
+                .into_iter()
+                .map(|(feature, count)| {
+                    Ok(object([
+                        ("feature", identity(id_from_text(&feature)?)),
+                        ("count", number(count)),
+                    ]))
+                })
+                .collect::<Result<Vec<_>, StorageError>>()?;
+            fields.push(("open_questions", Json::List(open)));
+        }
         Ok(object(fields))
     }
 
@@ -650,6 +666,7 @@ impl ReadView<'_> {
         document: ArtifactId,
         revision: Option<u64>,
         offset: usize,
+        followups: bool,
     ) -> Result<Json, StorageError> {
         let c = self.conn;
         let id = crate::model::id_to_text(document.0);
@@ -790,32 +807,45 @@ impl ReadView<'_> {
         let chunk: String = body.chars().skip(offset).take(CHAT_TEXT_CHARS).collect();
         let next = offset.saturating_add(chunk.chars().count());
         let (feature, feature_name) = feature_fields(c, document_feature(c, &id)?)?;
-        Ok(object([
-            ("document", identity(document.0)),
-            ("kind", text(kind)),
-            (
-                "title",
-                optional(document_title(c, &id, &stored, &chosen.content)?),
-            ),
-            ("feature", feature),
-            ("feature_name", feature_name),
-            ("revision", Json::Int(chosen.revision)),
-            ("newest", Json::Int(newest.revision)),
-            ("approval", text(approval)),
-            ("stale", Json::Bool(stale)),
-            ("revisions", Json::List(revisions)),
-            ("history", Json::List(history)),
-            ("upstream", Json::List(upstream)),
-            ("downstream", Json::List(downstream(c, &id)?)),
-            ("counts", counts),
-            ("findings", findings),
-            ("criteria", criteria),
-            ("offset", number(offset as u64)),
-            ("next", number(next as u64)),
-            ("total", number(total as u64)),
-            ("complete", Json::Bool(next >= total)),
-            ("text", text(chunk)),
-        ]))
+        // Follow-ups (1.14): the advisory review of the chosen revision.
+        let advisory = if followups {
+            vec![(
+                "advisory",
+                self.document_advisory(document, chosen.revision as u64)?,
+            )]
+        } else {
+            Vec::new()
+        };
+        Ok(object(
+            [
+                ("document", identity(document.0)),
+                ("kind", text(kind)),
+                (
+                    "title",
+                    optional(document_title(c, &id, &stored, &chosen.content)?),
+                ),
+                ("feature", feature),
+                ("feature_name", feature_name),
+                ("revision", Json::Int(chosen.revision)),
+                ("newest", Json::Int(newest.revision)),
+                ("approval", text(approval)),
+                ("stale", Json::Bool(stale)),
+                ("revisions", Json::List(revisions)),
+                ("history", Json::List(history)),
+                ("upstream", Json::List(upstream)),
+                ("downstream", Json::List(downstream(c, &id)?)),
+                ("counts", counts),
+                ("findings", findings),
+                ("criteria", criteria),
+                ("offset", number(offset as u64)),
+                ("next", number(next as u64)),
+                ("total", number(total as u64)),
+                ("complete", Json::Bool(next >= total)),
+                ("text", text(chunk)),
+            ]
+            .into_iter()
+            .chain(advisory),
+        ))
     }
 
     /// Protocol 1.9: decisions on documents newest first, at most [`OVERVIEW_ROWS`]

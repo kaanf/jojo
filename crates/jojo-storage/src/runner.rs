@@ -383,7 +383,7 @@ pub(crate) fn repair_policy(
 }
 
 /// The lead plan a plan identity was drafted as: its turn, subjects, repository and base.
-fn lead_subjects(
+pub(crate) fn lead_subjects(
     c: &Connection,
     plan: ArtifactId,
 ) -> Result<Option<(String, SliceSubjects, RepositoryId, String)>, StorageError> {
@@ -1302,6 +1302,31 @@ impl ReadView<'_> {
         revision
             .map(|revision| view(self, &plan_text, revision))
             .transpose()
+    }
+    /// Follow-ups (protocol 1.14): the steps that wait for the human in the newest run of
+    /// every plan: in review, held, conflicting or refused.
+    pub fn steps_waiting(&self) -> Result<u64, StorageError> {
+        let mut seen = std::collections::HashSet::new();
+        let mut waiting = 0;
+        for (plan, revision) in runs(self.conn, false)? {
+            if !seen.insert(plan.clone()) {
+                continue;
+            }
+            waiting += view(self, &plan, revision)?
+                .steps
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.state,
+                        StepState::Review
+                            | StepState::Conflict
+                            | StepState::NeedsHuman
+                            | StepState::Refused
+                    )
+                })
+                .count() as u64;
+        }
+        Ok(waiting)
     }
     /// M3 (protocol 1.3): the newest run of one plan, or `null`.
     pub fn ipc_plan_run(&self, plan: ArtifactId) -> Result<Json, StorageError> {

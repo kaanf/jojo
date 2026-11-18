@@ -186,8 +186,10 @@ impl ClaudeAdapter {
             (home_name.to_owned(), home.to_owned()),
             (user_name.to_owned(), self.user.clone()),
         ];
-        ProcessLaunch::for_turn(spec, jojo_domain::claude::discovery_argv(), environment)
-            .map_err(ClaudeRejection::Launch)
+        // Follow-ups: a chat turn keeps or continues its session; the planner says how.
+        let args = jojo_domain::planner::turn_argv(spec)
+            .map_err(|e| ClaudeRejection::Launch(LaunchRejection::Spec(e)))?;
+        ProcessLaunch::for_turn(spec, args, environment).map_err(ClaudeRejection::Launch)
     }
 }
 

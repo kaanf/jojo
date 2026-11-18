@@ -77,6 +77,9 @@ pub enum RequestKind {
     BriefTurn,
     Workspace,
     RetryPlanStep,
+    RepairTurn,
+    ReviewAttempt,
+    ReviewDocument,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,7 +142,7 @@ use Shape::{Count, Exact, Open};
 /// Every request, in `RequestKind` order. Within a class this is also the order in which
 /// Hello lists the names.
 #[rustfmt::skip]
-pub const SPECS: [Spec; 58] = [
+pub const SPECS: [Spec; 61] = [
     spec(K::Hello, "Hello", Handshake, 0, true, Open, &[]),
     spec(K::PrepareClose, "PrepareClose", Mutation, 0, true, Open, &[]),
     spec(K::CancelClose, "CancelClose", Mutation, 0, true, Open, &["ticket"]),
@@ -198,6 +201,9 @@ pub const SPECS: [Spec; 58] = [
     spec(K::BriefTurn, "BriefTurn", Mutation, 12, false, Exact, &["repository", "provider", "message"]),
     spec(K::Workspace, "Workspace", Query, 12, false, Exact, &[]),
     spec(K::RetryPlanStep, "RetryPlanStep", Mutation, 13, false, Exact, &["plan", "step", "attempt", "action", "note"]),
+    spec(K::RepairTurn, "RepairTurn", Mutation, 14, false, Exact, &["turn", "note"]),
+    spec(K::ReviewAttempt, "ReviewAttempt", Mutation, 14, false, Exact, &["attempt", "candidate"]),
+    spec(K::ReviewDocument, "ReviewDocument", Mutation, 14, false, Exact, &["document", "revision"]),
 ];
 
 impl RequestKind {
@@ -862,6 +868,55 @@ impl RetryPlanStepCommand {
     }
 }
 
+/// Protocol 1.14 (follow-ups): the human asks for a failed or interrupted lead turn again,
+/// told why it failed; `note` may be empty.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepairTurnCommand {
+    pub turn: OpaqueId,
+    pub note: String,
+}
+impl RepairTurnCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            turn: id(get(p, "turn")?)?,
+            note: string(get(p, "note")?)?.to_owned(),
+        })
+    }
+}
+
+/// Protocol 1.14 (follow-ups): the human asks the other provider to review the sealed
+/// candidate of an attempt started by hand. The verdict approves nothing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewAttemptCommand {
+    pub attempt: OpaqueId,
+    pub candidate: String,
+}
+impl ReviewAttemptCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            attempt: id(get(p, "attempt")?)?,
+            candidate: string(get(p, "candidate")?)?.to_owned(),
+        })
+    }
+}
+
+/// Protocol 1.14 (follow-ups): the human asks the provider that did not draft it to
+/// review one revision of a requirements document or plan the lead drafted. The verdict
+/// approves nothing and holds nothing back.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReviewDocumentCommand {
+    pub document: ArtifactId,
+    pub revision: Revision,
+}
+impl ReviewDocumentCommand {
+    pub fn parse(p: &Json) -> Result<Self, String> {
+        Ok(Self {
+            document: ArtifactId(id(get(p, "document")?)?),
+            revision: Revision(uint(get(p, "revision")?)?),
+        })
+    }
+}
+
 /// What the human does with one question the lead asked.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QuestionAction {
@@ -1204,7 +1259,8 @@ mod tests {
         // 1.11: the recovery detail and project detail queries.
         // 1.12 (step 7): the brief turn and the workspace query.
         // 1.13 (M6): the retry of a held plan step.
-        for minor in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] {
+        // 1.14 (follow-ups): the repair of a lead turn and two advisory reviews.
+        for minor in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] {
             let v110 = if minor >= 10 {
                 " RequestExternal AuthorizeExternal InspectExternal ResolveExternal"
             } else {
@@ -1212,9 +1268,14 @@ mod tests {
             };
             let v112 = if minor >= 12 { " BriefTurn" } else { "" };
             let v113 = if minor >= 13 { " RetryPlanStep" } else { "" };
+            let v114 = if minor >= 14 {
+                " RepairTurn ReviewAttempt ReviewDocument"
+            } else {
+                ""
+            };
             assert_eq!(
                 names(Mutation, minor),
-                format!("{v12_commands} SaveProject RunPlan ControlPlan{v110}{v112}{v113}")
+                format!("{v12_commands} SaveProject RunPlan ControlPlan{v110}{v112}{v113}{v114}")
             );
             let v14 = if minor >= 4 { " Executables" } else { "" };
             let v15 = if minor >= 5 { " Repairs" } else { "" };
@@ -1250,6 +1311,11 @@ mod tests {
             Some(K::RetryPlanStep)
         );
         assert_eq!(RequestKind::of_frame("Workspace", 12), Some(K::Workspace));
+        assert_eq!(RequestKind::of_frame("RepairTurn", 13), None);
+        assert_eq!(
+            RequestKind::of_frame("ReviewDocument", 14),
+            Some(K::ReviewDocument)
+        );
         assert_eq!(RequestKind::of_frame("Executables", 3), None);
         assert_eq!(RequestKind::of_frame("Repairs", 4), None);
         assert_eq!(RequestKind::of_frame("Attempts", 5), None);

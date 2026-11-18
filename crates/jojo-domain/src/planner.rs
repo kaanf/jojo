@@ -44,6 +44,9 @@ pub const MAX_QUESTIONS: usize = 5;
 pub const MAX_STEPS: usize = 6;
 pub const MAX_SUMMARY_BYTES: usize = 4 * 1024;
 pub const MAX_QUESTION_BYTES: usize = 2 * 1024;
+/// Follow-ups (protocol 1.14): most choices a question may offer, and the bytes of each.
+pub const MAX_CHOICES: usize = 4;
+pub const MAX_CHOICE_BYTES: usize = 256;
 pub const MAX_TITLE_BYTES: usize = 256;
 /// The bound the storage layer puts on an ADR text.
 pub const MAX_ADR_BYTES: usize = 32 * 1024;
@@ -111,6 +114,20 @@ pub struct TurnSpec {
     pub timeout_millis: u64,
     pub max_output_bytes: u64,
     pub max_frame_bytes: u64,
+    /// Follow-ups (session continuation): the provider session a chat turn continues.
+    /// `None` starts a fresh session; a review or brief turn never continues one.
+    pub resume: Option<String>,
+}
+
+/// Follow-ups: a provider session identity Jojo may pass back to the CLI. What the stream
+/// reported, held to a plain shape: letters, digits and '-', at most 64 bytes.
+pub fn plain_session(session: &str) -> bool {
+    !session.is_empty()
+        && session.len() <= 64
+        && !session.starts_with('-')
+        && session
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 /// Absolute and already in normal form: no `.`/`..`, doubled or trailing separator.
@@ -153,6 +170,9 @@ impl TurnSpec {
             .all(|p| plain_absolute(p))
             || self.raw_output_dir.starts_with(&self.repository)
             || self.repository.starts_with(&self.raw_output_dir)
+            || self.resume.as_ref().is_some_and(|s| {
+                !plain_session(s) || !matches!(self.kind, TurnKind::Discover | TurnKind::Plan)
+            })
         {
             return Err(ProviderError::InvalidSpec);
         }
@@ -187,11 +207,18 @@ pub fn check_turn(spec: &TurnSpec) -> Result<(), ProviderError> {
     Ok(())
 }
 
-/// The one argument vector of a turn on the spec's provider.
+/// The one argument vector of a turn on the spec's provider. Follow-ups: a chat turn keeps
+/// its session so that the next turn of the feature can continue it ([`TurnSpec::resume`]);
+/// a review or brief turn stays unsaved.
 pub fn turn_argv(spec: &TurnSpec) -> Result<Vec<String>, ProviderError> {
-    match spec.fingerprint.provider {
-        ProviderKind::ClaudeCode => Ok(crate::claude::discovery_argv()),
-        ProviderKind::Codex => crate::codex::discovery_argv(&spec.repository),
+    let chat = matches!(spec.kind, TurnKind::Discover | TurnKind::Plan);
+    match (spec.fingerprint.provider, chat) {
+        (ProviderKind::ClaudeCode, false) => Ok(crate::claude::discovery_argv()),
+        (ProviderKind::Codex, false) => crate::codex::discovery_argv(&spec.repository),
+        (ProviderKind::ClaudeCode, true) => Ok(crate::claude::chat_argv(spec.resume.as_deref())),
+        (ProviderKind::Codex, true) => {
+            crate::codex::chat_argv(&spec.repository, spec.resume.as_deref())
+        }
     }
 }
 
@@ -332,8 +359,9 @@ pub fn discover_prompt(
          no reasonable default exists. Priority: scope, then security and privacy, then \
          user experience, then technical detail. Never repeat a question that is listed \
          above. At most {MAX_QUESTIONS} new questions; each must be answerable in a short \
-         phrase or by choosing among a few options you name. Mark a question blocking when \
-         the requirements cannot be reviewed without its answer.\n\
+         phrase or by choosing among a few options you name. When it is a choice, give 2 to \
+         {MAX_CHOICES} short options in \"choices\", otherwise []. Mark a question blocking \
+         when the requirements cannot be reviewed without its answer.\n\
          2. Write the requirements draft as soon as you can state the goal. It describes \
          what users can do and how that is verified, never an implementation: no file, \
          function or library names. Say what is deliberately not being done in \
@@ -349,7 +377,7 @@ pub fn discover_prompt(
          the repository and what changed in the draft this round.\n\n\
          # Reply\n{REPLY_RULES}\n\
          {{\"schema\":\"{DISCOVERY_SCHEMA}\",\"summary\":\"...\",\
-         \"questions\":[{{\"prompt\":\"...\",\"blocking\":true}}],\"prd\":null}}\n\
+         \"questions\":[{{\"prompt\":\"...\",\"blocking\":true,\"choices\":[]}}],\"prd\":null}}\n\
          where \"prd\" is null or an object of exactly this shape (a list you have \
          nothing for is written as []; identifiers are short, unique across the whole \
          document and made of letters, digits, '-', '_' and '.'):\n{PRD_SHAPE}\n"
@@ -412,7 +440,9 @@ pub fn plan_prompt(
          status 0 means the step passed.\n\
          4. Ask a question only when a step cannot be planned without the answer. Give \
          the key of the one step it blocks in \"step\", or null when it blocks the whole \
-         plan. At most {MAX_QUESTIONS} questions, none that is listed above.\n\
+         plan. At most {MAX_QUESTIONS} questions, none that is listed above; when the answer \
+         is one of a few options, give 2 to {MAX_CHOICES} of them in \"choices\", otherwise \
+         [].\n\
          5. In \"summary\", tell the product owner in a few sentences how the plan is cut \
          and why.\n\n\
          # Reply\n{REPLY_RULES}\n\
@@ -420,9 +450,46 @@ pub fn plan_prompt(
          \"steps\":[{{\"key\":\"s1\",\"title\":\"...\",\"kind\":null,\"provider\":\"Codex\",\
          \"depends_on\":[],\"write_scope\":[\"...\"],\"baseline\":[\"...\"],\
          \"tests\":[\"...\"],\"command\":[\"/usr/bin/...\",\"...\"]}}],\
-         \"questions\":[{{\"prompt\":\"...\",\"blocking\":true,\"step\":null}}]}}\n"
+         \"questions\":[{{\"prompt\":\"...\",\"blocking\":true,\"step\":null,\"choices\":[]}}]}}\n"
     ));
     out
+}
+
+/// Follow-ups (session continuation): the prompt of a turn that continues the provider
+/// session of the feature's previous turn. The same prompt as a fresh one, except that the
+/// opening asks the lead to read again only what it needs: it read the repository in the
+/// session it continues. The fresh prompt stays the one stored and the one a fallback runs.
+pub fn continued_prompt(fresh: &str) -> String {
+    const OBJECTIVE: &str = "\n# Objective from the product owner\n";
+    let rest = fresh.find(OBJECTIVE).map_or(fresh, |at| &fresh[at..]);
+    format!(
+        "You are the lead engineer of this repository and you continue the session in which \
+         you already read it for this feature. You may only read: read again only what changed \
+         or what you still need, change nothing, and do not try to work around a missing \
+         tool. Everything below is the current state; where it differs from what you said \
+         earlier, it wins.\n{rest}"
+    )
+}
+
+/// Follow-ups (lead turn repair): what a turn the human asked to repair is told about the
+/// turn that failed, inserted before its instructions. `detail` is the core's reason.
+pub fn with_repair_section(prompt: &str, detail: &str, note: Option<&str>) -> String {
+    const WHAT: &str = "\n# What to do\n";
+    let mut section = String::from("\n# Your previous attempt at this turn failed\n");
+    section.push_str(detail.trim());
+    section.push_str(
+        "\nThe product owner asked for this turn again. Mind the reply rules below: the \
+         whole last message must be the one JSON object.\n",
+    );
+    if let Some(note) = note.filter(|n| n.chars().any(char::is_alphanumeric)) {
+        section.push_str("Note from the product owner about the failure:\n");
+        section.push_str(note);
+        section.push('\n');
+    }
+    match prompt.find(WHAT) {
+        Some(at) => format!("{}{section}{}", &prompt[..at], &prompt[at..]),
+        None => format!("{prompt}{section}"),
+    }
 }
 
 /// A question the lead asks. `step` is the key of the one draft step it blocks.
@@ -431,6 +498,9 @@ pub struct LeadQuestion {
     pub prompt: String,
     pub blocking: bool,
     pub step: Option<String>,
+    /// Follow-ups: the options the lead names, none or two to [`MAX_CHOICES`]. An answer
+    /// is still the human's written text; a choice only fills it in.
+    pub choices: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -655,6 +725,8 @@ fn key(value: &Json, path: &str) -> Result<String, LeadError> {
 }
 
 fn question(value: &Json, path: &str, with_step: bool) -> Result<LeadQuestion, LeadError> {
+    // Follow-ups: the member is optional so that a reply written before choices still reads.
+    let has_choices = value_of(value, "choices").is_some();
     let mut members = Members::of(value, path)?;
     let prompt = members.text("prompt", MAX_QUESTION_BYTES, true)?;
     let blocking = match members.take("blocking")? {
@@ -669,11 +741,26 @@ fn question(value: &Json, path: &str, with_step: bool) -> Result<LeadQuestion, L
     } else {
         None
     };
+    let choices = if has_choices {
+        members.list("choices", MAX_CHOICES, |v, p| {
+            text(v, p, MAX_CHOICE_BYTES, false)
+        })?
+    } else {
+        Vec::new()
+    };
+    let choices_path = member_path(path, "choices");
+    if choices.len() == 1 {
+        return Err(bad(choices_path, "one choice is no choice"));
+    }
+    if (1..choices.len()).any(|i| choices[..i].contains(&choices[i])) {
+        return Err(bad(choices_path, "repeated choice"));
+    }
     members.finish()?;
     Ok(LeadQuestion {
         prompt,
         blocking,
         step,
+        choices,
     })
 }
 

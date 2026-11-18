@@ -76,7 +76,12 @@ fn git(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> IoResult<Vec<u8>> {
                 | "commit-tree"
                 | "update-ref"
         )
-    ) || (args.first() == Some(&"worktree") && args.get(1) != Some(&"add"))
+    ) || (args.first() == Some(&"worktree")
+        && !matches!(args.get(1).copied(), Some("add" | "remove" | "prune" | "list")))
+        // Follow-ups: only an integration worktree is removed, always forced.
+        || (args.first() == Some(&"worktree")
+            && args.get(1) == Some(&"remove")
+            && args.get(2) != Some(&"--force"))
         || (args.first() == Some(&"checkout") && args.get(1) != Some(&"--detach"))
         // M3: plan integration stages everything and moves only a plan branch.
         || (args.first() == Some(&"add") && args.get(1) != Some(&"--all"))
@@ -1642,41 +1647,95 @@ pub fn integrate_candidate(
         ],
         None,
     )?;
-    if let Err(why) = packet.apply_onto(&dest) {
-        return Ok(Integration::Conflict {
-            detail: format!("the candidate does not apply to {parent}: {why}"),
-        });
-    }
-    git(&dest, &["add", "--all"], None)?;
-    let tree = line(git(&dest, &["write-tree"], None)?)?;
-    let commit = line(git(
-        &dest,
-        &["commit-tree", &tree, "-p", parent, "-m", message],
-        None,
-    )?)?;
-    match current {
-        Some(now) if now == parent => {
-            git(&repo, &["update-ref", &refname, &commit, parent], None)?;
+    // Follow-ups: the worktree is only the place of the commit; it goes whatever the
+    // outcome (the commit lives in the repository, a conflict's detail in the record).
+    let outcome = (|| -> IoResult<Integration> {
+        if let Err(why) = packet.apply_onto(&dest) {
+            return Ok(Integration::Conflict {
+                detail: format!("the candidate does not apply to {parent}: {why}"),
+            });
         }
-        None => {
-            let absent = "0".repeat(parent.len());
-            git(&repo, &["update-ref", &refname, &commit, &absent], None)?;
-        }
-        Some(now) => {
-            // Adopt an integration that was made but not recorded: same parent, same tree.
-            let tree_of = line(git(
-                &repo,
-                &["rev-parse", &format!("{now}^{{tree}}")],
-                None,
-            )?)?;
-            let parent_of = line(git(&repo, &["rev-parse", &format!("{now}^")], None)?)?;
-            if tree_of != tree || parent_of != parent {
-                return Ok(Integration::Conflict {
-                    detail: format!("the plan branch moved to {now}; expected {parent}"),
-                });
+        git(&dest, &["add", "--all"], None)?;
+        let tree = line(git(&dest, &["write-tree"], None)?)?;
+        let commit = line(git(
+            &dest,
+            &["commit-tree", &tree, "-p", parent, "-m", message],
+            None,
+        )?)?;
+        match current {
+            Some(now) if now == parent => {
+                git(&repo, &["update-ref", &refname, &commit, parent], None)?;
             }
-            return Ok(Integration::Integrated { commit: now });
+            None => {
+                let absent = "0".repeat(parent.len());
+                git(&repo, &["update-ref", &refname, &commit, &absent], None)?;
+            }
+            Some(now) => {
+                // Adopt an integration that was made but not recorded: same parent, same tree.
+                let tree_of = line(git(
+                    &repo,
+                    &["rev-parse", &format!("{now}^{{tree}}")],
+                    None,
+                )?)?;
+                let parent_of = line(git(&repo, &["rev-parse", &format!("{now}^")], None)?)?;
+                if tree_of != tree || parent_of != parent {
+                    return Ok(Integration::Conflict {
+                        detail: format!("the plan branch moved to {now}; expected {parent}"),
+                    });
+                }
+                return Ok(Integration::Integrated { commit: now });
+            }
+        }
+        Ok(Integration::Integrated { commit })
+    })();
+    let removed = remove_integration(&repo, &dest);
+    let outcome = outcome?;
+    removed?;
+    Ok(outcome)
+}
+
+/// Removes one integration worktree from `repo` and prunes what Git kept of it.
+fn remove_integration(repo: &Path, dest: &Path) -> IoResult<()> {
+    git(
+        repo,
+        &["worktree", "remove", "--force", text_path(dest)?],
+        None,
+    )?;
+    git(repo, &["worktree", "prune"], None).map(drop)
+}
+
+/// Follow-ups: removes every integration worktree an earlier helper left behind (one that
+/// ended between making and removing it), from each registered repository that lists it;
+/// what no repository lists is deleted from the private integration root. Returns how
+/// many were removed.
+pub fn sweep_integrations(engine: &Engine) -> IoResult<usize> {
+    let root = integration_root(engine)?;
+    let repositories = engine
+        .reader()
+        .map_err(|e| e.to_string())?
+        .read(|v| v.registered_repositories())
+        .map_err(|e| e.to_string())?;
+    let mut removed = 0;
+    for (_, path) in repositories {
+        let repo = PathBuf::from(path);
+        let Ok(list) = git(&repo, &["worktree", "list", "--porcelain"], None) else {
+            continue;
+        };
+        let listed: Vec<PathBuf> = String::from_utf8_lossy(&list)
+            .lines()
+            .filter_map(|l| l.strip_prefix("worktree "))
+            .map(PathBuf::from)
+            .filter(|p| p.parent() == Some(root.as_path()))
+            .collect();
+        for dest in listed {
+            remove_integration(&repo, &dest)?;
+            removed += 1;
         }
     }
-    Ok(Integration::Integrated { commit })
+    for entry in io(fs::read_dir(&root))? {
+        let path = io(entry)?.path();
+        io(fs::remove_dir_all(&path))?;
+        removed += 1;
+    }
+    Ok(removed)
 }

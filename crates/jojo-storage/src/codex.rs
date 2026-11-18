@@ -202,7 +202,8 @@ impl CodexAdapter {
             return Err(CodexRejection::Fingerprint);
         }
         self.ready()?;
-        let args = jojo_domain::codex::discovery_argv(&spec.repository)
+        // Follow-ups: a chat turn keeps or continues its session; the planner says how.
+        let args = jojo_domain::planner::turn_argv(spec)
             .map_err(|e| CodexRejection::Launch(LaunchRejection::Spec(e)))?;
         let Some(home) = self.home.to_str() else {
             return Err(CodexRejection::Home("path is not UTF-8".into()));
