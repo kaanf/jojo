@@ -20,9 +20,30 @@ struct MainView: View {
     @State private var exportingActivity = false
     @State private var projectChosen: String?
     @State private var projectDraft: ProjectDraft?
+    /// Step 7: New Project covers the window while it is set; what the human brings.
+    @State private var newProject: Set<Have>?
 
     var body: some View {
         Themed {
+            if model.showingSetup {
+                OnboardingScreen(model: model, openProject: { newProject = $0 })
+            } else if let haves = newProject {
+                NewProjectScreen(model: model, haves: haves, close: { newProject = nil; screen = .dashboard },
+                                 openDiscovery: { project in
+                                     newProject = nil
+                                     newFeatureProject = project
+                                     newFeature()
+                                 })
+            } else {
+                shell
+            }
+        }
+        .overlay { Themed { QuitOverlay(model: model) } }
+        .frame(minWidth: 900, minHeight: 620)
+    }
+
+    private var shell: some View {
+        Group {
             AppShell(model: model, screen: $screen, showInspector: { delegate.showAuxiliary() },
                      controls: controls,
                      primary: primary,
@@ -74,7 +95,8 @@ struct MainView: View {
                         shown(.projects) {
                             ProjectsScreen(model: model, visible: screen == .projects, chosen: $projectChosen, draft: $projectDraft,
                                            newFeature: { newFeatureProject = $0; newFeature() },
-                                           openFeature: { model.workspace.openChat($0); screen = .featureChat })
+                                           openFeature: { model.workspace.openChat($0); screen = .featureChat },
+                                           newProject: { newProject = [.code] })
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -85,9 +107,7 @@ struct MainView: View {
                 }
                 .padding(.bottom, 28)
             }
-            .overlay { QuitOverlay(model: model) }
         }
-        .frame(minWidth: 900, minHeight: 620)
     }
 
     /// Destinations that have a screen today; the others show `NotBuiltYet`.

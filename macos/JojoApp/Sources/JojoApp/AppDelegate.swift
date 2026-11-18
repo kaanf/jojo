@@ -11,12 +11,18 @@ struct LaunchOptions {
     /// P2-02 slice options and the M1 Claude Code options, forwarded to the helper exactly
     /// as given at launch.
     var slice: [String] = []
+    /// Step 7: started without helper options and without a saved setup, so Onboarding runs
+    /// before the helper is started. With a saved setup, `slice` is composed from it.
+    var needsSetup = false
+    /// The setup the helper options were composed from, if they were.
+    var setup: JojoSetup?
     static let sliceOptions: Set<String> = ["--disposable-root", "--codex-executable", "--codex-version",
                                             "--codex-sha256", "--codex-home", "--codex-auth",
                                             "--claude-executable", "--claude-version", "--claude-sha256",
                                             "--claude-home", "--claude-user", "--claude-auth", "--login-shell"]
 
-    static func parse(_ arguments: [String]) -> LaunchOptions {
+    static func parse(_ arguments: [String], setup: JojoSetup? = JojoSetup.stored,
+                      environment: [String: String] = ProcessInfo.processInfo.environment) -> LaunchOptions {
         var o = LaunchOptions()
         var i = 1
         while i + 1 < arguments.count {
@@ -32,10 +38,20 @@ struct LaunchOptions {
             }
             i += 2
         }
+        // Step 7: a launch without helper options (and not a scripted one) starts the helper
+        // from the setup Onboarding saved; without one, Onboarding runs first.
+        if o.slice.isEmpty, o.script == nil {
+            if let setup, let home = environment["HOME"] {
+                o.slice = setup.helperOptions(home: home, user: NSUserName(), shell: environment["SHELL"])
+                o.setup = setup
+            } else {
+                o.needsSetup = true
+            }
+        }
         // D3: the core asks the user's login shell for PATH; pass the shell this app was
         // started under unless the launch named one. Only a slice configuration uses it.
         if o.slice.contains("--disposable-root"), !o.slice.contains("--login-shell"),
-           let shell = ProcessInfo.processInfo.environment["SHELL"], shell.hasPrefix("/") {
+           let shell = environment["SHELL"], shell.hasPrefix("/") {
             o.slice += ["--login-shell", shell]
         }
         // Development/packaging default: helper beside the GUI executable.
@@ -102,6 +118,31 @@ final class AppModel: ObservableObject {
     var quit: (QuitSource) -> Void = { _ in }
     /// Settings › Appearance; applied to the app and kept when it changes.
     @Published var appearance = AppAppearance.stored
+    /// Step 7: Onboarding covers the window (first run, or Settings › Run Setup Again).
+    @Published var showingSetup = false
+    /// The setup in force: the saved one, or what Onboarding is deciding now.
+    @Published var setup: JojoSetup?
+    /// The helper has been started (on a first run, only once the workspace is chosen).
+    private(set) var started = false
+
+    /// Step 7, Onboarding step 1: keeps the setup and, on a first run, starts the helper
+    /// with it. A helper that is already running keeps its options until the next launch.
+    func useSetup(_ setup: JojoSetup) {
+        self.setup = setup
+        setup.save()
+        guard !started else { return }
+        let environment = ProcessInfo.processInfo.environment
+        transport?.setSliceOptions(setup.helperOptions(home: environment["HOME"] ?? NSHomeDirectory(), user: NSUserName(),
+                                                       shell: environment["SHELL"]))
+        start()
+    }
+
+    /// Onboarding's last step: the setup is kept and the window shows the app.
+    func finishSetup(_ setup: JojoSetup) {
+        self.setup = setup
+        setup.save()
+        showingSetup = false
+    }
 
     func setAppearance(_ appearance: AppAppearance) {
         self.appearance = appearance
@@ -112,6 +153,8 @@ final class AppModel: ObservableObject {
     init(options: LaunchOptions, trace: Tracer) {
         self.trace = trace
         self.options = options
+        showingSetup = options.needsSetup
+        setup = options.setup ?? JojoSetup.stored
         let transport = options.helper.map {
             ProcessHelperTransport(.init(executable: $0, dataRoot: options.dataRoot, worktreeRoot: options.worktreeRoot,
                                          home: ProcessInfo.processInfo.environment["HOME"], slice: options.slice))
@@ -137,6 +180,7 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        started = true
         client.start()
     }
 }
@@ -181,7 +225,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                                      forEventClass: AEEventClass(kCoreEventClass),
                                                      andEventID: AEEventID(kAEQuitApplication))
         showPrimary()
-        model.start()
+        // Step 7: a first run starts the helper from Onboarding, once the workspace is chosen.
+        if !options.needsSetup { model.start() }
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.model.workspace.pollEvents() }
         }

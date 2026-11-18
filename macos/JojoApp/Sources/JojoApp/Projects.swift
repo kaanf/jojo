@@ -175,6 +175,8 @@ struct ProjectsActions {
     var reload: () -> Void = {}
     var newFeature: (String) -> Void = { _ in }
     var openFeature: (String) -> Void = { _ in }
+    /// Step 7: New Project, the board's flow (the form stays for editing a project).
+    var newProject: () -> Void = {}
 }
 
 /// Opens a project's repositories in Finder: the one thing this screen does with a path.
@@ -191,6 +193,7 @@ struct ProjectsScreen: View {
     @Binding var draft: ProjectDraft?
     var newFeature: (String) -> Void = { _ in }
     var openFeature: (String) -> Void = { _ in }
+    var newProject: () -> Void = {}
 
     var state: ProjectsState {
         let workspace = model.workspace
@@ -217,7 +220,8 @@ struct ProjectsScreen: View {
             },
             reload: { workspace.loadProjects() },
             newFeature: newFeature,
-            openFeature: openFeature))
+            openFeature: openFeature,
+            newProject: newProject))
             .onChange(of: visible) {
                 workspace.projectsShown = visible
                 if visible { load() }
@@ -285,7 +289,7 @@ struct ProjectsView: View {
         default:
             StateBlock(symbol: "folder", title: "No projects yet",
                        message: "A project names its registered repositories, the commands that test them, the instructions every agent session gets, the provider per task kind and the parallel capacity.") {
-                Button("Create Project…") { create() }.buttonStyle(.jojo(.primary, compact: true))
+                Button("Create Project…") { actions.newProject() }.buttonStyle(.jojo(.primary, compact: true))
             }
             .frame(minHeight: 200)
         }
@@ -311,7 +315,7 @@ struct ProjectsView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 6) {
-                Button("Create Project…") { create() }
+                Button("Create Project…") { actions.newProject() }
                     .buttonStyle(.jojo(.ghost, compact: true))
                     .disabled(state.draft != nil)
                 Button("Import Local Project…") {}

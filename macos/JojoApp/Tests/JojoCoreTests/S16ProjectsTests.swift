@@ -68,8 +68,9 @@ enum ProjectRows {
 
 @MainActor
 final class S16ProjectsTests: XCTestCase {
-    func test_s16_project_detail_is_read_at_1_11_for_the_shown_project_and_decoded() throws {
-        XCTAssertEqual(Request.ProjectDetail.minor, 11)
+    func test_s16_project_detail_is_read_at_1_12_for_the_shown_project_and_decoded() throws {
+        // Step 7: at 1.12 each repository carries its brief.
+        XCTAssertEqual(Request.ProjectDetail.minor, 12)
         XCTAssertEqual(Request.ProjectDetail.fields, ["project"])
         let h = Harness()
         let model = WorkspaceModel(client: h.client)
@@ -77,7 +78,7 @@ final class S16ProjectsTests: XCTestCase {
         h.fake.reply(h.fake.last("Snapshot")!, ["rows": .list([]), "as_of_event_seq": .int(30), "admission": .text("Open")])
         model.loadProjectDetail(ProjectRows.crew)
         let request = try XCTUnwrap(h.fake.last("ProjectDetail"))
-        XCTAssertEqual(request.minor, 11)
+        XCTAssertEqual(request.minor, 12)
         XCTAssertEqual(request.payload, ["project": .text(ProjectRows.crew)])
         h.fake.replyNull(request)
         XCTAssertEqual(model.projectDetailLoad, .failed("This core has no such project."))

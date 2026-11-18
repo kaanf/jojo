@@ -169,6 +169,9 @@ struct SpecificationsState: Equatable {
             return ("Plans drafted on it may use this decision\(on).", "Start tasks, push, deploy, or carry over to a changed revision")
         case "ExecutionPlan":
             return ("Its steps may be admitted and run.", "Push, deploy, or approve the candidates its steps produce")
+        case "Brief":
+            return ("Later discovery and plan turns of this repository are given it.",
+                    "Adopt its test command, start tasks, or carry over to a changed revision")
         default:
             return ("Host validation of its steps' candidates checks against it.", "Accept a candidate, push or deploy")
         }

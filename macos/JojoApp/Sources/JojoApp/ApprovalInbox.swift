@@ -89,7 +89,7 @@ struct InboxItem: Identifiable, Equatable {
     func matches(_ type: InboxType) -> Bool {
         switch (type, subject) {
         case (.all, _): return true
-        case (.specs, .document(let d)): return ["Prd", "Adr"].contains(d.kind)
+        case (.specs, .document(let d)): return ["Prd", "Adr", "Brief"].contains(d.kind)
         case (.plans, .document(let d)): return ["ExecutionPlan", "ValidationPlan"].contains(d.kind)
         case (.candidates, .candidate): return true
         case (.external, .external): return true
@@ -216,6 +216,9 @@ struct ApprovalInboxState: Equatable {
         case "Adr":
             return Kind(name: "Architecture decision", why: "Architecture decisions bind every plan that builds on them. An approval does not carry over to changed content.",
                         approve: "Approve Revision")
+        case "Brief":
+            return Kind(name: "Project brief", why: "An approved brief is given to every later discovery and plan turn of its repository. An approval does not carry over to changed content.",
+                        approve: "Approve Brief")
         case "ValidationPlan":
             return Kind(name: "Validation plan", why: "Host validation checks every candidate of the plan against it. Approving does not start anything.",
                         approve: "Approve Plan")

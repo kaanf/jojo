@@ -150,6 +150,9 @@ public struct ProjectDetail: Equatable, Sendable {
         public let activeWorktrees: Int64
         public let healthy: Bool
         public let issues: [String]
+        /// Step 7 (1.12): the repository's project brief and its newest brief turn.
+        public let brief: ProjectBrief?
+        public let briefTurn: BriefTurnState?
 
         init?(_ p: JSON) {
             guard let id = p["repository"]?.string else { return nil }
@@ -164,6 +167,15 @@ public struct ProjectDetail: Equatable, Sendable {
             activeWorktrees = p["active_worktrees"]?.integer ?? 0
             healthy = p["healthy"]?.boolean ?? false
             issues = (p["issues"]?.items ?? []).compactMap(\.string)
+            brief = p["brief"]?["brief"].flatMap(ProjectBrief.init)
+            briefTurn = p["brief"]?["turn"].flatMap(BriefTurnState.init)
+        }
+
+        public init(id: String, name: String, path: String? = nil, branch: String? = nil, head: String? = nil,
+                    healthy: Bool = true, issues: [String] = [], brief: ProjectBrief? = nil, briefTurn: BriefTurnState? = nil) {
+            (self.id, self.name, self.path, self.branch, self.head) = (id, name, path, branch, head)
+            (origin, originKind, worktrees, activeWorktrees) = (nil, nil, 0, 0)
+            (self.healthy, self.issues, self.brief, self.briefTurn) = (healthy, issues, brief, briefTurn)
         }
     }
 
@@ -188,6 +200,11 @@ public struct ProjectDetail: Equatable, Sendable {
         missing = (p["missing"]?.items ?? []).compactMap { m in
             m["text"]?.string.map { Missing(repository: m["repository"]?.string, text: $0) }
         }
+    }
+
+    public init(project: String, revision: Int64, name: String, repositories: [Repository], missing: [String] = []) {
+        (self.project, self.revision, self.name, self.repositories) = (project, revision, name, repositories)
+        self.missing = missing.map { Missing(repository: nil, text: $0) }
     }
 }
 

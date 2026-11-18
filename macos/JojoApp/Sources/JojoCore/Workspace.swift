@@ -408,6 +408,11 @@ public final class WorkspaceModel {
     public internal(set) var projectDetail: ProjectDetail?
     public internal(set) var projectDetailLoad = PlanLoad.idle
     var projectDetailKey = ""
+    /// Step 7 (protocol 1.12): the workspace folder's repositories (New Project), and the
+    /// last brief turn command of this session.
+    public internal(set) var workspaceListing: WorkspaceListing?
+    public internal(set) var workspaceListingLoad = PlanLoad.idle
+    public internal(set) var briefOutcome: StartOutcome?
     public internal(set) var eventPayload: EventPayload?
     public internal(set) var eventPayloadLoad = PlanLoad.idle
     var eventPayloadKey: Int64 = 0

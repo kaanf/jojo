@@ -453,7 +453,8 @@ struct SettingsScreen: View {
                 executablesLoad: workspace.executablesLoad, section: section, external: workspace.external,
                 capacity: workspace.projects?.capacity, appearance: model.appearance),
             select: { section = $0 },
-            setAppearance: { model.setAppearance($0) })
+            setAppearance: { model.setAppearance($0) },
+            runSetup: { model.showingSetup = true })
             .onChange(of: visible) {
                 workspace.executablesShown = visible
                 if visible { load() }
@@ -474,6 +475,7 @@ struct SettingsView: View {
     let state: SettingsState
     var select: (SettingsSection) -> Void = { _ in }
     var setAppearance: (AppAppearance) -> Void = { _ in }
+    var runSetup: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -490,6 +492,7 @@ struct SettingsView: View {
                             .accessibilityAddTraits(.isHeader)
                     }
                     if state.section == .appearance { theme_ }
+                    if state.section == .storage { setup }
                     page(state.page)
                 }
                 .frame(maxWidth: 760, alignment: .topLeading)
@@ -509,6 +512,24 @@ struct SettingsView: View {
                 Text("Theme").textStyle(.body).foregroundStyle(theme.text)
                 Spacer(minLength: 0)
                 SegmentedCapsule(selection: Binding(get: { state.appearance }, set: { setAppearance($0) }), label: "Theme")
+            }
+            .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 9))
+            .cardElevation(radius: 12)
+        }
+    }
+
+    /// Step 7: Onboarding again. A changed workspace folder or agent takes effect when
+    /// Jojo starts next.
+    private var setup: some View {
+        LabeledSection(title: "Setup") {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Workspace folder and agents").textStyle(.body).foregroundStyle(theme.text)
+                    Text("Kept by Onboarding on this Mac. A change takes effect when Jojo starts next.")
+                        .textStyle(.secondary).foregroundStyle(theme.text2)
+                }
+                Spacer(minLength: 0)
+                Button("Run Setup Again", action: runSetup).buttonStyle(.jojo(.secondary, compact: true))
             }
             .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 9))
             .cardElevation(radius: 12)

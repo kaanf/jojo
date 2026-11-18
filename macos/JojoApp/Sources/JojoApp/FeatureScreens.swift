@@ -294,6 +294,7 @@ func documentTile(_ kind: String) -> (String, RGBA) {
     case "Adr": return ("ADR", Palette.indigo)
     case "ExecutionPlan": return ("PLAN", Palette.blue)
     case "ValidationPlan": return ("VAL", Palette.teal)
+    case "Brief": return ("BRF", Palette.teal)
     default: return ("DOC", Palette.gray)
     }
 }
@@ -305,6 +306,7 @@ func documentCode(_ kind: String) -> String {
     case "Adr": return "ADR"
     case "ExecutionPlan": return "Plan"
     case "ValidationPlan": return "Validation plan"
+    case "Brief": return "Project brief"
     default: return "Document"
     }
 }

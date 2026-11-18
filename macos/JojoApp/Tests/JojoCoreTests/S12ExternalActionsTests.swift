@@ -91,9 +91,10 @@ final class S12ExternalActionsTests: XCTestCase {
 
     func test_s12_external_requests_go_at_1_10_with_exactly_the_helpers_fields() throws {
         XCTAssertEqual(Request.allCases.filter { $0.minor == 10 },
-                       [.Documents, .ExternalActions, .RequestExternal, .AuthorizeExternal, .InspectExternal, .ResolveExternal])
+                       [.ExternalActions, .RequestExternal, .AuthorizeExternal, .InspectExternal, .ResolveExternal])
         let (h, model) = ready()
-        XCTAssertEqual(h.fake.last("Documents")?.minor, 10)
+        // Step 7: the documents answer lists the briefs from 1.12, so it is read there.
+        XCTAssertEqual(h.fake.last("Documents")?.minor, 12)
         model.loadExternalActions()
         XCTAssertEqual(h.fake.last("ExternalActions")?.minor, 10)
         XCTAssertEqual(h.fake.last("ExternalActions")?.payload, ["plan": .null])

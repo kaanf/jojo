@@ -168,6 +168,7 @@ public struct DocumentSummary: Equatable, Sendable, Identifiable {
         case "Adr": return "Architecture decision"
         case "ValidationPlan": return "Validation plan"
         case "ExecutionPlan": return "Execution plan"
+        case "Brief": return "Project brief"
         default: return kind
         }
     }

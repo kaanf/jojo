@@ -7,7 +7,7 @@ import Foundation
 public enum Request: String, CaseIterable, Sendable {
     case Hello
     case PrepareClose, CancelClose, ConfirmClose, CancelAttempt, HumanDecision
-    case Start, RecoveryResolve, RecoveryStart, Validate, CandidateDecision
+    case RegisterRepository, Start, RecoveryResolve, RecoveryStart, Validate, CandidateDecision
     case Snapshot, Events, EventDetail, Log, Receipt, CloseStatus, ReviewBundle, Recovery
     case RecoveryInspect, Candidate, CandidateChanges, CandidateDiff, ValidationReport
     case ApprovedPlan
@@ -20,6 +20,7 @@ public enum Request: String, CaseIterable, Sendable {
     case Document, Decisions, PlanDetail, AttemptDetail
     case ExternalActions, RequestExternal, AuthorizeExternal, InspectExternal, ResolveExternal
     case RecoveryDetail, ProjectDetail
+    case BriefTurn, Workspace
 
     public var fields: [String] {
         switch self {
@@ -29,6 +30,7 @@ public enum Request: String, CaseIterable, Sendable {
         case .ConfirmClose: return ["ticket"]
         case .CancelAttempt: return ["attempt"]
         case .HumanDecision: return ["subject", "hash", "content_hash", "displayed_hash", "context_hash", "upstream", "prior_decision", "action"]
+        case .RegisterRepository: return ["path"]
         case .Start: return ["prd", "adr", "plan", "validation", "step"]
         case .RecoveryResolve: return ["digest", "attempt", "choice"]
         case .RecoveryStart: return ["digest"]
@@ -75,6 +77,8 @@ public enum Request: String, CaseIterable, Sendable {
         case .ResolveExternal: return ["action"]
         case .RecoveryDetail: return []
         case .ProjectDetail: return ["project"]
+        case .BriefTurn: return ["repository", "provider", "message"]
+        case .Workspace: return []
         }
     }
 
@@ -93,13 +97,17 @@ public enum Request: String, CaseIterable, Sendable {
     /// the documents answer lists the push and pull request requests that wait, so the
     /// documents are read there (after every snapshot, for the sidebar counter). The
     /// recovery detail and project detail queries exist only from 1.11, and at 1.11 an
-    /// event carries its category and project (`Request.attributedEvents`).
+    /// event carries its category and project (`Request.attributedEvents`). The brief turn
+    /// and the workspace query exist only from 1.12 (step 7), and at 1.12 a project's
+    /// repositories carry their briefs and the documents answer lists the briefs, so
+    /// `ProjectDetail` and `Documents` are read there.
     public var minor: Int64 {
         let chat: [Request] = [.ChatTurn, .AnswerQuestion, .CancelTurn, .FeatureChat, .ChatText]
         let runner: [Request] = [.SaveProject, .Projects, .RunPlan, .ControlPlan, .PlanRun]
         let external: [Request] = [.ExternalActions, .RequestExternal, .AuthorizeExternal, .InspectExternal,
-                                   .ResolveExternal, .Documents]
-        if [.RecoveryDetail, .ProjectDetail].contains(self) { return 11 }
+                                   .ResolveExternal]
+        if [.BriefTurn, .Workspace, .ProjectDetail, .Documents].contains(self) { return 12 }
+        if self == .RecoveryDetail { return 11 }
         if external.contains(self) { return 10 }
         if [.Document, .Decisions, .PlanDetail, .AttemptDetail].contains(self) { return 9 }
         if self == .FeatureChat { return 8 }

@@ -277,6 +277,7 @@ struct DashboardState: Equatable {
         case "Adr": return "building.columns"
         case "ExecutionPlan": return "list.bullet.indent"
         case "ValidationPlan": return "checklist"
+        case "Brief": return "doc.text.magnifyingglass"
         default: return "doc.text"
         }
     }
@@ -286,6 +287,7 @@ struct DashboardState: Equatable {
         switch kind {
         case "Adr": return Palette.indigo
         case "ExecutionPlan", "ValidationPlan": return Palette.blue
+        case "Brief": return Palette.teal
         default: return Palette.orange
         }
     }

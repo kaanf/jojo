@@ -29,7 +29,8 @@ public final class ProcessHelperTransport: HelperTransport {
         public var worktreeRoot: String?
         public var home: String?
         /// P2-02 slice options (`--disposable-root`, `--codex-…`), passed through verbatim
-        /// from whoever launched the app. The GUI never composes or edits them.
+        /// from whoever launched the app, or (step 7) composed from the setup Onboarding saved
+        /// (`JojoSetup.helperOptions`) when the app was launched without them.
         public var slice: [String]
         public init(executable: URL, dataRoot: String? = nil, worktreeRoot: String? = nil, home: String? = nil,
                     slice: [String] = []) {
@@ -43,7 +44,8 @@ public final class ProcessHelperTransport: HelperTransport {
 
     public var onEvent: ((TransportEvent) -> Void)?
     public private(set) var stderrTail = ""
-    private let configuration: Configuration
+    private var configuration: Configuration
+    private var started = false
     private let process = Process()
     private let input = Pipe()
     private let output = Pipe()
@@ -61,7 +63,15 @@ public final class ProcessHelperTransport: HelperTransport {
 
     public var processIdentifier: Int32 { process.processIdentifier }
 
+    /// Step 7: the options of a helper that has not started yet; Onboarding sets them once
+    /// the workspace folder is chosen. A started helper keeps the ones it was started with.
+    public func setSliceOptions(_ slice: [String]) {
+        guard !started else { return }
+        configuration.slice = slice
+    }
+
     public func start() throws {
+        started = true
         // A write after helper exit must surface as an error, not kill the GUI.
         signal(SIGPIPE, SIG_IGN)
         process.executableURL = configuration.executable
