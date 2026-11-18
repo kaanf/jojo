@@ -64,3 +64,7 @@ The Approval Inbox lists what waits for the human (documents, candidates, and pu
 - Risk and side effects of a document or candidate are not reported.
 - The app reads the newest 16 documents and decisions and the newest 32 external actions.
 - A request is made on Source Control, not here; there is no way to edit a pull request's title or body before it is opened (a new plan revision changes it).
+
+## 6. Follow-ups (protocol 1.14, 2026-11-18)
+
+For a requirements document, architecture decision or plan, the detail shows "Second opinion" above the decision bar, as on Specifications: the other provider's advisory review of the revision, and "Request Review". The decision bar is unchanged and never waits for it.

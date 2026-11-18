@@ -69,3 +69,7 @@ Specifications shows the held feature's documents with their approval states, th
 - An ADR and a plan are shown as the Markdown the core rendered, not as structured alternatives.
 - The text is read up to 64 KiB; a longer document says so.
 - Reject and Revoke are on the Approval Inbox only.
+
+## 6. Follow-ups (protocol 1.14, 2026-11-18)
+
+"Second opinion" in the inspector, below Approval scope, for a requirements document, architecture decision or execution plan a lead drafted: "Request Review" asks the provider that did not draft it to review the shown revision (`ReviewDocument`); the verdict and notes come from `Document.advisory`. It holds nothing back: Approve Revision is unchanged.

@@ -493,3 +493,25 @@ Protocol minor 13 adds one command and two fields of `PlanDetail`; schema 18 (`p
 At minor ≥ 13 each step of `PlanDetail` carries `retry`: `{actions, attempt}` (`actions`: what the human may do now, `Repair` (a held step whose failure is known) and `Restart` (a held, conflicting or refused step), none in a cancelled run or without a run; `attempt`: the step's newest attempt, to send back) and `retried` (`Repair`, `Restart` or `null`: the retry the newest attempt is, or will start as). The event `PlanStepRetried` (category `Decision`) reads "… will be repaired on your word" or "… will start again on your word".
 
 The macOS client sends `PlanDetail` and `RetryPlanStep` at 13, the latter only from Execution Plan's inspector after a confirmation, and `Log` (1.1) every two seconds only while that inspector shows a running step.
+
+## Protocol 1.14: follow-ups (choices, sessions, repairs, advisory reviews, counters)
+
+Protocol minor 14 adds three commands and fields of four answers; schema 19 (`question_choices`, `lead_turn_continuations`, `lead_turn_sessions`, `lead_turn_repairs`, `advisory_reviews`, `advisory_review_results`, `advisory_review_stops`, `advisory_review_executables`). The helper's `MINOR` is 14; Hello for a frame of minor ≥ 14 lists `RepairTurn ReviewAttempt ReviewDocument` after `RetryPlanStep`.
+
+| Request | Payload | Answer |
+|---|---|---|
+| `RepairTurn` (command) | `{turn, note}` | The receipt with `turn` (the new turn, the command's identity) and `dispatch`. The failed or interrupted turn must be the newest of its feature and not repaired before; the new turn has its kind, repository, provider and message, and its prompt carries "# Your previous attempt at this turn failed" with the core's reason and the note (at most 4096 bytes, may be empty) before its instructions. Refused: `UnknownTurn`, `RepairRefused: …`, and every refusal of `ChatTurn` |
+| `ReviewAttempt` (command) | `{attempt, candidate}` | The receipt with `review` (the command's identity) and `dispatch`. The provider that did not do the attempt reviews its sealed candidate read-only, in the registered repository at its HEAD, with the step review prompt of M4. Only an attempt started by hand of a plan a lead drafted; a plan run reviews its own steps. Refused: `ReviewRefused: …` (not ended, another candidate, a plan run's step, not a lead plan, another review running), `AdmissionClosed`, `CapacityFull` |
+| `ReviewDocument` (command) | `{document, revision}` | The receipt with `review` and `dispatch`. The provider that did not draft it reviews one revision of a requirements document, architecture decision or execution plan a lead drafted (`review::document_review_prompt`, the step review's verdict shape). Refused as `ReviewAttempt` |
+
+An advisory verdict approves nothing, rejects nothing and holds nothing back; one review of either kind runs at a time and takes one unit of capacity. Events: `LeadTurnRepairAccepted`, `AdvisoryReviewAccepted`, `AdvisoryReviewFinished`, `AdvisoryReviewStopRequested`.
+
+At minor ≥ 14:
+
+- `Documents` carries `steps_waiting` (plan steps in review, held, conflicting or refused, in the newest run of every plan) and `open_questions` (`[{feature, count}]`: feature and step questions without a human's answer). Neither is part of `pending`.
+- Each turn of `FeatureChat` carries `choices` (one list per entry of `questions`, in its order: none, or two to four options the lead named), `session` (`Fresh`, `Continued`, `Fallback`, `Continuing` while a continuation runs, or `null`), `repairs` and `repaired_by` (turn identities or `null`) and `repairable`.
+- `AttemptDetail` and `Document` carry `advisory`: `{review, available, reviewer, reason}`; `review` is `null` or `{review, provider, state, notes, objection, detail, revision, requested_at_unix_ms, finished_at_unix_ms}`.
+
+Session continuation (no frame of its own): a chat turn keeps its provider session (Claude Code without `--no-session-persistence`, Codex without `--ephemeral`). The next chat turn of the feature on the same provider, after a turn that replied and reported its session, is accepted with a continuation prompt (`planner::continued_prompt`) and runs first with `--resume <session>` (Claude Code) or `resume <thread> -` after the options (Codex). A continuation that ends on its own without a reply is followed in the same worker by the fresh run of the stored prompt (`Fallback`); a stop, an unconfirmed stop or lost evidence is settled as it is. Review and brief turns stay unsaved.
+
+The macOS client sends `Documents`, `FeatureChat`, `Document` and `AttemptDetail` at 14, `RepairTurn` only from Feature Chat after a confirmation, `ReviewAttempt` from Verification & Evidence and `ReviewDocument` from Specifications and the Approval Inbox.

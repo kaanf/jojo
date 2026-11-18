@@ -56,3 +56,7 @@ Verification & Evidence shows the loaded candidate's verdict, its host validatio
 
 - No seal, deployment receipt, run comparison, per-suite counts or durations.
 - The report text is in the export, not on screen.
+
+## 6. Follow-ups (protocol 1.14, 2026-11-18)
+
+"Second opinion" in the inspector, below Decision: for a candidate of a step started by hand, "Request Review" asks the provider that did not do it to review the sealed candidate read-only (`ReviewAttempt`); its verdict ("Would approve" or "Objects"), notes and strongest objection are shown from `AttemptDetail.advisory`. It decides nothing. For a plan run's step the core says why not ("a plan run reviews its own steps").

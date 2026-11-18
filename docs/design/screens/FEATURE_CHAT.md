@@ -69,3 +69,10 @@ Feature Chat shows what the core reports about the held feature: its code, name,
 - The lead's reply is its summary; the requirements text opens under the receipt of the turn that drafted the current revision.
 - A chat reads one registered repository; every turn runs on the project's default provider.
 - Lead turns are fresh runs; the questions and answers so far travel in the prompt (no session continuation).
+
+## 6. Follow-ups (protocol 1.14, 2026-11-18)
+
+- **Choices:** a question the lead offers two to four options for shows them as radio rows, with "Write my own answer" last; a choice fills the answer field and the answer sent is that text. The row "Radio choices of a question" of section 5 no longer applies.
+- **Sidebar counter:** the held feature's questions without a human's answer (feature and step questions, deferred ones included), a blue pill, from `Documents.open_questions`.
+- **Sessions:** a turn that continued the previous turn's provider session says "Continued session" in its separator; one whose continuation failed and that ran fresh says "New session (the continuation failed)". "Lead turns are fresh runs" in section 5 is replaced: the next turn on the same provider continues the session.
+- **Repair Turn:** the newest failed or interrupted turn has a note field and "Repair Turn", with a confirmation; the new turn runs the same kind on the same provider and is told why the failed one failed. Receipts say "Repairs Tn on your word" and "Repaired by Tn".

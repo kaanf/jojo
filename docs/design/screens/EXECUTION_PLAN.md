@@ -77,3 +77,6 @@ Built in M6 (DESIGN_ROADMAP_DIFFERENCES.md, E19), in the inspector of a step; no
 
 Decided by the human on 2026-11-18: a retry is a decision of its own each time, without a cap; a retry that fails is held again; the automatic repair limit is unchanged. Review aid: `JOJO_SNAPSHOT_DIR=<directory> swift test --filter S18PlanRetryTests` writes `s18-execution-plan-held`, `-refused`, `-live` and `-decision`.
 
+## 7. Follow-ups (protocol 1.14, 2026-11-18)
+
+Sidebar counter: the plan steps that wait for the human (in review, held, conflicting or refused) in the newest run of every plan, an orange pill, from `Documents.steps_waiting`. Integration worktrees under `<data root>/integration/` are removed after each integration and swept when the helper starts.
