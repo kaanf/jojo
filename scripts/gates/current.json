@@ -1,9 +1,9 @@
 {
-  "artifact": "gate-m5",
-  "scope": "Tree after M5: a finished plan branch is pushed to origin and its draft pull request opened, each after its own human authorization on its exact payload, performed once and resolved only by an observation (schema 16, protocol 1.10: ExternalActions, RequestExternal, AuthorizeExternal, InspectExternal, ResolveExternal; Documents at 1.10 lists the requests that wait); the Approval Inbox, Source Control and the Recovery Center show them. Tested against a local bare repository and a fake gh; no network.",
+  "artifact": "gate-s6",
+  "scope": "Tree after step 6 of the Liquid Glass order: Projects, the Recovery Center, Activity & Audit and Settings & Providers from their Mac boards; protocol 1.11 (RecoveryDetail, ProjectDetail, events with a category and a project), derived, no schema change (schema 16); Settings › Appearance is the app's one setting.",
   "boundary_tests_min": 109,
   "rust": {
-    "passed_min": 495,
+    "passed_min": 499,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -101,7 +101,12 @@
       "m5_without_gh_sign_in_the_reason_is_shown_and_a_refused_pull_request_is_rejected",
       "m5_an_ssh_or_missing_origin_is_refused_before_anything_is_recorded",
       "external::tests::m5_only_https_without_credentials_or_a_local_path_is_pushed_to",
-      "remote::tests::m5_gh_gets_host_owner_and_name_and_a_pull_request_link_its_number"
+      "remote::tests::m5_gh_gets_host_owner_and_name_and_a_pull_request_link_its_number",
+      "s6_recovery_detail_counts_the_inspection_and_lists_each_fact_and_what_was_resolved",
+      "s6_project_detail_reads_branch_head_worktrees_origin_and_what_is_missing",
+      "s6_events_at_1_11_carry_a_category_and_the_project_they_concern",
+      "s6_origin_words_drop_credentials_and_name_the_kind",
+      "s6_every_event_kind_has_a_category"
     ],
     "ignored": [
       "child_fixture",
@@ -119,7 +124,7 @@
     ]
   },
   "swift": {
-    "tests_min": 127
+    "tests_min": 142
   },
   "gui": {
     "scripts/gui_p1_14.py": 9,

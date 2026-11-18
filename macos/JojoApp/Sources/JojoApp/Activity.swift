@@ -142,6 +142,14 @@ struct ActivityState: Equatable {
 
     static func record(_ event: JournalEvent) -> String { "event \(event.seq)" }
 
+    /// "17 Nov 09:24:11": the time of a record to the second.
+    static func recordTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.dateFormat = "d MMM HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
     /// The subject of an event in the table: the first twelve characters of its aggregate.
     static func subject(_ event: JournalEvent) -> String? {
         event.aggregateID.map(ApprovalInboxState.short)
@@ -483,8 +491,7 @@ struct ActivityView: View {
             LabeledSection(title: "Record") {
                 DefinitionCard(rows: [
                     Definition(key: "Record ID", value: ActivityState.record(event), mono: true),
-                    Definition(key: "Time", value: event.at.map { $0.formatted(.dateTime.day().month(.abbreviated).hour().minute().second()) }
-                               ?? "Not reported"),
+                    Definition(key: "Time", value: event.at.map(ActivityState.recordTime) ?? "Not reported"),
                     Definition(key: "Actor", value: ActivityState.actor(event) ?? "Not reported"),
                     Definition(key: "Project", value: event.projectName ?? (state.categorized ? "None" : "Not reported")),
                     Definition(key: "Subject", value: [event.aggregateKind, event.aggregateID].compactMap { $0 }.joined(separator: " ")

@@ -102,7 +102,7 @@ final class S2UserFacingDataTests: XCTestCase {
                                   now: helperDate(OverviewRows.t0 + 1000)!)
         XCTAssertTrue(state.attributed)
         XCTAssertEqual(state.groups.map(\.title), ["Today", "Yesterday"])
-        XCTAssertEqual(state.shown.map { ActivityState.actor($0) }, ["Codex", "Human", "Jojo core"])
+        XCTAssertEqual(state.shown.map { ActivityState.actor($0) }, ["Codex", "You", "Jojo core"], "the human is \"You\", as on the board")
         XCTAssertEqual(ActivityState(connection: .ready(epoch: 1), admission: "Open", events: events, load: .loaded, query: "jojo core").shown.map(\.seq),
                        [1], "search covers the actor")
         let old = try XCTUnwrap(JournalEvent(.object(["seq": .int(4), "epoch": .int(3), "type": .text("T"), "payload": .text(""),

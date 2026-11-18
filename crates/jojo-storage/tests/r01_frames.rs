@@ -1574,4 +1574,10 @@ request external without a remote => 1.10 Error {"code":"RemoteNotConfigured: th
 request external of an unknown kind => 1.10 Error {"code":"UnknownKind"}
 authorize external of no action => 1.10 Error {"code":"expected an external action"}
 documents at 1.10 => 1.10 Response {"candidates":[],"documents":[],"external":[],"next":null,"pending":0}
+recovery detail at 1.10 => 1.10 Error {"code":"UnknownType"}
+recovery detail => 1.11 Response {"claims":[],"counts":{"claims":0,"evidence_gaps":0,"examined":0,"snapshot_mismatches":0,"stale_approvals":0,"unknown_effects":0,"worktrees":0,"worktrees_intact":0},"digest":"95eb9cc2f28783674ee4858759130e25fc6ee54822d07726fb3868924bdb21ba","inspected_at_unix_ms":1700000000000,"settled":[],"subjects":[]}
+recovery detail with a field => 1.11 Error {"code":"InvalidPayload: unexpected or missing fields"}
+project detail unknown => 1.11 Response null
+project detail without project => 1.11 Error {"code":"InvalidPayload: unexpected or missing fields"}
+events at 1.11 => 1.11 Response [{"actor":"Core","aggregate_id":null,"aggregate_kind":null,"at_unix_ms":1700000000000,"category":"Session","detail_complete":true,"epoch":1,"payload":"previous_epoch=0;previous_shutdown=NONE;quarantined_claims=0","project":null,"project_name":null,"revision":null,"seq":1,"summary":"Session 1 started","type":"EngineStarted"},{"actor":"Human","aggregate_id":null,"aggregate_kind":null,"at_unix_ms":1700000000000,"category":"Recovery","detail_complete":true,"epoch":1,"payload":"95eb9cc2f28783674ee4858759130e25fc6ee54822d07726fb3868924bdb21ba","project":null,"project_name":null,"revision":null,"seq":2,"summary":"Admission reopened after the recovery review","type":"RecoveryStarted"}]
 "#;

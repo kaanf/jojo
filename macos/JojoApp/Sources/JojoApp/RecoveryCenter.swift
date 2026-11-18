@@ -256,11 +256,11 @@ struct HeldItem: Identifiable, Equatable {
         return out
     }
 
-    /// The core labels a process "pid:N start:S" and a process group "group:N".
+    /// The core labels a recorded identity "pid:N start:S" and its group "group:N".
     static func processName(_ label: String) -> (String, String) {
-        if label.hasPrefix("group:") { return ("Process group", "pgid " + label.dropFirst(6)) }
-        if label.hasPrefix("pid:") { return ("Process", "pid " + (label.dropFirst(4).split(separator: " ").first.map(String.init) ?? "")) }
-        return ("Process", label)
+        if label.hasPrefix("group:") { return ("PGID", String(label.dropFirst(6))) }
+        if label.hasPrefix("pid:") { return ("PID", label.dropFirst(4).split(separator: " ").first.map(String.init) ?? "") }
+        return ("PID", label)
     }
 
     static func stageWords(_ stage: String) -> String {
@@ -734,8 +734,8 @@ struct RecoveryCenterView: View {
             Definition(key: "Stale approvals", value: "\(c.staleApprovals)"),
             Definition(key: "Evidence gaps", value: "\(c.evidenceGaps)"),
             Definition(key: "Quarantined claims", value: "\(c.claims)"),
-            Definition(key: "Inspected", value: state.inspectedLine?.replacingOccurrences(of: "inspected ", with: "") ?? "Not reported"),
-            Definition(key: "Inspection", value: state.digestShown, mono: true),
+            Definition(key: "Inspected", value: d.inspectedAt.flatMap { boardTime($0, now: state.now) } ?? "Not reported"),
+            Definition(key: "Inspection", value: String(state.digestShown.prefix(8)), mono: true),
         ]
     }
 

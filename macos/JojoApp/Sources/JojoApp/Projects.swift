@@ -373,7 +373,8 @@ struct ProjectsView: View {
     private func repositoryRow(_ id: String, detail: ProjectDetail.Repository?) -> some View {
         let path = detail?.path ?? path(id)
         let name = detail?.name.isEmpty == false ? detail!.name : (path.map { ($0 as NSString).lastPathComponent } ?? String(id.prefix(8)))
-        var line = [path.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? id]
+        let place = path.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? id
+        var line: [String] = []
         if let detail {
             line.append([detail.branch ?? "detached", detail.head.map { String($0.prefix(7)) }].compactMap { $0 }.joined(separator: " @ "))
             line.append("\(detail.worktrees) \(detail.worktrees == 1 ? "worktree" : "worktrees")"
@@ -382,8 +383,11 @@ struct ProjectsView: View {
         return HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).textStyle(.bodyStrong)
-                Text(line.joined(separator: " · ")).textStyle(.mono).foregroundStyle(theme.text2)
-                    .lineLimit(1).truncationMode(.middle)
+                if !line.isEmpty {
+                    Text(line.joined(separator: " · ")).textStyle(.mono).foregroundStyle(theme.text)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                Text(place).textStyle(.mono).foregroundStyle(theme.text2).lineLimit(1).truncationMode(.middle)
                 if let detail, !detail.issues.isEmpty {
                     Text(detail.issues.joined(separator: " · ")).textStyle(.secondary).foregroundStyle(theme.text2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -489,7 +493,7 @@ struct ProjectsView: View {
                         project.kinds.map { "\($0.kind) → \(ProjectsState.provider($0.provider))" }.joined(separator: "\n")),
                     Definition(key: "Parallel capacity", value: "\(project.capacity) in all"),
                     Definition(key: "Automatic repair", value: ProjectsState.repairs(project.repairLimit)),
-                    Definition(key: "Cross-provider review", value: project.review ? "On: the other provider reviews each step" : "Off"),
+                    Definition(key: "Review", value: project.review ? "On: the other provider reviews each step" : "Off"),
                 ], keyWidth: 110)
             }
             missing
