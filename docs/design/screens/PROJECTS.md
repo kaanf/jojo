@@ -1,21 +1,37 @@
 # Jojo screens: Projects
 
-Transcribed on 2026-11-17 from the canvas board "Projects" (`Projects.dc.html`, dark only), in short: the M3 minimum was decided by the human (a list and a form). Tokens, components and states refer to [DESIGN_SYSTEM.md](../DESIGN_SYSTEM.md), [COMPONENTS.md](../COMPONENTS.md) and [STATES.md](../STATES.md).
+Transcribed on 2026-11-17 from the canvas board "Projects" (`Projects.dc.html`, the M3 minimum); rebuilt on 2026-11-18 from `ProjectsMac.dc.html` (step 6). Tokens, components and states refer to [DESIGN_SYSTEM.md](../DESIGN_SYSTEM.md), [COMPONENTS.md](../COMPONENTS.md) and [STATES.md](../STATES.md).
 
 ## 1. The board
 
-A projects column ("Projects · 2": "Crew", 2 repos · 3 features; "Jojo"; "Create Project…", "Import Local Project…") beside the chosen project: its name and path, "Open in Finder", "Project Settings", "New Feature"; tabs Overview, Repositories, Instructions, Configuration; operational pills (admission, running, blocked, awaiting approval, held); "Repositories" with "Attach Repository…" (per repository: path, branch and commit, worktrees, health); "Missing configuration · 2" with fixes; "Features" with their stage; "Test and CI commands" (a name and a command per line); "Project instructions" ("Given to every provider session for this project. Changes create a new instructions revision.").
+`ProjectsMac.dc.html`: a projects column ("Projects · 2": "Crew", 2 repos · 3 features; "Create Project…", "Import Local Project…") beside the chosen project: name, path and operational pills (admission, running, blocked, awaiting approval, held); header "Open in Finder", "Project Settings", "New Feature"; tabs Overview, Repositories, Instructions, Configuration; "Repositories" with "Attach Repository…" (path, branch and commit, worktrees, health); "Missing configuration · 2" with fixes; "Test and CI commands"; "Features" with their stage; "Project instructions".
 
 ## 2. What the app shows today
 
-Built in `macos/JojoApp/Sources/JojoApp/Projects.swift`. The records are read with `Projects` while the screen is the shown one, and again when the snapshot's event number changes; the registered repositories come from `ChatIndex`.
+Rebuilt on 2026-11-18 (step 6) in `macos/JojoApp/Sources/JojoApp/Projects.swift`. While the screen is shown it reads `Projects`, `ChatIndex` (registered repositories), `Features` (1.7), `ExternalActions` (gh's sign-in) and `ProjectDetail` (1.11) for the chosen project.
 
 | Part | What it shows |
 |---|---|
-| Projects | One list row per record: name, revision, repositories, default provider; "Shown" on the one in the detail. "Create Project…" opens an empty form with a new identity. A footnote states the core's capacity: "Parallel capacity of the core: n attempts in all, not split by provider. A lead turn takes one of them (D4)." |
-| Detail | Repositories (paths), test command, CI command, task kinds ("backend → Claude Code"), default provider, parallel capacity; "Project instructions" as text; "Edit Project" |
-| Form | Name, repositories (a chip per registered repository), test command and CI command (words split on spaces), task kinds ("backend=ClaudeCode, docs=Codex"), default provider (two chips), parallel capacity, instructions; "Save Project" sends the whole record as the next revision (`SaveProject`); "Discard". A save is disabled with a reason: no name, no repository, a kind pair that is not `kind=Provider`, a capacity outside 1 to 8, a command awaiting the core, no connection |
-| Not reported | Repository health; features per project; missing configuration; "Open in Finder" and "Import Local Project" (not built; a repository is registered from Feature Chat) |
+| Projects | A row per record: letter tile, name, "n repos · n features"; Create Project…; Import Local Project… disabled (a repository is registered from Feature Chat); the core's capacity |
+| Header | Open in Finder (the project's repository paths, `NSWorkspace`), Project Settings (the form), New Feature (New Feature with the project chosen) |
+| Head | Name, the first repository's path, pills from the features (running, blocked, awaiting approval), the admission and held attempts of the inspection |
+| Repositories | Per repository: name, "main @ 9c1e4b2 · 2 worktrees (1 active)", path, issues and "Healthy" or "n issues" (`ProjectDetail`) |
+| Missing configuration | The core's list (no test command, no CI command, no origin, an SSH origin) and gh not signed in; Edit Command for a command |
+| Test and CI commands | The record's two commands |
+| Features | The project's features with their stage line ("Execution · 2 running · 3 blocked") and stage pill; a row opens its chat |
+| Project instructions | The text, "Edit Instructions" |
+| Configuration (inspector) | Revision, default provider, task kinds, capacity, automatic repair, review, "Edit"; "Not built" |
+| Form | Unchanged from M3 and M4: name, repositories, commands, task kinds, default provider, capacity, repair limit, review, instructions; Save Project sends the whole record |
+
+The board's tabs are not built: everything is on one page. "Attach Repository…" is not built.
+
+### 2.1 Known gaps
+
+- Import Local Project and Attach Repository are not built; registering stays in Feature Chat.
+- The project path is the first repository's; a project has no path of its own.
+- Instructions revisions are revisions of the whole record.
+- Worktrees counted are those the core owns for attempts; integration worktrees under `<data root>/integration/` are not counted.
+- Health reads the repository with local Git when the screen is shown; nothing is read from the remote.
 
 ## 3. States
 

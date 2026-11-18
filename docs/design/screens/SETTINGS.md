@@ -61,80 +61,37 @@ A provider that is not found or not signed in, a changed binary (the warning of 
 
 ## 5. What the app shows today
 
-Built in `macos/JojoApp/Sources/JojoApp/Settings.swift` on the shared surfaces of COMPONENTS.md, sections 14 to 21. Before it, this destination showed "Settings & Providers is not built yet".
-
-**What the app knows about settings and providers.** Four sources, and nothing else:
-
-1. **The helper's Hello answer.** It has `compatible`, `epoch`, `max_frame`, `max_page`, `admission`, `commands`, `queries` and `slice` (`crates/jojo-helper/src/service.rs`). Until this step `HelperClient` kept `epoch` and `compatible` only. It now keeps the rest too (`HelperClient.hello`, a `HelperHello`): the largest frame, the largest page, the two name lists and `slice`, which says that the helper holds a slice configuration. Hello's `admission` is a fixed text, not the session's admission, and is not kept. No request was added; the protocol and the Rust side are unchanged.
-2. **The connection and the snapshot's admission**, through `ShellStatus`, the value the sidebar's status well shows. The screen builds the same value and prints its words, so the two cannot disagree.
-3. **The options the app itself was started with** (`LaunchOptions`), which it passes to the helper as given: the helper executable, `--data-root`, `--worktree-root`, `--disposable-root`, `--login-shell` (since D3 the app adds its own `SHELL` when the launch named none), and per provider `--…-executable`, `--…-version`, `--…-sha256` and `--…-auth`. `AppModel` now keeps them.
-4. **The `Executables` query** (D3, protocol 1.4), read while this screen is shown and again after a second while a provider is `checking`: per provider how the core knows its executable (discovered, by path, pinned, not configured), its state and refusal reason, the PATH entry, the native binary, version, digest and whether the version is the profiled one, the executable of its last run and the latest change between two runs (`WorkspaceModel.executables`, `ExecutableList`).
-
-**The helper reports no setting, and of a provider only its executable.** Since D3 the `Executables` query returns the executable, version and digest the helper found and recorded; no request returns the sign-in kind the helper holds; the snapshot has no settings row (its sections are `aggregates`, `claims` and `effects`); the scheduler's capacities are in the core's database without a request that reads them. So the provider sections show the launch options under the heading "Passed to the core at launch" and say that the core does not report them back (decided by the human on 2026-11-16; a new query was the alternative and is out of this step). The one thing the core confirms is `slice`.
-
-**Nothing that could be a credential is shown.** Of the provider options the screen shows the executable path, the version text, the digest of the executable and the sign-in kind (the only accepted value is `native-subscription`). It does not show `--codex-home`, `--claude-home` (the directories the CLIs keep their sign-in in) or `--claude-user` (an account name).
-
-**The screen is read-only** (no control that changes a setting). The app has no request that writes a setting (`Request` in `Protocol.swift`). The board's buttons ("Change…", "Edit", "Add…", "Back Up Now", "Restore…"), switches and segmented controls are therefore not built, and no value stands in their place as if it were chosen. A setting without a source says "Not reported" or "Not built" in `text3`.
-
-**All ten sections of the board stay, and one is added** (decided by the human on 2026-11-16). "Core" is not on the canvas: it holds the connection and the Hello answer, which have no place on the board.
-
-**Decisions in force are shown where the board disagrees, and marked as decisions.** A line that states a decision that is not built yet says so ("Decided, not built").
+Rebuilt on 2026-11-18 from `SettingsMac.dc.html` (step 6) in `macos/JojoApp/Sources/JojoApp/Settings.swift`: a glass section list ("Providers": Claude Code, Codex; "Jojo": Core and the nine sections of the board) and the chosen section's groups as cards. The screen reads `Executables` (D3), `ExternalActions` (M5, for the sign-in of git and gh) and `Projects` (for the capacity) while it is shown.
 
 ### 5.1 Mapping
 
-| Canvas | App today |
+| Board | App |
 |---|---|
-| Toolbar, breadcrumb | The shell breadcrumb stays "Jojo › System › Settings & Providers" |
-| Sidebar counter | None, as on the board. Nothing about a setting is work that waits |
-| Section list | As on the board, 220 wide, with "Core" first in the second group. The chosen section lives in the screen; "Claude Code" at first |
-| Title | As on the board |
-| Claude Code, Codex · Executable | D3: first a group "Found by the core" from `Executables`: Found ("On the login shell's PATH as <entry>", "Given by --claude-executable; version and digest are learned from the file", "Pinned at launch; refused when its version or digest differs"), State only while checking ("Being found and checked. A Start waits for it.") or refused (the reason, evidence pill "Refused", Failed form), Path and "SHA-256 digest" monospaced, Version with the evidence pill "Profiled" (Passed form) or the note "Not the profiled release", and "Last run" (version · first twelve digest characters · the recording event) or "No run recorded yet". Before the answer: one line, Executable "Being read…", "Not read: <reason>" or "Unknown: the core is not connected.". When the executable changed between two runs, a warning banner above the groups: "Claude Code changed since an earlier run" · "<old version> at <old path> was followed by <new version> at <new path> (event n). The run was not refused." (the board does not draw this state). Then "Passed to the core at launch": Path ("Not passed. The core finds it on the login shell's PATH." when absent), Version and digest. No "Change…", no "Compatible" pill: a capability check is not reported. Without any option of the provider: the Empty form "No Claude Code options were passed at launch" · "Jojo was started without them, so the core does not run Claude Code." |
-| · Authentication | Sign-in: "Attested at launch as native-subscription. The sign-in itself is not checked." No "Ready" pill: the sign-in state is not reported. Credentials: "Handled by the provider's CLI. The only sign-in kind the core accepts is native-subscription; there is no API key option." (the board's sentence "never reads, stores or relays" is a wider claim than this step verified) |
-| · (not on the canvas) Reported by the core | One line, "Slice configuration": "Present. The core does not say which providers it holds.", "Absent", or "Unknown: the core is not connected." (and "Not reported" when Hello has no such field) |
-| · Capabilities, Usage | Not built. A footnote: "The core finds the executable, checks it again before each run and records its version and digest with every run. It reports no capability, sign-in state, token count or limit of a provider." |
-| Executable discovery | D3, built: Search "The PATH of the login shell (<shell>), looked up by the core. No other directory is searched." (the `--login-shell` the app passed, or "/bin/zsh, the core's default"). Re-check "At core start and before each attempt and lead turn. Version and digest are learned again when the file changed." Changed binary "Warned, not refused (D3): the run records the new version and digest. A pinned executable is refused when it differs." Custom paths "--claude-executable and --codex-executable at launch. With a version and a digest they pin the executable." A footnote: "There is no switch and no rescan: every run checks again. The Claude Code and Codex sections show what the core found." No switch, no "Add…" (the board's Homebrew and `~/.local/bin` fallback is not built: decided against) |
-| Defaults & concurrency · Default providers | One line, "Provider per task": "Not reported. Nothing assigns a provider to a kind of task yet." The board's "Backend tasks" and "Mobile tasks" are not built |
-| · Validator | D2: the board's "Command runner only · no agent" no longer holds. Validator: "The core's host validation of a candidate. No reviewing agent yet." Repair: "Decided, not built: automatic, at most two tries, then a human hold." |
-| · Concurrency | D4 is decided (M3): "Decided (D4): one number for the whole core, set in a project record. Shown on Projects."; per repository "No limit (D4)."; per provider "Not split by provider (D4)." The number itself is shown on Projects, which reads it; Settings has no request that does. "Provider per task" now says that a project record maps task kinds to a provider |
-| Git & GitHub · Git | Worktree root: the `--worktree-root` option, monospaced, or "Not passed. The core uses its default, which it does not report." Branch prefix, Sign commits: "Not reported" |
-| · GitHub | Account: "Not built". Push and pull request: "Decided, not built: each is its own approval kind." (M5) Combined approval: "None. There is no approve-all." (the board has a switch for a combined policy; the decision in force is four approval kinds and no approve-all, so there is nothing to switch) |
-| Workspace storage | App data: the `--data-root` option or "Not passed. The core uses its default, which it does not report." Not on the canvas: Disposable root, the `--disposable-root` option or "Not passed". Disk space, Backups, Restore: "Not built" |
-| Evidence retention | Sealed manifests: "Not built. There is no request that seals evidence." Raw logs, Sensitive values: "Not reported" |
-| Security & approvals · Approvals | Approval binding: "A decision names the document's revision and digests; the core refuses a stale one" · "Always on". Not on the canvas, Approval kinds: "Specification and plan. Push and pull request are decided and not built. There is no approve-all." Scope expansions, Baseline changes: "Not built" |
-| · Scanning | OSV-Scanner: "Not built" |
-| Keyboard shortcuts | The three the app has (`JojoApp.swift`), each with a key cap: Quit Jojo ⌘Q, Show Jojo ⌘0, Show Inspector ⌥⌘I. A footnote: "The command palette and the other shortcuts of the design are not built." |
-| Appearance | Theme: "Follows the system". Density: "One density". Reduce motion: "No setting". A footnote: "The app has no switch for these yet." No segmented control (COMPONENTS.md, section 13) |
-| (not on the canvas) Core · Connection | Three lines with the words of the sidebar's status well: Core (`ShellStatus.core`), Session (the helper epoch, or "None"), Admission (`ShellStatus.admission`). Then Helper executable, the path the app launched, or "None configured" |
-| · Protocol | Only while the helper is connected or incompatible. Compatibility: "The helper accepts this app's protocol version" with the evidence pill "Compatible" (Passed form), or "The helper speaks another version; diagnostics only" with "Mismatch" (Failed form). Largest frame ("n bytes"), Largest page ("n rows"), Slice configuration |
-| · Requests the core offers | Two lines, "Commands" and "Queries": the names of Hello as kind tags that wrap. A footnote: "None of them changes a setting, so every value on this screen is read-only." |
+| Provider: executable, version "Compatible", discovery | What the core found; the version is "Compatible" when it is the profiled release, else "Not the profiled release" |
+| Authentication | The sign-in kind passed at launch; the provider's sign-in state is not reported |
+| Capabilities · reported by CLI | "Capabilities": the structured event stream and headless mode as Jojo uses them; session resume "Not built in Jojo"; token reporting not reported |
+| Usage | Tokens and plan limits "Not reported" |
+| Executable discovery | Login shell PATH, re-check before every run, launch options as custom paths |
+| Defaults & concurrency | Providers per project (shown on Projects), the validator and review of M4, repair; parallel attempts from the newest project record ("2 across all projects") |
+| Git & GitHub | Worktree root, branch prefix `jojo/plan/`, sign commits not reported, git's credential helper and gh's account as the core last read them with Ready / Missing / Checking; push and pull request each authorized on its own; no combined policy |
+| Workspace storage, Evidence retention | The roots passed at launch; disk space, backups, restore and retention not built |
+| Security & approvals | Approval binding; four approval kinds, no approve-all; scope expansions, baseline changes and scanning not built |
+| Keyboard shortcuts | The three the app has |
+| Appearance: Theme System / Light / Dark | **Writable**: the app's one setting, kept in this Mac's app settings (not the core), applied at once and at launch; Light is the default. Density and reduce motion are not settings |
+
+The system Settings window (⌘,) says that Jojo's settings are in the main window.
 
 ### 5.2 States
 
-- Loading (`notStarted`, `handshaking`): the Core section says "Waiting for the core's answer…" in a notice well in place of Protocol and the request lists. The other sections do not wait: launch options are known at once.
-- Disconnected (`channelLost`, `ended`, `launchFailed`): danger banner "Jojo core isn't responding" · "What the core reported is not shown. Launch options are shown as the app passed them." The Core section keeps the three status lines and says "Nothing is reported while the core is not connected." There is no "Reconnect" yet.
-- Incompatible protocol: danger banner "Jojo core speaks another protocol version" · "Diagnostics only. The values below are what it answered."
-- Recovery required: no banner of its own. The Core section's Admission line and the sidebar say it with the same words.
-- Empty: a provider without launch options (5.1); the Empty form is 180 high and "Reported by the core" follows it.
-- The `Executables` answer: "Being read…" until it arrives, "Not read: <reason>" when it failed, a provider still `checking` asked again after a second. It is read only while the screen is shown and again when the snapshot changes.
-- Requested, Stale, Permission denied and Unknown outcome have no source on this screen: its one request is a read.
-- Width: the section list keeps 220; the shown section takes the rest, at most 760.
+A lost or incompatible core (banners; what the core reported is not shown), a provider without launch options (an empty form), the executables being read, a changed executable (a warning).
 
-### 5.3 Open points
+### 5.3 Known gaps
 
-- The system's Settings window (⌘,) still says "Jojo Phase 1 has no settings." (`JojoApp.swift`); it was not changed in this step.
-- The shortcut list is written in `Settings.swift` beside the three menu commands of `JojoApp.swift`; a new shortcut has to be added in both.
-- A query that returns the helper's sign-in configuration and the scheduler's capacities would let the rest of the provider sections and "Concurrency" show reported values. The executables are reported since D3.
+- The core reports no capability, sign-in state, token count or limit of a provider.
+- No setting of the core is writable here: capacity, providers and repair are set per project on Projects.
+- Disk space, backups, restore, retention, scanning, sign commits and the command palette are not built.
+- The git and gh sign-in rows read the configuration and `gh auth status`; whether a push can really authenticate shows only when it runs.
 
-### 5.4 Values that are not on the canvas
+### 5.4 Repair and review (M4)
 
-| Point | Value in the app |
-|---|---|
-| Section list | 220 wide (the canvas starts at 230), background `sidebar`, edge `sidebarEdge` on the trailing side |
-| "Core" tile | `#5A5A64`, the board's neutral tile |
-| Tile glyphs (SF Symbols) | Claude Code `sparkle`, Codex `chevron.left.forwardslash.chevron.right`, Core `cpu`, Executable discovery `magnifyingglass`, Defaults & concurrency `slider.horizontal.3`, Git & GitHub `arrow.triangle.branch`, Workspace storage `internaldrive`, Evidence retention `archivebox`, Security & approvals `lock.shield`, Keyboard shortcuts `keyboard`, Appearance `paintbrush` |
-| Setting line | The label keeps 170 and the value takes the rest (the canvas grows them 1 to 2); a value without a source in `text3` |
-| Section tile, section item, setting line | COMPONENTS.md, section 21 |
-
-### 5.5 Repair and review (M4)
-
-Default providers: "Validator" now says that the host validation is followed by a read-only review by the other provider, which approves nothing; "Repair" says it is set per project, at most two tries, then a hold, 0 switches it off, external actions are never retried, shown on Projects. The board's "Validator: command runner only · no agent" no longer holds (D2). Both lines stay read-only.
+Repair is automatic, at most two tries, then a hold; the reviewer is the other provider; both are set per project and shown on Projects.

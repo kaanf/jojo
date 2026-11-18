@@ -81,74 +81,29 @@ A chip that is off, an empty table, a search without a result, a failed or pendi
 
 ## 5. What the app shows today
 
-Built in `macos/JojoApp/Sources/JojoApp/Activity.swift` on the shared surfaces of COMPONENTS.md, sections 14 to 20. Before it, this destination showed "Activity & Audit is not built yet".
-
-**What the helper reports about an event.** The `Events` query (`after`, `limit`; at most 8 rows a page, in sequence order) answers with a list. One row has: `seq` (the sequence number), `epoch` (the engine epoch that committed it), `type`, `aggregate_kind` and `aggregate_id` (the aggregate it changed, or null), `revision` (of that aggregate, or null), `payload` (its first 512 characters) and `detail_complete` (false when the payload is longer). That is all (`ipc_events` in `crates/jojo-storage/src/ipc_queries.rs`). From a helper older than 1.6 the answer has **no time** and **no actor** (since 1.6 it has both; section 6), and from any helper **no category** above the type, **no sentence** that says what happened, and **no hash**. The screen shows exactly these fields. A part of the canvas without a source says so on screen; nothing is filled with an example.
-
-**No hash chain is verified.** The board says "hash-chained" and shows a record hash, the previous record's hash and "Chain: Verified". The helper reports no hash for an event and the app computes none, so the app verifies nothing. The screen says "Not reported" for both hashes and shows the evidence pill "Not verified" (the Not run form), never "Verified". [DESIGN_ROADMAP_DIFFERENCES.md](../../roadmap/DESIGN_ROADMAP_DIFFERENCES.md), section 4, names this screen "Existing event journal (hash chain not verified)".
-
-**The workspace reads the events when this screen asks** (decided by the human on 2026-11-16). Before, `WorkspaceModel` kept only the sequence number of its snapshot and asked `Events` with limit 1 to learn whether anything was committed (`pollEvents`); that poll is unchanged and does not fill the list. New, in Swift only and with the existing query: `WorkspaceModel.loadEvents()` reads the newest 64 events up to the snapshot's event the first time, and afterwards only the events committed since; `loadOlderEvents()` reads the 64 before the oldest held one. Both read pages of 8 and add the events only when the whole read has answered, so the held list (`WorkspaceModel.events`, oldest first) has no gap. `WorkspaceModel.eventsLoad` says where a read stands (`idle`, `loading`, `loaded`, `failed`). The screen asks when it becomes the shown destination and when the snapshot's event changes while it is shown; the events are not read while another screen is shown. The screen takes a plain value (`ActivityState`). The protocol and the Rust side are unchanged; `EventDetail` (the rest of a long payload) is not in the app's request list and is not sent.
-
-**Search and type filters work on the loaded events only** (decided by the human on 2026-11-16). The core has no search and no filter. The screen filters the events it holds and says so.
+Rebuilt on 2026-11-18 from `ActivityMac.dc.html` (step 6) in `macos/JojoApp/Sources/JojoApp/Activity.swift`. The workspace reads the newest 64 events with `Events` at protocol 1.11 while the screen is shown (and the Dashboard at launch), 64 older ones on "Load Older"; at 1.11 each event carries its time, actor, sentence, category and project.
 
 ### 5.1 Mapping
 
-| Canvas | App today |
+| Board | App |
 |---|---|
-| Toolbar button "Export", breadcrumb | Not built. The shell breadcrumb stays "Jojo › System › Activity & Audit". There is no export command, and the app writes no file |
-| Sidebar counter | None, as on the board. No number of the journal reads as work that waits |
-| Search | The search field (COMPONENTS.md, section 20) with the prompt "Search the loaded events: type, payload, subject, event number". It matches, without case, the type, the payload excerpt, the aggregate kind, the aggregate identity and "event n". No "⌘F": the shortcut is not built |
-| Type chips | One filter chip (COMPONENTS.md, section 20) per type that occurs in the loaded events, by name, with how many loaded events have it ("ArtifactApproved 2"). All are on at first; a chip that is off hides its events. The board's eight categories are not reported, so the chips carry the core's type names |
-| Project and range controls | Not built: an event has no project and no time. COMPONENTS.md still has no segmented control |
-| Columns | Four: "Type" (150), "Event" (the rest), "Subject" (92), "Record" (64). "Time" and "Actor" are not reported and have no column |
-| Group caption | "Epoch n": the events of one engine epoch, newest epoch first. The core reports no time to group by day |
-| Type | The kind tag (COMPONENTS.md, section 20) with the core's type name, in `text2`, truncated in the middle. No color by category: none is reported |
-| Event | The payload excerpt as the core stored it, monospaced, one line ("decision=APPROVE"); "(empty payload)" when there is none. The core reports no sentence |
-| Subject | The first twelve characters of the aggregate identity, as an identifier in `text2`; "—" in `text4` when the event names none. Not a link (see "Go to") |
-| Record | "event n", the sequence number |
-| Selected row | The board's form. Without a choice, or when the chosen event is filtered out, the newest shown event is the chosen one |
-| Sentence under the card | A line: "Events 60 to 68 are loaded, newest first." (with filters: "…; 6 of 9 shown."), and trailing a compact secondary button "Load Older", or "The journal starts here." when event 1 is loaded. Then a footnote: "Events are append-only in the core. It reports no hash for them, so the app verifies no chain. Not reported: the time and the actor of an event; events are grouped by the engine epoch that committed them. There is no export and no filter by project or date." Older events load on the button, not on scroll |
-| Panel head | "Audit record · event 68", the type as the title ("ArtifactApproved"), and two kind tags: "Epoch 7" and the aggregate kind when there is one. No document tag: what a record did to a document's status is not reported |
-| Record | The fact grid: "Record ID" ("event 68"), "Time" and "Actor" ("Not reported", in `text3`), "Epoch", "Subject" (the aggregate kind and the full identity as an identifier, or "This event names none"), "Revision" (or "None"). No "Cause" and no "Approval": not reported |
-| (not on the canvas) Payload | A section "Payload": the excerpt, monospaced at 11.5, selectable, in a well (radius 8, `fill2`). When `detail_complete` is false, a footnote: "The first 512 characters. The app has no request for the rest of a payload yet." |
-| Integrity | "Record hash" and "Previous": "Not reported". "Chain": the evidence pill "Not verified" (the Not run form) |
-| Go to | When the subject is a document the snapshot lists (`ApprovalInboxState.documents(in:)`): a compact secondary button "Open in Specifications", which loads that document's review (`loadReview`, the call Specifications makes) and opens Specifications. Otherwise one sentence in `text3`: "No screen opens this subject yet." or "This event names no subject." No "Affected tasks" (tasks do not exist) and no "Approval history" (see 5.3) |
+| Header "Export" | Writes the shown events as Markdown through the save panel (time, actor, category, sentence, subject, record; the filters in force; "no hash chain was verified") |
+| Search, "All types", "All projects", 24h / 7d / All | A search over the loaded events (type, sentence, category, project, actor, payload, subject, record); a category menu (Decision, Approval, Attempt, Recovery, Git, Validation, Error, Evidence and the core's other categories present); a project menu of the projects the loaded events concern; the range control. All filter the loaded events only; an event without a time is outside every range but All |
+| Table: Time, Actor, Type, Event, Subject, Record, grouped by day | The same: "18:15", "You" / "Jojo core" / the provider, the category tag in its tone, the core's sentence, the aggregate's first twelve characters, "event n" |
+| "Records are append-only and hash-chained. Older entries load as you scroll." | "Records are append-only. The core stores no record hash, so no chain is verified." and "Load Older" |
+| Record panel: title, category, Record ID, Time, Actor, Cause, Approval | Title (sentence), category tag and type, Record ID, time to the second, actor, project, subject, session; Cause "Not reported" |
+| Integrity: record hash, previous, "Chain Verified" | "Not reported", "Not reported", **"Not verified"** |
+| (not on the board) | Payload: the 512-character excerpt, and "Load Full Payload" for a longer one (`EventDetail`, pages of 2,048 characters, at most 64 KiB) |
+| Go to: document, affected tasks, approval history | Open Document (a document the snapshot lists), Approval Inbox (approval and decision events), Recovery Center (recovery events); Affected Tasks disabled |
 
 ### 5.2 States
 
-- Loading (nothing held, a read pending): "Reading the event journal…". Before the first snapshot: "Waiting for the core's snapshot…". With events held, "Reading…" beside "Load Older", which is disabled.
-- Empty (a read answered, nothing held): the Empty form with "No events yet" · "The core has committed no event after the one this read started from."
-- No match: the Empty form with "No loaded event matches" · "Search and the type filters cover the n loaded events only, not the whole journal." and "Clear Filters".
-- Error: a warning banner "The event journal could not be read" · "The core answered: …." (with events held: "… The events read before stay.") and "Try Again". Without events, the Empty form "No events loaded" · "The journal was not read. Nothing is shown in its place."
-- Disconnected (`channelLost`, `ended`, `launchFailed`): danger banner "Jojo core isn't responding" · "Showing the events read before, read-only. No more can be read." "Load Older" is disabled. There is no "Reconnect" yet.
-- Incompatible protocol: danger banner "Jojo core speaks another protocol version" · "Read-only. Events can still be read."
-- Recovery required (admission reported and not `Open`): danger banner "Execution admission is closed" · "No new attempt starts until you review the inspection. Events can still be read." with "Open Recovery Center".
-- Requested, Stale, Permission denied and Unknown outcome have no source on this screen: it sends no command.
-- Width of the content: two columns from 780; below, one column with the record under the table in a card. The window's opening size gives two columns.
+Reading, no events yet, a lost or incompatible core, a failed read (with the events read before), admission closed (a banner with Open Recovery Center), a core older than 1.11 (a banner: the type stands in for the category and the project menu is empty), no match ("Clear Filters").
 
-### 5.3 Links from other screens
+### 5.3 Known gaps
 
-The Approval Inbox ("Approval History") and Specifications ("View Approval History", "View all") did not build their links because this screen did not exist ([APPROVAL_INBOX.md](APPROVAL_INBOX.md), section 5.1; [SPECIFICATIONS.md](SPECIFICATIONS.md), section 5.1). They are built now (2026-11-16): "Approval History" in the heading of "Recently decided" on the Approval Inbox, and "View all" in the heading of "Approval history" on Specifications, which also stands for the board's toolbar button "View Approval History". Both are compact secondary buttons in the content, because the shell toolbar has no screen buttons, and both are always enabled.
-
-**The link only opens this destination** (decided by the human on 2026-11-16). It sets the shell's screen; this screen then reads as it does when chosen in the sidebar (`visible`). The search, the type filters and the chosen event stay as they were: they are the state of `ActivityScreen` and nothing outside sets them. A link filtered to the loaded document was the alternative and was not built, for two reasons. A decision is the event `HumanDecision`: it names no aggregate, and its payload writes the document's identity as a decimal number inside the core's debug text, while the app shows 32 hexadecimal characters; a search for the identity finds the document's other events (`ReviewDocumentCreated`) and misses its decisions. And the search covers the loaded events only, so older decisions are found only after "Load Older". Both screens say beside the button what it opens: "… opens Activity & Audit, the core's event journal: every loaded event, not one document's decisions. A decision is an event of type HumanDecision." This screen was not changed.
-
-### 5.4 Values that are not on the canvas
-
-| Point | Value in the app |
-|---|---|
-| Panel | Background `sidebar`, edge `sidebarEdge`, 300 wide (the canvas starts at 320), the width of the trailing panels of the Approval Inbox and Specifications |
-| Columns | 150, the rest, 92, 64 (the canvas has 52, 92, 86, the rest, 86, 80 for six) |
-| Chip that is off, chip count, search field, kind tag, record row | COMPONENTS.md, section 20 |
-| Number of events a read reaches back | 64, in pages of 8 (the helper's largest page); one read stops after 256 events |
-| Empty state glyphs | `clock.arrow.circlepath`, and `magnifyingglass` for a search without a result |
-
-## 6. User-facing data (protocol 1.6)
-
-Activity & Audit reads `Events` at minor 6 (`Request.attributedEvents`), so each event carries `at_unix_ms` and `actor` (`docs/architecture/STDIO_PROTOCOL.md`, "Protocol 1.6"). The poll that notices new events stays at minor 1.
-
-- **Columns.** "Time" (58, "HH:mm:ss" in the viewer's time zone, with the date when not today), "Actor" (76), "Type", "Event", "Subject". The "Record" column is left out while the time and actor are shown; the record identifier is in the record panel.
-- **Actor.** "Human" for an event of a command sent from the app, "Claude Code" or "Codex" for a record of that provider's output (and the events of the command that sealed a lead turn that replied or a review with a verdict), "Jojo core" for everything else. Search also matches the actor.
-- **Groups.** By day: "Today", "Yesterday", then "Monday 16 November". Events of a helper older than 1.6 are still grouped by "Epoch n".
-- **Record panel.** "Time" and "Actor" show the values; the footnote says how the actor is decided.
-
-Still not reported: a category above the type, a sentence that says what happened, a cause, record hashes (**no chain is verified**), export, filters by project or date. Snapshot: `s2-activity` (`S2UserFacingDataTests`).
+- **No hash chain is verified**: the core stores no record hash.
+- Cause, approval and affected tasks of an event are not reported.
+- The filters cover the loaded events only; there is no server-side filter or loading on scroll.
+- The category is derived from the event type by the core (`event_category`), the project from the first identity the event records that leads to a registered repository; an event naming none has no project.
+- Export writes the shown events without their payloads.

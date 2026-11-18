@@ -474,3 +474,15 @@ Built in `macos/JojoApp/Sources/JojoApp/FeatureScreens.swift` for Specifications
 Screen-own pieces: the grid nodes and gate nodes of Execution Plan (dashed outline for a gate, 2 `accent` ring when chosen), the dark console of Agent Runs (`#15161B`, text `#D6D9E4`), the unified and side-by-side diff of Source Control (two number columns, `redBg` and `greenBg` lines), the verdict tiles of Verification & Evidence.
 
 Removed with the first-system screens (2026-11-17): `LeadingTile`, `LabeledField`, `Timeline`, `TimelineEntry`, `Console`, `ResultRow`, `EvidenceRow`, `DiffLine`, `DiffView`, `ChangeBadge`, `ChangedFileRow`, `RequestTile`, `RequestRow`, `ValueLine`, `DocumentRow`, `DocumentSection`, `TraceLine`, `TaskNode`, `GraphEdge`, `LaneBand`, `GroupHeader` (sections 14 to 19 and 22 describe them as they were). `ConsoleLine`, `FactLine`, `InputField`, `RequestedNotice` and the other surfaces still used by Recovery Center, Activity & Audit, Settings and Projects stay.
+
+## 29. Implementation notes: system screen surfaces (Liquid Glass, step 6)
+
+Projects, the Recovery Center, Activity & Audit and Settings & Providers (`docs/design/screens/`) use the surfaces of section 28 (`FeatureColumns`, `InspectorColumns`, `GlassInspector`, `LabeledSection`, `DefinitionCard`, `SelectableRow`, `CoreBanners`, which now names the protocol version of a missing query) and two more:
+
+| Component | Notes |
+|---|---|
+| `MenuCapsule` (`Activity.swift`) | A capsule (30 high, `glassStrong`) that opens a menu of choices: Activity & Audit's "All types" and "All projects". Off screen, where a menu does not draw, its title and a chevron stand in |
+| `LetterBadge` (`Projects.swift`) | A project's first letter on the project gradient, 26 in rows, 40 in the head |
+
+Screen-own pieces: the Recovery Center's freshness strip (a card radius 12 with the Fresh or Stale pill, the inspection time and Reinspect) and its action card (rows 0.5 `sep` apart, a 180-wide button column); Activity & Audit's six-column record table with day groups on a card radius 14; Settings' glass section list (230 wide) with `SelectableRow` items and the Theme segmented control; Projects' repository rows with a health pill and the tinted missing-configuration card. Renders: `S13RecoveryCenterTests`, `S14ActivityTests`, `S15SettingsTests`, `S16ProjectsTests`.
+

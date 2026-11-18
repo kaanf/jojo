@@ -106,53 +106,31 @@ Shown while admission is closed. One centered column, at most 980 wide, padding 
 
 ## 4. What the app shows today
 
-Built in `macos/JojoApp/Sources/JojoApp/RecoveryCenter.swift` on the shared surfaces of COMPONENTS.md, section 14. The screen shows only what the helper reports: the admission value, the helper connection and epoch, the recovery rows (attempt identity, assessment text, findings text, blockers, whether every process is proven gone, offered choices) and the inspection digest. A part of the canvas without a source says so on screen; nothing is filled with an example.
-
-Since M5 (protocol 1.10, DESIGN_ROADMAP_DIFFERENCES.md, E16) the center column starts with "External actions · n with unknown outcome" while a push or draft pull request was issued and its outcome was not observed (a lost answer, a helper that stopped): its remote, reference, commit and what was last seen, "Check Remote" (`InspectExternal`: reads the remote and records what it shows, sends nothing) and "Mark Not Performed…" (`ResolveExternal`, confirmed, available after an inspection). Such an action is never sent again; it does not close admission. The screen reads `ExternalActions` only while it is shown (`visible`, a parameter since M5). Inspection counts still do not include external effects.
+Rebuilt on 2026-11-18 from `RecoveryCenterMac.dc.html` (step 6) in `macos/JojoApp/Sources/JojoApp/RecoveryCenter.swift`, on the Liquid Glass surfaces of COMPONENTS.md, section 28. Sections 1 to 3 above describe the first boards (now the canvas's Archive page); the Mac board has the same three columns. The screen reads `Recovery` (1.1, the existing poll) for the subjects and their offered choices, `ExternalActions` (1.10) for pushes and pull requests whose outcome is unknown, and `RecoveryDetail` (1.11) for the rest, the last two only while the screen is shown and again with each snapshot and each new inspection digest.
 
 ### 4.1 Mapping
 
-| Canvas | App today |
+| Board | App |
 |---|---|
-| Held subject kinds | Only prior attempts are reported. External side effects and quarantined claims have no rows |
-| Item title and context | "Attempt" and the first eight characters of the identity; the context line is the number of blockers ("2 blockers", "No blockers", "Blockers not reported"). Task, feature and project names are not reported |
-| Status pill | "Confirmed dead" when every process is proven gone, otherwise "Unknown"; both in the Recovery required form. "Live · unsupervised" cannot be told apart from unknown and is not shown |
-| Settled today | Heading with "Not reported yet." |
-| Freshness tag and inspection time | "Inspection age not reported" in `text3`. A stale inspection is known only when the core refuses a command; the refusal appears in the status line |
-| Reinspect | One inspection covers every held item, so the detail's button is the canvas's "Reinspect All". The toolbar buttons are not built |
-| Inspected facts | Attempt (full identity) · OS evidence (evidence pill: Passed "Every process proven gone", or Unknown "Not proven gone") · Blockers (one per line; "None reported"; "The core shortened this list." when incomplete) · Assessment (the core's own text) · Findings (the core's own text, monospaced, "(partial)" when cut). A footnote names the facts that are not reported separately: worktree, snapshot, evidence, session, claims, process group |
-| Recovery actions | Enabled exactly for the choices the row offers. A core that does not report choices leaves all four enabled and says so in the footnote; it still decides |
-| Action sentences | Reworded to what the core states: Validate Output "Checks the existing output against the task's verification requirements. No new inference." · Continue with History "Starts a new attempt in a new worktree that resumes the provider session with its history." · Continue Fresh "Starts a new attempt in a new worktree with a new session." · Hold "Keeps everything as is. State, worktree and evidence are retained." |
-| Unavailable sentences | Process not proven gone: the canvas sentence for unknown process state. Otherwise: "Unavailable: the core's inspection does not offer this choice." |
-| Footnote | "Offered by the core's inspection. The core checks eligibility again when you choose." or the canvas's "Only Hold is available…" |
-| Ellipsis | The three actions with an ellipsis ask once in a system confirmation dialog (the dialog of COMPONENTS.md, section 7, is not built). Hold is sent directly |
-| Admission card | Pill "Open" (ok), "Closed" (Recovery required form) or the Unknown evidence pill; the identifier is the helper epoch. Sentence: "Held items stay held. Who started the session, and when, is not reported yet." "Pause Admission" is drawn disabled with "The core has no pause command yet." While admission is closed the card has a primary "Open Review" instead of "View RI-12" |
-| Last inspection | Held attempts · Processes proven gone (n / total) · With blockers (`warn` above zero) · Offering more than Hold · Inspection (first twelve characters of the digest). A footnote names the canvas counts that are not reported |
-| Launch review banner | "Execution admission is closed" · "No new work starts and nothing continues until you review this inspection and start a new session." The time and cause of the stop are not reported |
-| Inspection strip | Inspection (digest, twelve characters) · Findings (count) · Collected and Freshness "Not reported yet" |
-| Findings | One per recovery row: "Attempt 1a2b3c4d: every process proven gone" or "…: process state unknown", the first blocker or the assessment text as the sentence, and the item's pill. Checks are kept for the digest they were made on; a new inspection clears them |
-| Finding rows | The list row of COMPONENTS.md, section 5.3, with a checkbox as its leading slot, a wrapping second line and an inset of 14 |
-| Start New Session | Sends the reviewed start bound to the digest. Disabled, with the reason beside it, until every finding is checked, while a command is pending, without a digest or without a connection |
+| Header "Recovery Center", "Workspace · n held", "Reinspect All", "Inspect Recovery" | The same; Reinspect All sends `RecoveryInspect`; Inspect Recovery opens the launch review while admission is closed and says why it is disabled otherwise |
+| Held list: external side effect, prior attempts, quarantined claim | External actions whose outcome is unknown ("Outcome unknown"), then each prior attempt by its task and attempt ("T2 · Attempt 1") with project, feature and step title, then the live claims of earlier sessions whose holder is not a subject ("Quarantined", "Held by T1 · attempt 2"). An attempt's pill: "Live · unsupervised" when a recorded process is alive, "Confirmed dead" when every process is proven gone, else "Unknown" |
+| "Settled today" | "Settled this session": the resolutions this session recorded other than Hold (`settled`), with the time and "Continued fresh", "Continued with history" or "Output validated". A Hold keeps the attempt in the held list |
+| Freshness strip "Stale · inspected 09:04 · 38 min ago · reinspect before acting · Reinspect" | The same from `inspected_at_unix_ms`; older than five minutes is Stale |
+| "Inspected facts · read-only" | Attempt, stage in words, PID and PGID with their findings, OS evidence, worktree ("Present · matches its record", "Changed · …"), snapshot ("sha256 verified · …", "Changed after snapshot", "No reviewed snapshot"), evidence (gaps, or "Logs complete to their last durable record"), session ("Claude Code session recorded"), claims, stale approvals, unknown effects and blockers, each on its own line |
+| External side effect detail | Operation (`git push origin refs/heads/…` or `gh pr create --draft …`), idempotency key, commit, remote, last seen; "How this resolves"; M5's "External actions · n with unknown outcome" with Check Remote and Mark Not Performed… (kept from M5) |
+| Quarantined claim detail | Paths, held by, mode, what it blocks; only Hold |
+| Recovery actions | Validate Output…, Continue with History…, Continue Fresh…, Hold, enabled only as the core's inspection offers them; the unavailable sentence names the reason (alive, unknown, not offered) |
+| Execution admission | Open or Closed, "Session n", Open Review while closed; Pause Admission disabled |
+| "Last inspection": attempts examined, worktrees intact, snapshot mismatches, unknown external effects, stale approvals | The same from `counts`, plus evidence gaps, quarantined claims, the time and the inspection digest |
 
 ### 4.2 Navigation and states
 
-- The Recovery Center destination shows the center. While the core reports an admission other than `Open`, the Recovery required banner of STATES.md sits above it with "Open Review", which shows the launch review; "Recovery Center" at the top of the review goes back. When admission opens, the center is shown again.
-- Disconnected (`channelLost`, `ended`, `launchFailed`): danger banner "Jojo core isn't responding" · "Showing the last known state, read-only. No actions can be requested." Every action is disabled. There is no "Reconnect" yet; the app has no way to start the helper again.
-- Incompatible protocol: danger banner "Jojo core speaks another protocol version" · "Read-only. No actions can be requested."
-- Loading (connected, no digest yet): "Loading the recovery inspection…" and three skeleton bars.
-- Empty (digest, no rows): the Empty form with "Nothing is on hold" · "The last inspection found no interrupted or unknown work." and a secondary "Reinspect".
-- Requested: the toolbar's "Requested" pill; every action is disabled while a command is pending.
-- Content under 920 wide (the window at its opening size): the trailing panel's cards move below the detail, so the detail keeps at least 420. Three columns appear in a wider window.
+Loading ("Loading the recovery inspection…"), no inspection, nothing on hold (Reinspect), a lost or incompatible core (CoreBanners), a core older than 1.11 (a banner, names "not reported", the facts of the 1.1 row and "Not reported by this core (protocol 1.11)" for the counts), admission closed (a danger banner with Open Review). The launch review is unchanged except that "Collected" and "Freshness" now come from the inspection's time.
 
-### 4.3 Values that are not on the canvas
+### 4.3 Known gaps
 
-| Point | Value in the app |
-|---|---|
-| Side panel background | `sidebar` token (canvas `#1E1E22`, no token); edge `sidebarEdge` |
-| Panel widths | Held list 240, trailing panel 260, detail takes the rest |
-| Selected item, light | Same formula as dark: `accent` at 16%, ring `info` at 40% |
-| Start bar background | `fill2` (canvas white at 3.5%) |
-| Checkbox | Drawn, 14 × 14, radius 3.5: `accent` with a white check when on, 1 pt `text4` ring when off |
-| Identifiers | The `mono` text style (11 pt), as in the shell |
-| Skeleton bars | `fill` in both appearances (canvas: white at 8% in dark) |
-| Glyphs (SF Symbols) | Banner warning `exclamationmark.triangle.fill`, danger `exclamationmark.octagon.fill`; Reinspect `arrow.clockwise`; Start New Session `play.fill`; Pause Admission `pause.fill`; footnote `info.circle`; empty state `checkmark.circle`; back `chevron.left` |
+- There is no pause-admission command and no way to reconnect a lost helper; Pause Admission is drawn disabled.
+- Who started the session and after which inspection is not reported ("View RI-12" is not built).
+- The inspection time is the helper's memory of its last inspection; a restart inspects again.
+- The settled list is this session's resolutions, not "today's"; the held list shows at most 16 subjects and 16 claims.
+- A claim's mode is the core's (`SHARED`, `EXCLUSIVE`); "Blocks" is derived from it, not reported.
