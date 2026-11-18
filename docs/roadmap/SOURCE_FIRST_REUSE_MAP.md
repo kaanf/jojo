@@ -243,7 +243,7 @@ These follow the stated engineering rules and need the human's decision; none is
 | Authorization | A separate GO per milestone and per live attempt | One standing authorization for runs inside registered disposable or explicitly registered repositories, within a set attempt and time budget |
 | Approvals inside a run | PRD, ADR, plan and validation plan each approved separately | **Decided 2026-11-15:** four approval kinds, no approve-all: spec (PRD and ADR together), plan, push, PR. Edits re-open the approval |
 | Still always human | — | Push, PR creation, merge; registering a repository; anything touching credentials; raising budgets; resolving a repair-limit hold |
-| P2-05 stop condition "write outside the worktree" | Any such write halts | Treat writes that the provider's own sandbox allows (`/tmp`, `$TMPDIR`) as recorded observations. The process-group gap is the demonstrated risk and gets the fix (M0) |
+| P2-05 stop condition "write outside the worktree" | Any such write halts | **Decided 2026-11-18:** treat writes that the provider's own sandbox allows (`/tmp`, `$TMPDIR`) as recorded observations. The process-group gap is the demonstrated risk and gets the fix (M0) |
 | Verification | Gate script and report per milestone, hashes over all inputs | Keep the suites as regression tests run per step; one short report per roadmap step |
 | Provenance | `research/REPOSITORY_PINS.json` for nine checkouts | Add the five new pins and a `THIRD_PARTY_NOTICES` file before the first ported line lands; each ported file names its source path and SHA |
 | Version control | Project is not a Git repository | Initialize one locally (human action). Provenance and review of Jojo's own changes depend on it |
