@@ -105,8 +105,8 @@
       "s6_recovery_detail_counts_the_inspection_and_lists_each_fact_and_what_was_resolved",
       "s6_project_detail_reads_branch_head_worktrees_origin_and_what_is_missing",
       "s6_events_at_1_11_carry_a_category_and_the_project_they_concern",
-      "s6_origin_words_drop_credentials_and_name_the_kind",
-      "s6_every_event_kind_has_a_category"
+      "details::tests::s6_origin_words_drop_credentials_and_name_the_kind",
+      "features::tests::s6_every_event_kind_has_a_category"
     ],
     "ignored": [
       "child_fixture",
