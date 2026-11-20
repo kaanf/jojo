@@ -21,6 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jojo_domain::identity::{ArtifactId, OpaqueId};
+use jojo_domain::payload::{Record, provider_event, provider_event_from};
 use jojo_domain::provider::{Capabilities, EventPayload, LaunchSpec, SessionRef, Support};
 use jojo_domain::recovery::{
     Assessment, LaunchStage, ProcessFinding, RecoveryChoice, RecoveryFacts, SessionContinuity,
@@ -306,40 +307,25 @@ fn db_digest(c: &Connection, id: &str) -> Result<String, StorageError> {
     Ok(sha256_hex(&[db_facts(c, id)?.canonical.as_bytes()]))
 }
 
-/// Strict parse of a stored `SessionIdentified` payload, accepted only if it formats back
-/// to exactly the stored text.
+/// The stored payload of a `SessionIdentified` event for `s`.
+pub(crate) fn stored_session(s: &SessionRef) -> String {
+    provider_event(&EventPayload::SessionIdentified(s.clone())).encode()
+}
+
+/// A stored `SessionIdentified` payload, accepted only if it encodes back to exactly the
+/// stored text.
 pub(crate) fn parse_session(payload: &str) -> Option<SessionRef> {
-    fn quoted(s: &str) -> Option<(String, &str)> {
-        let s = s.strip_prefix('"')?;
-        let (mut out, mut escaped) = (String::new(), false);
-        for (i, ch) in s.char_indices() {
-            match (escaped, ch) {
-                (true, c) => {
-                    out.push(c);
-                    escaped = false;
-                }
-                (false, '\\') => escaped = true,
-                (false, '"') => return Some((out, &s[i + 1..])),
-                (false, c) => out.push(c),
-            }
+    match provider_event_from(payload) {
+        Ok(event @ EventPayload::SessionIdentified(_))
+            if provider_event(&event).encode() == payload =>
+        {
+            let EventPayload::SessionIdentified(s) = event else {
+                return None;
+            };
+            Some(s)
         }
-        None
+        _ => None,
     }
-    let rest = payload.strip_prefix("SessionIdentified(SessionRef { provider: ")?;
-    let (provider, rest) = rest.split_once(", session: ")?;
-    let provider = match provider {
-        "ClaudeCode" => jojo_domain::provider::ProviderKind::ClaudeCode,
-        "Codex" => jojo_domain::provider::ProviderKind::Codex,
-        _ => return None,
-    };
-    let (session, rest) = quoted(rest)?;
-    let (turn, _) = quoted(rest.strip_prefix(", turn: ")?)?;
-    let s = SessionRef {
-        provider,
-        session,
-        turn,
-    };
-    (format!("{:?}", EventPayload::SessionIdentified(s.clone())) == payload).then_some(s)
 }
 
 fn session_continuity(
@@ -623,10 +609,7 @@ pub(crate) fn verify_continuation(c: &Connection, spec: &LaunchSpec) -> Result<(
         (Some((_, session, _, _)), None) if session == FRESH => Ok(()),
         (Some(_), None) => Err(deny("continuation plan requires the exact session")),
         (Some((predecessor, session, digest, cwd)), Some(k)) => {
-            let exact = format!(
-                "{EXACT}{:?}",
-                EventPayload::SessionIdentified(k.exact.clone())
-            );
+            let exact = format!("{EXACT}{}", stored_session(&k.exact));
             if session != exact
                 || id_to_text(k.predecessor.0) != predecessor
                 || k.reviewed_plan != digest
@@ -704,7 +687,11 @@ impl Tx<'_> {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let event = self.append_event("RecoveryStarted", None, &inspection.digest)?;
+        let event = self.append_event(
+            "RecoveryStarted",
+            None,
+            &Record::new().text("inspection", inspection.digest.clone()),
+        )?;
         self.conn.execute(
             "INSERT INTO recovery_starts VALUES (?1,?2,?3,?4,?5)",
             &[
@@ -740,7 +727,9 @@ impl Tx<'_> {
         let event = self.append_event(
             "RecoveryResolved",
             None,
-            &format!("{id}|{}", choice.as_db()),
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("choice", choice.as_db()),
         )?;
         self.conn.execute(
             "INSERT INTO recovery_resolutions VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -789,7 +778,11 @@ impl Tx<'_> {
             }
             LaunchStage::Spawned | LaunchStage::Concluded => {
                 prove(self, &subject.findings)?;
-                self.append_event("RecoveryAbsenceProven", None, &id)?;
+                self.append_event(
+                    "RecoveryAbsenceProven",
+                    None,
+                    &Record::new().text("attempt", id.clone()),
+                )?;
                 Ok("SETTLE".into())
             }
             LaunchStage::IssuedWithoutIdentity => Err(deny("absence is not proven")),
@@ -869,7 +862,7 @@ impl Tx<'_> {
         let session = match &plan.session {
             SessionPolicy::FreshContext => FRESH.to_owned(),
             SessionPolicy::ExactHistory(s) => {
-                let stored = format!("{:?}", EventPayload::SessionIdentified(s.clone()));
+                let stored = stored_session(s);
                 if facts.sessions != [stored.clone()] {
                     return Err(deny(
                         "session is not the predecessor's one exact recorded session",
@@ -901,7 +894,10 @@ impl Tx<'_> {
         let event = self.append_event(
             "ContinuationPlanRecorded",
             None,
-            &format!("{}|{pred}|{digest}", id_to_text(plan.successor)),
+            &Record::new()
+                .id("attempt", plan.successor)
+                .text("predecessor", pred.clone())
+                .text("digest", digest.clone()),
         )?;
         self.conn.execute(
             "INSERT INTO continuation_plans VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
@@ -1014,20 +1010,20 @@ mod tests {
             session: "a\"b\\c".into(),
             turn: "t".into(),
         };
-        let stored = format!("{:?}", EventPayload::SessionIdentified(s.clone()));
-        assert_eq!(parse_session(&stored), Some(s));
+        let stored = stored_session(&s);
+        assert_eq!(parse_session(&stored), Some(s.clone()));
         assert_eq!(parse_session(&stored.replace("Codex", "Latest")), None);
         assert_eq!(parse_session(&format!("{stored} ")), None);
+        assert_eq!(
+            parse_session(&format!("{:?}", EventPayload::SessionIdentified(s))),
+            None,
+            "Debug text is never a stored session"
+        );
         let control = SessionRef {
             provider: jojo_domain::provider::ProviderKind::ClaudeCode,
             session: "a\nb".into(),
             turn: "t".into(),
         };
-        let stored = format!("{:?}", EventPayload::SessionIdentified(control));
-        assert_eq!(
-            parse_session(&stored),
-            None,
-            "non-trivial escapes are refused"
-        );
+        assert_eq!(parse_session(&stored_session(&control)), Some(control));
     }
 }

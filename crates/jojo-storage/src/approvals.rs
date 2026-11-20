@@ -8,6 +8,7 @@ use crate::{
 };
 use jojo_domain::identity::{ArtifactId, OpaqueId, Revision};
 use jojo_domain::outcome::StopCause;
+use jojo_domain::payload::Record;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecisionAction {
@@ -15,11 +16,33 @@ pub enum DecisionAction {
     Reject,
     Revoke,
 }
+impl DecisionAction {
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Self::Approve => "Approve",
+            Self::Reject => "Reject",
+            Self::Revoke => "Revoke",
+        }
+    }
+}
 /// Supplied only by the host's trusted UI entry point, never decoded from provider data.
 #[derive(Clone, Debug)]
 pub enum HumanOrigin {
     TrustedUi { actor: String },
     FakeHumanFixture { actor: String },
+}
+impl HumanOrigin {
+    pub(crate) fn word(&self) -> &'static str {
+        match self {
+            Self::TrustedUi { .. } => "TrustedUi",
+            Self::FakeHumanFixture { .. } => "FakeHumanFixture",
+        }
+    }
+    pub(crate) fn actor(&self) -> &str {
+        match self {
+            Self::TrustedUi { actor } | Self::FakeHumanFixture { actor } => actor,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReviewBundle {
@@ -216,7 +239,7 @@ impl Engine {
             let actor=match &origin{HumanOrigin::TrustedUi{actor}|HumanOrigin::FakeHumanFixture{actor}=>actor};
             if actor.trim().is_empty(){return Err(deny("human identity required"))}
             if decisions(tx.conn,review.subject)?.last().is_some_and(|d|d.bundle==review.hash && d.action==format!("{action:?}")){return Err(deny("duplicate decision"))}
-            let seq=tx.append_event("HumanDecision",None,&format!("{review:?}|{action:?}|{origin:?}"))?;
+            let seq=tx.append_event("HumanDecision",None,&Record::new().id("subject",review.subject.0).count("revision",review.revision.0).text("bundle",review.hash.clone()).text("action",action.word()).text("origin",origin.word()).text("actor",actor))?;
             tx.conn.execute("INSERT INTO human_decisions (seq,subject,bundle,action,origin,command,revision,content_hash,displayed_hash,upstream,prior_decision) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",&[Value::Int(to_db(seq.0)?),Value::Text(&id_to_text(review.subject.0)),Value::Text(&review.hash),Value::Text(&format!("{action:?}")),Value::Text(&format!("{origin:?}")),Value::Text(&tx.command_id),Value::Int(to_db(review.revision.0)?),Value::Text(&review.content_hash),Value::Text(&review.displayed_hash),Value::Text(&format!("{:?}",review.upstream)),review.prior_decision.map(|d|to_db(d.0)).transpose()?.map_or(Value::Null,Value::Int)])?;
             tx.invalidate_approvals()?;
             Ok(seq.0.to_string())
@@ -280,7 +303,11 @@ impl Tx<'_> {
             Some(r) => self.update_aggregate(&key, r, &hash(&[body, displayed]))?,
             None => self.create_aggregate(&key, &hash(&[body, displayed]))?,
         };
-        let event = self.append_event("ReviewDocumentCreated", Some((&key, rev)), body)?;
+        let event = self.append_event(
+            "ReviewDocumentCreated",
+            Some((&key, rev)),
+            &Record::new().text("body", body),
+        )?;
         self.conn.execute(
             "INSERT INTO review_documents VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             &[
@@ -381,7 +408,11 @@ impl Tx<'_> {
         if changed != 1 {
             return Err(deny("attempt cannot become running"));
         }
-        self.append_event("ApprovalAttemptRunning", None, &id_to_text(id))?;
+        self.append_event(
+            "ApprovalAttemptRunning",
+            None,
+            &Record::new().id("attempt", id),
+        )?;
         Ok(())
     }
     pub fn cancel_approved_attempt(&mut self, id: OpaqueId) -> Result<(), TxError> {
@@ -393,7 +424,11 @@ impl Tx<'_> {
         cause: StopCause,
         detail: &str,
     ) -> Result<(), TxError> {
-        let event = self.append_event("ApprovalStopRequested", None, id)?;
+        let event = self.append_event(
+            "ApprovalStopRequested",
+            None,
+            &Record::new().text("attempt", id),
+        )?;
         self.conn.execute(
             "INSERT OR IGNORE INTO approval_stops VALUES (?1,?2)",
             &[Value::Text(id), Value::Int(to_db(event.0)?)],

@@ -15,11 +15,13 @@ use std::fs;
 
 use jojo_domain::attempt::AttemptOutcome;
 use jojo_domain::identity::{ArtifactId, IdGenerator, OpaqueId, Revision};
+use jojo_domain::json::Json;
 use jojo_domain::outcome::{
     CandidateEvidence, Classification, Coverage, ExitStatus, ProcessConclusion, SettlementFacts,
     StopCause, SupervisorStop, classify,
 };
-use jojo_domain::provider::{Stream, TerminalStatus};
+use jojo_domain::payload::{self, Record, provider_event_from};
+use jojo_domain::provider::{EventPayload, Stream, TerminalStatus};
 use jojo_domain::validation::CANDIDATE_OUTPUT;
 
 use crate::evidence::{BlobFaults, BlobRef, BlobStore};
@@ -110,62 +112,53 @@ fn stream_kind(s: Stream) -> &'static str {
     }
 }
 
-/// Status of a stored `ProviderTerminal` payload (its derived `Debug` text). Anything
-/// that does not parse exactly is `Unknown`, which can never produce success.
+/// Status of a stored `ProviderTerminal` payload. Anything that is not exactly that
+/// event is `Unknown`, which can never produce success.
 pub(crate) fn terminal_status(payload: &str) -> TerminalStatus {
-    let Some(rest) = payload.strip_prefix("ProviderTerminal { turn: \"") else {
-        return TerminalStatus::Unknown;
-    };
-    let mut escaped = false;
-    let mut end = None;
-    for (i, c) in rest.char_indices() {
-        match (escaped, c) {
-            (true, _) => escaped = false,
-            (false, '\\') => escaped = true,
-            (false, '"') => {
-                end = Some(i);
-                break;
-            }
-            _ => {}
-        }
-    }
-    let status = end
-        .and_then(|i| rest[i + 1..].strip_prefix(", status: "))
-        .and_then(|s| s.split(',').next());
-    match status {
-        Some("Success") => TerminalStatus::Success,
-        Some("Error") => TerminalStatus::Error,
-        Some("Interrupted") => TerminalStatus::Interrupted,
+    match provider_event_from(payload) {
+        Ok(EventPayload::ProviderTerminal { status, .. }) => status,
         _ => TerminalStatus::Unknown,
     }
 }
 
+/// The detail of a `ROOT_EXITED` observation that carries the wait status.
+pub(crate) fn exit_detail(code: Option<i32>, signal: Option<i32>) -> String {
+    let opt = |v: Option<i32>| v.map_or(Json::Null, |n| Json::Int(i64::from(n)));
+    Record::new()
+        .with("code", opt(code))
+        .with("signal", opt(signal))
+        .encode()
+}
+
 fn exit_status(detail: &str) -> Option<ExitStatus> {
-    fn opt(t: &str) -> Option<Option<i32>> {
-        if t == "None" {
-            return Some(None);
+    let f = payload::read(detail).ok()?;
+    let opt = |key: &str| -> Option<Option<i32>> {
+        match f.optional_int(key)? {
+            None => Some(None),
+            Some(n) => i32::try_from(n).ok().map(Some),
         }
-        t.strip_prefix("Some(")?
-            .strip_suffix(')')?
-            .parse()
-            .ok()
-            .map(Some)
-    }
-    let (code, signal) = detail.strip_prefix("code=")?.split_once(" signal=")?;
+    };
     Some(ExitStatus {
-        code: opt(code)?,
-        signal: opt(signal)?,
+        code: opt("code")?,
+        signal: opt("signal")?,
     })
 }
 
-/// `STDOUT durable=N discarded=M` as recorded at stream close.
+/// The detail of a `STREAM_CLOSED` observation.
+pub(crate) fn stream_closed_detail(stream: &str, durable: u64, discarded: u64) -> String {
+    Record::new()
+        .text("stream", stream)
+        .count("durable", durable)
+        .count("discarded", discarded)
+        .encode()
+}
+
 fn stream_closed(detail: &str) -> Option<(String, u64, u64)> {
-    let (stream, rest) = detail.split_once(" durable=")?;
-    let (durable, discarded) = rest.split_once(" discarded=")?;
+    let f = payload::read(detail).ok()?;
     Some((
-        stream.to_owned(),
-        durable.parse().ok()?,
-        discarded.parse().ok()?,
+        f.text("stream")?.to_owned(),
+        f.count("durable")?,
+        f.count("discarded")?,
     ))
 }
 
@@ -448,7 +441,9 @@ impl Tx<'_> {
         let event = self.append_event(
             "AttemptStopCause",
             None,
-            &format!("{id}|{}", cause_db(cause)),
+            &Record::new()
+                .text("attempt", id)
+                .text("cause", cause_db(cause)),
         )?;
         self.conn.execute(
             "INSERT INTO attempt_stop_causes VALUES (?1,?2,?3,?4)",
@@ -526,7 +521,11 @@ impl Tx<'_> {
                 self.release_claim(claim.id, release_basis(recovered))?;
             }
         }
-        self.append_event("AttemptSettling", None, &id)?;
+        self.append_event(
+            "AttemptSettling",
+            None,
+            &Record::new().text("attempt", id.clone()),
+        )?;
         Ok(())
     }
 
@@ -543,7 +542,10 @@ impl Tx<'_> {
         let event = self.append_event(
             "AttemptEvidenceReferenced",
             None,
-            &format!("{id}|{kind}|{}", blob.digest),
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("evidence", kind)
+                .text("digest", blob.digest.clone()),
         )?;
         self.conn.execute(
             "INSERT INTO attempt_evidence VALUES (?1,?2,?3,?4)",
@@ -579,8 +581,13 @@ impl Tx<'_> {
         let (outcome, reason, uncertainties) = match classify(&g.facts) {
             Classification::RecoveryRequired(reasons) => {
                 let text = reasons.join("; ");
-                let event =
-                    self.append_event("AttemptRecoveryRequired", None, &format!("{id}|{text}"))?;
+                let event = self.append_event(
+                    "AttemptRecoveryRequired",
+                    None,
+                    &Record::new()
+                        .text("attempt", id.clone())
+                        .text("reasons", text.clone()),
+                )?;
                 self.conn.execute(
                     "INSERT INTO attempt_recovery_holds VALUES (?1,?2,?3)",
                     &[
@@ -608,7 +615,10 @@ impl Tx<'_> {
         let event = self.append_event(
             "AttemptResultSealed",
             None,
-            &format!("{id}|{}|{reason}", outcome_db(outcome)),
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("outcome", outcome_db(outcome))
+                .text("reason", reason),
         )?;
         let opt = |v: Option<i32>| v.map_or(Value::Null, |n| Value::Int(i64::from(n)));
         self.conn.execute(
@@ -660,10 +670,16 @@ impl Tx<'_> {
             }
         } else {
             let text = format!(
-                "claims retained: effect outcome unknown {:?}",
-                g.facts.unresolved_effects
+                "claims retained: effect outcome unknown ({})",
+                g.facts.unresolved_effects.join(", ")
             );
-            let hold = self.append_event("AttemptRecoveryRequired", None, &text)?;
+            let hold = self.append_event(
+                "AttemptRecoveryRequired",
+                None,
+                &Record::new()
+                    .text("attempt", id.clone())
+                    .text("reasons", text.clone()),
+            )?;
             self.conn.execute(
                 "INSERT INTO attempt_recovery_holds VALUES (?1,?2,?3)",
                 &[
@@ -720,7 +736,9 @@ impl Tx<'_> {
         let event = self.append_event(
             "AttemptEffectJournaled",
             None,
-            &format!("{id}|{operation_key}"),
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("key", operation_key),
         )?;
         self.conn.execute(
             "INSERT INTO attempt_effects VALUES (?1,?2,?3)",
@@ -739,7 +757,13 @@ impl Tx<'_> {
         let id = self.effect_attempt(operation_key)?;
         self.effect_admissible(&id)?;
         self.advance_effect(operation_key, EffectState::IssuedUnknown)?;
-        self.append_event("AttemptEffectIssued", None, operation_key)?;
+        self.append_event(
+            "AttemptEffectIssued",
+            None,
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("key", operation_key),
+        )?;
         Ok(())
     }
 
@@ -772,7 +796,10 @@ impl Tx<'_> {
         let event = self.append_event(
             "EffectObserved",
             None,
-            &format!("{operation_key}|{observer}|{text}"),
+            &Record::new()
+                .text("key", operation_key)
+                .text("observer", observer)
+                .text("status", text),
         )?;
         self.conn.execute(
             "INSERT INTO effect_observations VALUES (?1,?2,?3,?4,?5)",
@@ -1081,49 +1108,58 @@ pub fn settle_attempt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jojo_domain::provider::EventPayload;
+    use jojo_domain::payload::provider_event;
 
     #[test]
-    fn stored_terminal_and_exit_text_parse_exactly_and_unknown_shapes_never_succeed() {
+    fn stored_terminal_and_exit_records_read_exactly_and_unknown_shapes_never_succeed() {
         for status in [
             TerminalStatus::Success,
             TerminalStatus::Error,
             TerminalStatus::Interrupted,
         ] {
-            let payload = format!(
-                "{:?}",
-                EventPayload::ProviderTerminal {
-                    turn: "t\", status: Success, \\".into(),
-                    status,
-                    raw_status: "x".into(),
-                }
-            );
+            let payload = provider_event(&EventPayload::ProviderTerminal {
+                turn: "t\", status: Success, \\".into(),
+                status,
+                raw_status: "x".into(),
+            })
+            .encode();
             assert_eq!(terminal_status(&payload), status);
         }
         assert_eq!(
-            terminal_status("ProviderTerminal { turn: \"t\", status: Successful }"),
+            terminal_status(
+                r#"{"event":"ProviderTerminal","raw_status":"x","status":"Successful","turn":"t","v":1}"#
+            ),
             TerminalStatus::Unknown
         );
         assert_eq!(
-            terminal_status("TextDelta(\"status: Success\")"),
+            terminal_status(
+                &provider_event(&EventPayload::TextDelta("status: Success".into())).encode()
+            ),
             TerminalStatus::Unknown
         );
         assert_eq!(
-            exit_status("code=Some(0) signal=None"),
+            terminal_status("ProviderTerminal { turn: \"t\", status: Success }"),
+            TerminalStatus::Unknown,
+            "Debug text is never a stored event"
+        );
+        assert_eq!(
+            exit_status(&exit_detail(Some(0), None)),
             Some(ExitStatus {
                 code: Some(0),
                 signal: None
             })
         );
         assert_eq!(
-            exit_status("code=None signal=Some(9)").map(|e| e.signal),
+            exit_status(&exit_detail(None, Some(9))).map(|e| e.signal),
             Some(Some(9))
         );
         assert_eq!(exit_status("root terminated; wait status pending"), None);
+        assert_eq!(exit_status("code=Some(0) signal=None"), None);
         assert_eq!(
-            stream_closed("STDERR durable=7 discarded=3"),
+            stream_closed(&stream_closed_detail("STDERR", 7, 3)),
             Some(("STDERR".into(), 7, 3))
         );
+        assert_eq!(stream_closed("STDERR durable=7 discarded=3"), None);
         assert_eq!(supervisor_stop(DEADLINE_STOP), SupervisorStop::Deadline);
         assert_eq!(supervisor_stop("protocol: bad"), SupervisorStop::Protocol);
         assert_eq!(supervisor_stop("stop requested"), SupervisorStop::Other);

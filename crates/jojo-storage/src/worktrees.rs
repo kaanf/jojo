@@ -14,6 +14,7 @@ use crate::{
     StorageError, Tx, TxError, sha256_hex,
 };
 use jojo_domain::identity::{OpaqueId, RepositoryId};
+use jojo_domain::payload::Record;
 use jojo_domain::scheduler::repository_key;
 use jojo_domain::validation::{ChangeKind, ChangedPath, ScopePath, parse_raw_diff};
 
@@ -373,7 +374,11 @@ impl Tx<'_> {
                 Value::Text(&repo.filesystem),
             ],
         )?;
-        self.append_event("LocalRepositoryRegistered", None, &id_to_text(repo.id.0))?;
+        self.append_event(
+            "LocalRepositoryRegistered",
+            None,
+            &Record::new().id("repository", repo.id.0),
+        )?;
         Ok(repo.id)
     }
     pub fn record_candidate(&mut self, candidate: &CandidateSnapshot) -> Result<(), TxError> {
@@ -399,12 +404,10 @@ impl Tx<'_> {
             self.append_event(
                 "CandidatePreserved",
                 None,
-                &format!(
-                    "{}|{}|{}",
-                    id_to_text(candidate.attempt),
-                    candidate.head,
-                    candidate.digest
-                ),
+                &Record::new()
+                    .id("attempt", candidate.attempt)
+                    .text("head", candidate.head.clone())
+                    .text("digest", candidate.digest.clone()),
             )?;
         }
         Ok(())
@@ -455,7 +458,13 @@ impl Tx<'_> {
             );
             self.conn.execute("INSERT INTO owned_worktrees(attempt,repository,epoch,state,root,root_identity,repo_path,common,common_identity,base,predecessor,marker) VALUES(?1,?2,?3,'WAITING',?4,?5,?6,?7,?8,?9,?10,?11)",&[
                 Value::Text(&id_to_text(attempt)),Value::Text(&id_to_text(repo.id.0)),Value::Int(to_db(self.epoch.0)?),Value::Text(text_path(&root.path).map_err(|e|deny(&e))?),Value::Text(&root.filesystem),Value::Text(text_path(&repo.path).map_err(|e|deny(&e))?),Value::Text(text_path(&repo.common).map_err(|e|deny(&e))?),Value::Text(&repo.filesystem),Value::Text(base),predecessor.map(id_to_text).as_deref().map_or(Value::Null,Value::Text),Value::Text(&marker)])?;
-            self.append_event("WorktreeRequested", None, &marker)?;
+            self.append_event(
+                "WorktreeRequested",
+                None,
+                &Record::new()
+                    .id("attempt", attempt)
+                    .text("marker", marker.clone()),
+            )?;
         }
         // M3: worktree administration serializes only with itself. Running attempts of
         // the same repository hold shared execution claims and no longer hold it back.
@@ -479,7 +488,11 @@ impl Tx<'_> {
                 Value::Text(&id_to_text(attempt)),
             ],
         )?;
-        self.append_event("WorktreeCreating", None, &id_to_text(attempt))?;
+        self.append_event(
+            "WorktreeCreating",
+            None,
+            &Record::new().id("attempt", attempt),
+        )?;
         Ok("CREATING".into())
     }
     pub fn seal_worktree(&mut self, proof: MaterializedWorktree) -> Result<(), TxError> {
@@ -506,7 +519,11 @@ impl Tx<'_> {
             ],
         )?;
         self.release_claim(claim, ReleaseBasis::HolderSettled)?;
-        self.append_event("WorktreeReady", None, &id_to_text(record.attempt))?;
+        self.append_event(
+            "WorktreeReady",
+            None,
+            &Record::new().id("attempt", record.attempt),
+        )?;
         Ok(())
     }
     /// An ambiguous/failed create retains its exclusive claim and every filesystem byte.
@@ -519,7 +536,11 @@ impl Tx<'_> {
             "UPDATE owned_worktrees SET state='BLOCKED' WHERE attempt=?1",
             &[Value::Text(&id_to_text(attempt))],
         )?;
-        self.append_event("WorktreeBlocked", None, reason)?;
+        self.append_event(
+            "WorktreeBlocked",
+            None,
+            &Record::new().id("attempt", attempt).text("reason", reason),
+        )?;
         Ok(())
     }
     /// Execution must claim both private writers in the scheduler reservation transaction.
@@ -582,7 +603,11 @@ impl Tx<'_> {
             "UPDATE owned_worktrees SET state='BOUND' WHERE attempt=?1",
             &[Value::Text(&id_to_text(r.attempt))],
         )?;
-        self.append_event("WorktreeBound", None, &id_to_text(r.attempt))?;
+        self.append_event(
+            "WorktreeBound",
+            None,
+            &Record::new().id("attempt", r.attempt),
+        )?;
         Ok(())
     }
 }

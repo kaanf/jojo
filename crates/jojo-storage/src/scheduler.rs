@@ -5,10 +5,72 @@ use crate::sqlite::{Connection, Value};
 use crate::*;
 use jojo_domain::dependency::{NodeRef, SourceVector, Truth};
 use jojo_domain::identity::{ArtifactId, OpaqueId, Revision};
+use jojo_domain::ipc::{identity, number, object, text};
+use jojo_domain::json::Json;
+use jojo_domain::payload::{Record, provider_word};
 use jojo_domain::scheduler::{
     ResourceMode, ResourceNeed, StepResources, effective_priority, repository_key,
 };
+use jojo_domain::time::ClockReading;
 use std::collections::{BTreeMap, BTreeSet};
+
+fn node_json(n: NodeRef) -> Json {
+    object([("id", identity(n.id)), ("revision", number(n.revision.0))])
+}
+fn clock_json(c: ClockReading) -> Json {
+    object([
+        ("epoch", identity(c.epoch.0)),
+        ("monotonic_nanos", number(c.monotonic_nanos)),
+        ("unix_millis", Json::Int(c.unix_millis)),
+    ])
+}
+fn decisions_json(decisions: &[AdmissionDecision]) -> Json {
+    Json::List(
+        decisions
+            .iter()
+            .map(|d| {
+                object([
+                    ("step", node_json(d.step)),
+                    ("attempt", d.attempt.map_or(Json::Null, identity)),
+                    ("reason", text(d.reason.clone())),
+                ])
+            })
+            .collect(),
+    )
+}
+fn needs_json(needs: &[ResourceNeed]) -> Json {
+    Json::List(
+        needs
+            .iter()
+            .map(|n| {
+                object([
+                    ("key", text(n.key.clone())),
+                    ("units", number(n.units)),
+                    (
+                        "mode",
+                        text(match n.mode {
+                            ResourceMode::Shared => "Shared",
+                            ResourceMode::Exclusive => "Exclusive",
+                        }),
+                    ),
+                ])
+            })
+            .collect(),
+    )
+}
+fn status_json(s: &QueueStatus) -> Json {
+    object([
+        ("step", node_json(s.step)),
+        ("ready_sequence", number(s.ready_sequence)),
+        ("eligible_nanos", number(s.eligible_nanos)),
+        ("intent", text(s.intent.clone())),
+        ("skips", number(s.skips)),
+        (
+            "barriers",
+            Json::List(s.barriers.iter().map(|b| text(b.clone())).collect()),
+        ),
+    ])
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceConfig {
@@ -189,7 +251,11 @@ impl Tx<'_> {
                 ],
             )?;
         }
-        self.append_event("ResourceConfigurationChanged", None, &revision.to_string())?;
+        self.append_event(
+            "ResourceConfigurationChanged",
+            None,
+            &Record::new().count("revision", revision),
+        )?;
         Ok(revision)
     }
     /// First readiness observation fixes queue order forever. Duplicate/stale queue commands
@@ -224,7 +290,10 @@ impl Tx<'_> {
         let event = self.append_event(
             "SchedulerReady",
             None,
-            &format!("{plan:?}|{revision:?}|{step:?}"),
+            &Record::new()
+                .id("plan", plan.0)
+                .count("revision", revision.0)
+                .with("step", node_json(step)),
         )?;
         self.conn.execute("INSERT INTO scheduler_queue (step,step_revision,plan,plan_revision,prd,adr,sources,ready_seq,ready_unix,clock_epoch,last_tick) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",&[
             Value::Text(&id_to_text(step.id)),Value::Int(to_db(step.revision.0)?),Value::Text(&id_to_text(plan.0)),Value::Int(to_db(revision.0)?),Value::Text(&id_to_text(prd.0)),Value::Text(&id_to_text(adr.0)),Value::Text(&observed.canonical()),Value::Int(to_db(event.0)?),Value::Int(self.now_unix_ms),Value::Text(&id_to_text(self.now.epoch.0)),Value::Int(to_db(self.now.monotonic_nanos)?)])?;
@@ -267,7 +336,10 @@ impl Tx<'_> {
         self.append_event(
             "SchedulerControl",
             None,
-            &format!("{step:?}|{intent}|{cooldown_until}"),
+            &Record::new()
+                .with("step", node_json(step))
+                .text("intent", intent)
+                .int("cooldown_until", cooldown_until),
         )?;
         Ok(())
     }
@@ -414,10 +486,10 @@ impl Tx<'_> {
             self.append_event(
                 "SchedulerScan",
                 None,
-                &format!(
-                    "config={expected_config}|clock={:?}|{decisions:?}",
-                    self.now
-                ),
+                &Record::new()
+                    .count("config", expected_config)
+                    .with("clock", clock_json(self.now))
+                    .with("decisions", decisions_json(&decisions)),
             )?;
             return Ok(decisions);
         }
@@ -521,18 +593,21 @@ impl Tx<'_> {
                     self.enqueue_effect(
                         &format!("scheduler-launch:{}", id_to_text(attempt)),
                         "provider-launch",
-                        &format!(
-                            "{attempt:?}|{:?}|{:?}|{}",
-                            self.epoch, c.resources.provider, c.revision.0
-                        ),
+                        &Record::new()
+                            .id("attempt", attempt)
+                            .count("epoch", self.epoch.0)
+                            .text("provider", provider_word(c.resources.provider))
+                            .count("revision", c.revision.0)
+                            .encode(),
                     )?;
                     self.append_event(
                         "SchedulerReserved",
                         None,
-                        &format!(
-                            "{attempt:?}|{:?}|{needs:?}|clock={:?}",
-                            c.status.step, self.now
-                        ),
+                        &Record::new()
+                            .id("attempt", attempt)
+                            .with("step", node_json(c.status.step))
+                            .with("needs", needs_json(&needs))
+                            .with("clock", clock_json(self.now)),
                     )?;
                     decisions.push(AdmissionDecision {
                         step: c.status.step,
@@ -571,7 +646,7 @@ impl Tx<'_> {
                             self.append_event(
                                 "SchedulerDrainBarrier",
                                 None,
-                                &format!("{:?}", eligible[j].status),
+                                &Record::new().with("status", status_json(&eligible[j].status)),
                             )?;
                         }
                     }
@@ -602,10 +677,10 @@ impl Tx<'_> {
         self.append_event(
             "SchedulerScan",
             None,
-            &format!(
-                "config={expected_config}|clock={:?}|{decisions:?}",
-                self.now
-            ),
+            &Record::new()
+                .count("config", expected_config)
+                .with("clock", clock_json(self.now))
+                .with("decisions", decisions_json(&decisions)),
         )?;
         Ok(decisions)
     }
@@ -637,7 +712,11 @@ impl Tx<'_> {
         }
         // STOP is committed with the tombstone; the original outbox intent remains
         // inspectable and cannot authorize dispatch after this reservation is sealed.
-        let event = self.append_event("SchedulerNotStarted", None, &id)?;
+        let event = self.append_event(
+            "SchedulerNotStarted",
+            None,
+            &Record::new().text("attempt", id.clone()),
+        )?;
         self.conn.execute(
             "INSERT OR IGNORE INTO approval_stops VALUES (?1,?2)",
             &[Value::Text(&id), Value::Int(to_db(event.0)?)],
@@ -702,7 +781,9 @@ impl Tx<'_> {
         let event = self.append_event(
             "SchedulerHeartbeatHint",
             None,
-            &format!("{id}|{expires_at_unix_ms}"),
+            &Record::new()
+                .text("attempt", id.clone())
+                .int("expires_at_unix_ms", expires_at_unix_ms),
         )?;
         self.conn.execute(
             "INSERT INTO scheduler_heartbeats VALUES (?1,?2,?3,?4,?5)",
@@ -761,7 +842,10 @@ impl Tx<'_> {
         let event = self.append_event(
             "ProviderCooldown",
             None,
-            &format!("{key}|{until_unix_ms}|clock={:?}", self.now),
+            &Record::new()
+                .text("provider", key)
+                .int("until_unix_ms", until_unix_ms)
+                .with("clock", clock_json(self.now)),
         )?;
         self.conn.execute(
             "INSERT INTO scheduler_provider_cooldowns VALUES (?1,?2,?3,?4,?5,?6)",

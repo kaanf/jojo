@@ -9,6 +9,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use jojo_domain::payload::Record;
 use jojo_domain::time::Clock;
 
 use crate::error::{CommandError, FailPoint, StorageError, TxError};
@@ -164,11 +165,17 @@ impl Writer {
                 "UPDATE resource_claims SET state = 'QUARANTINED' WHERE state = 'ACTIVE'",
                 &[],
             )?;
-            let payload = format!(
-                "previous_epoch={};previous_shutdown={};quarantined_claims={quarantined_claims}",
-                sealed.map_or(0, |(previous, _)| previous.0),
-                sealed.map_or("NONE", |(_, marker)| marker.as_db()),
-            );
+            let payload = Record::new()
+                .count(
+                    "previous_epoch",
+                    sealed.map_or(0, |(previous, _)| previous.0),
+                )
+                .text(
+                    "previous_shutdown",
+                    sealed.map_or("NONE", |(_, marker)| marker.as_db()),
+                )
+                .count("quarantined_claims", quarantined_claims)
+                .encode();
             conn.execute(
                 "INSERT INTO events (epoch, kind, payload, recorded_at_unix_ms)
                  VALUES (?1, 'EngineStarted', ?2, ?3)",
@@ -357,8 +364,12 @@ impl Writer {
             )?;
             self.conn.execute(
                 "INSERT INTO events (epoch, kind, payload, recorded_at_unix_ms)
-                 VALUES (?1, 'EngineStopped', 'shutdown=CLEAN', ?2)",
-                &[epoch, Value::Int(now)],
+                 VALUES (?1, 'EngineStopped', ?2, ?3)",
+                &[
+                    epoch,
+                    Value::Text(&Record::new().text("shutdown", "CLEAN").encode()),
+                    Value::Int(now),
+                ],
             )?;
             self.conn.execute_batch("COMMIT")?;
             Ok(())
@@ -524,7 +535,11 @@ mod tests {
                             .apply(&command(5, "create", "payload"), move |tx| {
                                 runs.fetch_add(1, Ordering::SeqCst);
                                 tx.create_aggregate(&key, "made")?;
-                                tx.append_event("Created", Some((&key, Revision(1))), "")?;
+                                tx.append_event(
+                                    "Created",
+                                    Some((&key, Revision(1))),
+                                    &Record::new(),
+                                )?;
                                 Ok("created".into())
                             })
                             .unwrap()

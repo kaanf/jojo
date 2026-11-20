@@ -5,6 +5,7 @@
 //! provider's previous run, the change is kept as a row and an `ExecutableChanged`
 //! event: Settings & Providers shows it as a warning, the run itself is not refused.
 use jojo_domain::identity::OpaqueId;
+use jojo_domain::payload::{Record, provider_word};
 use jojo_domain::provider::{ProviderFingerprint, ProviderKind};
 
 use crate::discovery::profiled_version;
@@ -58,7 +59,7 @@ impl Tx<'_> {
         let Some(sha256) = production_digest(fingerprint) else {
             return Ok(None);
         };
-        let provider = format!("{:?}", fingerprint.provider);
+        let provider = provider_word(fingerprint.provider).to_owned();
         let path = fingerprint.executable.display().to_string();
         let version = fingerprint.version.as_str();
         let identity = sha256_hex(&[
@@ -79,7 +80,12 @@ impl Tx<'_> {
             let event = self.append_event(
                 "ExecutableRecorded",
                 None,
-                &format!("{identity}|{provider}|{version}|{sha256}|{path}"),
+                &Record::new()
+                    .text("identity", identity.clone())
+                    .text("provider", provider.clone())
+                    .text("version", version)
+                    .text("sha256", sha256)
+                    .text("path", path.clone()),
             )?;
             let profiled = version == profiled_version(fingerprint.provider);
             self.conn.execute(
@@ -111,7 +117,10 @@ impl Tx<'_> {
                 let event = self.append_event(
                     "ExecutableChanged",
                     None,
-                    &format!("{provider}|{previous}|{identity}"),
+                    &Record::new()
+                        .text("provider", provider.clone())
+                        .text("previous", previous.clone())
+                        .text("identity", identity.clone()),
                 )?;
                 self.conn.execute(
                     "INSERT INTO executable_changes VALUES (?1,?2,?3,?4)",

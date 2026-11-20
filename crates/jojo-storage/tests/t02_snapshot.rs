@@ -15,7 +15,13 @@ fn replay(events: &[EventRecord], cursor: EventSeq) -> BTreeMap<AggregateKey, (R
     let mut expected = BTreeMap::new();
     for event in events.iter().filter(|e| e.seq <= cursor) {
         if let Some((aggregate, revision)) = &event.aggregate {
-            expected.insert(aggregate.clone(), (*revision, event.payload.clone()));
+            expected.insert(
+                aggregate.clone(),
+                (
+                    *revision,
+                    jojo_domain::payload::member(&event.payload, "state"),
+                ),
+            );
         }
     }
     expected

@@ -9,6 +9,7 @@
 //! approval and it does not claim the content is right; decisions belong to P1-04.
 
 use jojo_domain::identity::{ArtifactId, FeatureId, QuestionId, Revision};
+use jojo_domain::payload::Record;
 use jojo_domain::prd::{Finding, PRD_SCHEMA_VERSION, PrdDocument, PrdError};
 
 use crate::digest::sha256_hex;
@@ -272,10 +273,10 @@ impl Tx<'_> {
         let created_event = self.append_event(
             "ArtifactVersionCreated",
             Some((&artifact_key(id), revision)),
-            &format!(
-                "type=PRD;content_sha256={};rendered_sha256={}",
-                prepared.content_digest, prepared.rendered_digest
-            ),
+            &Record::new()
+                .text("type", "PRD")
+                .text("content_sha256", prepared.content_digest.clone())
+                .text("rendered_sha256", prepared.rendered_digest.clone()),
         )?;
         self.conn.execute(
             "INSERT INTO artifact_versions
@@ -339,7 +340,7 @@ impl Tx<'_> {
         }
         let key = question_key(id);
         let revision = self.create_aggregate(&key, disposition.as_db())?;
-        let event = self.append_event("QuestionAsked", Some((&key, revision)), "")?;
+        let event = self.append_event("QuestionAsked", Some((&key, revision)), &Record::new())?;
         let artifact_id = artifact.map(|artifact| id_to_text(artifact.0));
         self.conn.execute(
             "INSERT INTO clarification_questions
@@ -381,7 +382,7 @@ impl Tx<'_> {
         let event = self.append_event(
             "QuestionAnswered",
             Some((&key, revision)),
-            provenance.author.as_db(),
+            &Record::new().text("author", provenance.author.as_db()),
         )?;
         self.conn.execute(
             "INSERT INTO clarification_answers
@@ -413,7 +414,7 @@ impl Tx<'_> {
         self.append_event(
             "QuestionDispositionChanged",
             Some((&key, revision)),
-            disposition.as_db(),
+            &Record::new().text("disposition", disposition.as_db()),
         )?;
         self.invalidate_approvals()?;
         Ok(revision)

@@ -106,7 +106,11 @@ fn replaying_a_command_returns_the_original_receipt_without_repeating_effects() 
         engine.execute(request(&engine, 7, "reserve", "attempt-1"), move |tx| {
             runs.fetch_add(1, Ordering::SeqCst);
             let revision = tx.create_aggregate(&attempt, "RESERVED")?;
-            tx.append_event("AttemptReserved", Some((&attempt, revision)), "")?;
+            tx.append_event(
+                "AttemptReserved",
+                Some((&attempt, revision)),
+                &jojo_domain::payload::Record::new(),
+            )?;
             tx.acquire_claim("worktree:1", ClaimMode::Exclusive, &attempt)?;
             tx.enqueue_effect("launch:attempt-1", "process", "argv")?;
             Ok("reserved".into())
@@ -200,7 +204,11 @@ fn concurrent_duplicate_commands_commit_one_logical_operation() {
                         .execute(request(engine, 42, "reserve", "same"), move |tx| {
                             handler_runs.fetch_add(1, Ordering::SeqCst);
                             let revision = tx.create_aggregate(&attempt, "RESERVED")?;
-                            tx.append_event("AttemptReserved", Some((&attempt, revision)), "")?;
+                            tx.append_event(
+                                "AttemptReserved",
+                                Some((&attempt, revision)),
+                                &jojo_domain::payload::Record::new(),
+                            )?;
                             Ok("reserved".into())
                         })
                         .unwrap()
@@ -262,7 +270,7 @@ fn many_independent_attempts_commit_in_parallel_without_a_singleton_slot() {
                             tx.append_event(
                                 "AttemptReserved",
                                 Some((&attempt, revision)),
-                                provider,
+                                &jojo_domain::payload::Record::new().text("provider", provider),
                             )?;
                             tx.acquire_claim(
                                 &format!("worktree:{index}"),

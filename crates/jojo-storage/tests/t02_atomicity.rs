@@ -15,10 +15,18 @@ use jojo_storage::{
 fn mutate_everything(tx: &mut Tx<'_>) -> Result<(), TxError> {
     let attempt = key("attempt", 50);
     let created = tx.create_aggregate(&attempt, "RESERVED")?;
-    tx.append_event("AttemptReserved", Some((&attempt, created)), "")?;
+    tx.append_event(
+        "AttemptReserved",
+        Some((&attempt, created)),
+        &jojo_domain::payload::Record::new(),
+    )?;
     let step = key("step", 1);
     let bumped = tx.update_aggregate(&step, Revision(1), "2")?;
-    tx.append_event("Bumped", Some((&step, bumped)), "2")?;
+    tx.append_event(
+        "Bumped",
+        Some((&step, bumped)),
+        &jojo_domain::payload::Record::new().text("state", "2"),
+    )?;
     tx.acquire_claim("worktree:50", ClaimMode::Exclusive, &attempt)?;
     tx.enqueue_effect("launch:50", "process", "argv")?;
     tx.set_admission(Admission::Open)?;
@@ -338,7 +346,11 @@ fn events_must_describe_the_revision_they_were_committed_with() {
     let lying = counter.clone();
     let error = engine
         .execute(request(&engine, 2, "lie", ""), move |tx| {
-            tx.append_event("Bumped", Some((&lying, Revision(5))), "5")?;
+            tx.append_event(
+                "Bumped",
+                Some((&lying, Revision(5))),
+                &jojo_domain::payload::Record::new().text("state", "5"),
+            )?;
             Ok(String::new())
         })
         .unwrap_err();

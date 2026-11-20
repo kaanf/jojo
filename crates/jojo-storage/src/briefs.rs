@@ -24,6 +24,7 @@ use jojo_domain::brief::{Brief, brief_prompt, parse_brief};
 use jojo_domain::identity::{ArtifactId, OpaqueId, RepositoryId};
 use jojo_domain::ipc::{identity, object, text};
 use jojo_domain::json::Json;
+use jojo_domain::payload::Record;
 use jojo_domain::planner::{MAX_HUMAN_TEXT_BYTES, TurnKind, TurnSpec};
 use jojo_domain::project::{provider_name, provider_named};
 use jojo_domain::provider::{MAX_PROMPT_BYTES, ProviderFingerprint, ProviderKind, TerminalStatus};
@@ -219,10 +220,11 @@ impl Tx<'_> {
         let event = self.append_event(
             "BriefTurnAccepted",
             None,
-            &format!(
-                "{turn}|brief={brief}|{repository}|{}",
-                provider_name(r.provider)
-            ),
+            &Record::new()
+                .text("turn", turn.clone())
+                .text("brief", brief.clone())
+                .text("repository", repository.clone())
+                .text("provider", provider_name(r.provider)),
         )?;
         self.conn.execute(
             "INSERT INTO brief_turns VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
@@ -272,7 +274,11 @@ impl Tx<'_> {
             return Err(deny("TurnFinished"));
         }
         if !record.stop_requested {
-            let event = self.append_event("BriefTurnStopRequested", None, &id_to_text(id))?;
+            let event = self.append_event(
+                "BriefTurnStopRequested",
+                None,
+                &Record::new().id("turn", id),
+            )?;
             self.conn.execute(
                 "INSERT INTO brief_turn_stops VALUES (?1,?2)",
                 &[Value::Text(&id_to_text(id)), Value::Int(to_db(event.0)?)],
@@ -326,7 +332,10 @@ impl Tx<'_> {
                 let event = self.append_event(
                     "ProjectBriefCreated",
                     None,
-                    &format!("{brief}|revision={revision}|turn={turn}"),
+                    &Record::new()
+                        .text("brief", brief.clone())
+                        .int("revision", revision)
+                        .text("turn", turn.clone()),
                 )?;
                 self.conn.execute(
                     "INSERT INTO project_briefs VALUES (?1,?2,?3,?4,?5,?6,?7)",
@@ -348,7 +357,9 @@ impl Tx<'_> {
         let event = self.append_event(
             "BriefTurnFinished",
             None,
-            &format!("{turn}|{}", outcome.as_db()),
+            &Record::new()
+                .text("turn", turn.clone())
+                .text("outcome", outcome.as_db()),
         )?;
         self.conn.execute(
             "INSERT INTO brief_turn_results VALUES (?1,?2,?3,?4,?5,?6,?7)",

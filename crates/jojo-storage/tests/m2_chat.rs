@@ -933,7 +933,9 @@ impl H {
             .events_after(EventSeq(0), 10_000)
             .unwrap()
             .iter()
-            .find(|e| e.kind == kind && e.payload.starts_with(&prefix))
+            .find(|e| {
+                e.kind == kind && jojo_domain::payload::member(&e.payload, "attempt") == prefix
+            })
             .unwrap_or_else(|| panic!("no {kind} for {prefix}"))
             .seq
             .0

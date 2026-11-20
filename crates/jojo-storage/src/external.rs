@@ -19,6 +19,7 @@ use crate::*;
 use jojo_domain::identity::{ArtifactId, RepositoryId, Revision};
 use jojo_domain::ipc::{encode, identity, number, object, text};
 use jojo_domain::json::Json;
+use jojo_domain::payload::Record;
 use jojo_domain::prd::PrdDocument;
 use jojo_domain::provider::ProviderKind;
 
@@ -458,7 +459,10 @@ impl Tx<'_> {
         let event = self.append_event(
             "ExternalActionRequested",
             None,
-            &format!("{key}|{}|{plan_text}", kind.name()),
+            &Record::new()
+                .text("key", key.clone())
+                .text("action", kind.name())
+                .text("plan", plan_text.clone()),
         )?;
         let (push, base) = push.map_or((None, None), |(k, b)| (Some(k), Some(b)));
         fn opt(v: &Option<String>) -> Value<'_> {
@@ -530,7 +534,11 @@ impl Tx<'_> {
         } else {
             ("DECLINED", "ExternalActionDeclined")
         };
-        let event = self.append_event(kind, None, &format!("{key}|{actor}"))?;
+        let event = self.append_event(
+            kind,
+            None,
+            &Record::new().text("key", key).text("actor", actor),
+        )?;
         self.conn.execute(
             "INSERT INTO external_action_decisions VALUES (?1,?2,?3,?4,?5)",
             &[
@@ -545,7 +553,11 @@ impl Tx<'_> {
             return Ok(format!("{} declined", action.kind.name()));
         }
         self.advance_effect(key, EffectState::IssuedUnknown)?;
-        self.append_event("ExternalActionIssued", None, key)?;
+        self.append_event(
+            "ExternalActionIssued",
+            None,
+            &Record::new().text("key", key),
+        )?;
         Ok(format!("{} authorized; issued once", action.kind.name()))
     }
 
@@ -583,7 +595,11 @@ impl Tx<'_> {
         if action.outbox != EffectState::IssuedUnknown {
             return Err(deny("ExternalSettled: the outcome is known"));
         }
-        self.append_event("ExternalActionInspected", None, key)?;
+        self.append_event(
+            "ExternalActionInspected",
+            None,
+            &Record::new().text("key", key),
+        )?;
         Ok("inspection started".into())
     }
 
@@ -629,7 +645,10 @@ impl Tx<'_> {
         let event = self.append_event(
             "ExternalActionObserved",
             None,
-            &format!("{}|{}|{}", action.key, o.observer, o.status.db()),
+            &Record::new()
+                .text("key", action.key.clone())
+                .text("observer", o.observer.clone())
+                .text("status", o.status.db()),
         )?;
         self.conn.execute(
             "INSERT INTO external_action_observations VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",

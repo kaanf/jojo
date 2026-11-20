@@ -12,6 +12,7 @@ use crate::{ReadView, StorageError};
 use jojo_domain::identity::{ArtifactId, RepositoryId};
 use jojo_domain::ipc::{number, object, text};
 use jojo_domain::json::Json;
+use jojo_domain::payload;
 
 /// Features per page of `Features`.
 pub const FEATURE_ROWS: usize = 16;
@@ -356,7 +357,7 @@ fn provider_words(provider: &str) -> &str {
 
 /// One sentence that says what an event recorded, with the names a person knows. An
 /// event type without a sentence of its own is named by its type, and by the attempt it
-/// is about when the first field of its payload names one.
+/// is about when its payload names one.
 pub(crate) fn event_summary(
     c: &Connection,
     seq: i64,
@@ -365,36 +366,34 @@ pub(crate) fn event_summary(
     aggregate: Option<&str>,
     payload: &str,
 ) -> Result<String, StorageError> {
-    let fields: Vec<&str> = payload.split('|').collect();
-    let field = |i: usize| fields.get(i).copied().unwrap_or("");
-    let attempt = |i: usize| -> Result<String, StorageError> {
-        Ok(attempt_label(c, field(i))?.unwrap_or_else(|| "An attempt".into()))
+    let fields = payload::read(payload).ok();
+    let field = |key: &str| fields.as_ref().and_then(|f| f.text(key)).unwrap_or("");
+    let attempt = || -> Result<String, StorageError> {
+        Ok(attempt_label(c, field("attempt"))?.unwrap_or_else(|| "An attempt".into()))
     };
     let sentence = match kind {
         "EngineStarted" => format!("Session {epoch} started"),
-        "EngineStopped" if payload.contains("CLEAN") && !payload.contains("UNCLEAN") => {
-            "Session stopped cleanly".into()
-        }
+        "EngineStopped" if field("shutdown") == "CLEAN" => "Session stopped cleanly".into(),
         "EngineStopped" => "Session stopped".into(),
         "ProcessLaunchIssued" => {
             let provider = c.query_optional(
                 "SELECT provider FROM process_launches WHERE attempt=?1",
-                &[Value::Text(field(0))],
+                &[Value::Text(field("attempt"))],
                 |r| r.text(0),
             )?;
             match provider {
-                Some(p) => format!("{} started on {}", attempt(0)?, provider_words(&p)),
-                None => format!("{} started", attempt(0)?),
+                Some(p) => format!("{} started on {}", attempt()?, provider_words(&p)),
+                None => format!("{} started", attempt()?),
             }
         }
-        "AttemptResultSealed" => format!("{} {}", attempt(0)?, outcome_words(field(1))),
-        "AttemptRecoveryRequired" => format!("{} needs recovery", attempt(0)?),
-        "AttemptStopCause" => format!("Stop of {} requested", attempt(0)?),
-        "ValidationRequested" => format!("Host validation of {} requested", attempt(0)?),
+        "AttemptResultSealed" => format!("{} {}", attempt()?, outcome_words(field("outcome"))),
+        "AttemptRecoveryRequired" => format!("{} needs recovery", attempt()?),
+        "AttemptStopCause" => format!("Stop of {} requested", attempt()?),
+        "ValidationRequested" => format!("Host validation of {} requested", attempt()?),
         "ValidationEnded" => {
-            let status = field(2)
-                .parse::<i64>()
-                .ok()
+            let status = fields
+                .as_ref()
+                .and_then(|f| f.int("receipt"))
                 .map(|receipt| {
                     c.query_optional(
                         "SELECT status FROM validation_receipts WHERE event=?1",
@@ -409,10 +408,10 @@ pub(crate) fn event_summary(
                 Some("FAILED") => "failed",
                 _ => "ended without a verdict",
             };
-            format!("Host validation of {} {verdict}", attempt(0)?)
+            format!("Host validation of {} {verdict}", attempt()?)
         }
-        "CandidateAccepted" => format!("{} accepted", attempt(0)?),
-        "CandidateRejected" => format!("{} rejected", attempt(0)?),
+        "CandidateAccepted" => format!("{} accepted", attempt()?),
+        "CandidateRejected" => format!("{} rejected", attempt()?),
         "HumanDecision" => {
             let row = c.query_optional(
                 "SELECT subject, revision, action FROM human_decisions WHERE seq=?1",
@@ -458,29 +457,29 @@ pub(crate) fn event_summary(
             }
         }
         "LeadTurnAccepted" => {
-            let feature = field(1).strip_prefix("feature=").unwrap_or("");
+            let feature = field("feature");
             let name = feature_name(c, feature)?.unwrap_or_else(|| "a feature".into());
-            let turn = if field(2) == "Plan" {
+            let turn = if field("kind") == "Plan" {
                 "Planning"
             } else {
                 "Discovery"
             };
             format!(
                 "{turn} turn for {name} started on {}",
-                provider_words(field(3))
+                provider_words(field("provider"))
             )
         }
         "LeadTurnFinished" => {
             let feature = c.query_optional(
                 "SELECT feature FROM lead_turns WHERE turn=?1",
-                &[Value::Text(field(0))],
+                &[Value::Text(field("turn"))],
                 |r| r.text(0),
             )?;
             let name = feature.map(|f| feature_name(c, &f)).transpose()?.flatten();
-            let verb = if field(1) == "REPLIED" {
+            let verb = if field("outcome") == "REPLIED" {
                 "replied"
             } else {
-                outcome_words(field(1))
+                outcome_words(field("outcome"))
             };
             format!(
                 "Lead turn for {} {verb}",
@@ -506,65 +505,65 @@ pub(crate) fn event_summary(
                 format!("Question about {name} answered")
             }
         }
-        "PlanRunStarted" => format!("Plan run of {} started", plan_label(c, field(0))?),
+        "PlanRunStarted" => format!("Plan run of {} started", plan_label(c, field("plan"))?),
         "PlanRunControl" => {
-            let verb = match field(2) {
+            let verb = match field("state") {
                 "PAUSED" => "paused",
                 "CANCELLED" => "cancelled",
                 _ => "running",
             };
-            format!("Plan run of {} {verb}", plan_label(c, field(0))?)
+            format!("Plan run of {} {verb}", plan_label(c, field("plan"))?)
         }
         "PlanStepIntegrated" => {
             format!(
                 "{} integrated onto the plan branch",
-                step_label(c, field(1))?
+                step_label(c, field("step"))?
             )
         }
-        "PlanStepHeld" => format!("{} waits for you", step_label(c, field(1))?),
-        "PlanStepRefused" => format!("{} could not start", step_label(c, field(1))?),
-        "PlanStepRepairDecided" => format!("{} will be repaired", step_label(c, field(1))?),
+        "PlanStepHeld" => format!("{} waits for you", step_label(c, field("step"))?),
+        "PlanStepRefused" => format!("{} could not start", step_label(c, field("step"))?),
+        "PlanStepRepairDecided" => format!("{} will be repaired", step_label(c, field("step"))?),
         "PlanStepRetried" => {
-            let how = match field(2) {
+            let how = match field("action") {
                 "Repair" => "be repaired",
                 _ => "start again",
             };
-            format!("{} will {how} on your word", step_label(c, field(1))?)
+            format!("{} will {how} on your word", step_label(c, field("step"))?)
         }
         "StepReviewAccepted" => {
             format!(
                 "Review of {} started on {}",
-                attempt(3)?,
-                provider_words(field(4))
+                attempt()?,
+                provider_words(field("provider"))
             )
         }
         "StepReviewFinished" => {
             let reviewed = c.query_optional(
                 "SELECT attempt FROM step_reviews WHERE review=?1",
-                &[Value::Text(field(0))],
+                &[Value::Text(field("review"))],
                 |r| r.text(0),
             )?;
             let of = match reviewed {
                 Some(a) => attempt_label(c, &a)?.unwrap_or_else(|| "an attempt".into()),
                 None => "an attempt".into(),
             };
-            format!("Review of {of}: {}", field(1).to_lowercase())
+            format!("Review of {of}: {}", field("outcome").to_lowercase())
         }
         "BriefTurnAccepted" => format!(
             "Project brief of {} started on {}",
-            repository_label(c, field(2))?,
-            provider_words(field(3))
+            repository_label(c, field("repository"))?,
+            provider_words(field("provider"))
         ),
         "BriefTurnFinished" => {
             let repository = c.query_optional(
                 "SELECT repository FROM brief_turns WHERE turn=?1",
-                &[Value::Text(field(0))],
+                &[Value::Text(field("turn"))],
                 |r| r.text(0),
             )?;
-            let verb = if field(1) == "REPLIED" {
+            let verb = if field("outcome") == "REPLIED" {
                 "replied"
             } else {
-                outcome_words(field(1))
+                outcome_words(field("outcome"))
             };
             format!(
                 "Project brief turn of {} {verb}",
@@ -572,13 +571,19 @@ pub(crate) fn event_summary(
             )
         }
         "ProjectBriefCreated" => {
-            let revision = field(1).strip_prefix("revision=").unwrap_or("?");
-            format!("{} rev {revision} proposed", document_label(c, field(0))?)
+            let revision = fields
+                .as_ref()
+                .and_then(|f| f.int("revision"))
+                .map_or_else(|| "?".to_owned(), |r| r.to_string());
+            format!(
+                "{} rev {revision} proposed",
+                document_label(c, field("brief"))?
+            )
         }
-        "RecoveryResolved" => format!("{} resolved in recovery", attempt(0)?),
+        "RecoveryResolved" => format!("{} resolved in recovery", attempt()?),
         "RecoveryStarted" => "Admission reopened after the recovery review".into(),
         "ProjectSaved" => {
-            let name = id_from_text(field(0))
+            let name = id_from_text(field("project"))
                 .ok()
                 .map(|id| crate::projects::latest(c, id))
                 .transpose()?
@@ -589,7 +594,7 @@ pub(crate) fn event_summary(
         "LocalRepositoryRegistered" => {
             let path = c.query_optional(
                 "SELECT path FROM local_repositories WHERE id=?1",
-                &[Value::Text(field(0))],
+                &[Value::Text(field("repository"))],
                 |r| r.text(0),
             )?;
             format!(
@@ -597,9 +602,11 @@ pub(crate) fn event_summary(
                 path.as_deref().map_or_else(|| "?".into(), repository_name)
             )
         }
-        "ExecutableRecorded" => format!("{} executable recorded", provider_words(field(1))),
-        "ExecutableChanged" => format!("{} executable changed", provider_words(field(0))),
-        _ => match attempt_label(c, field(0))? {
+        "ExecutableRecorded" => {
+            format!("{} executable recorded", provider_words(field("provider")))
+        }
+        "ExecutableChanged" => format!("{} executable changed", provider_words(field("provider"))),
+        _ => match attempt_label(c, field("attempt"))? {
             Some(label) => format!("{} · {label}", humanized(kind)),
             None => humanized(kind),
         },
@@ -613,9 +620,9 @@ pub(crate) fn event_summary(
 pub(crate) fn event_category(kind: &str, payload: &str) -> &'static str {
     let starts = |prefixes: &[&str]| prefixes.iter().any(|p| kind.starts_with(p));
     match kind {
-        "EngineStopped" if payload.contains("UNCLEAN") => "Error",
+        "EngineStopped" if payload::member(payload, "shutdown") == "UNCLEAN" => "Error",
         "PlanStepRefused" | "WorktreeBlocked" | "NotReady" | "SchedulerNotStarted" => "Error",
-        "ExternalActionObserved" if payload.contains("REJECTED") => "Error",
+        "ExternalActionObserved" if payload::member(payload, "status") == "REJECTED" => "Error",
         "HumanDecision"
         | "ExternalActionRequested"
         | "ExternalActionAuthorized"
@@ -681,11 +688,12 @@ pub(crate) fn event_project(
             |r| r.optional_text(0),
         )?
         .flatten();
+    let fields = payload::read(payload).ok();
     let candidates = recorded
         .as_deref()
         .into_iter()
         .chain(aggregate)
-        .chain(payload.split('|'))
+        .chain(fields.iter().flat_map(|f| f.texts()))
         .map(str::trim)
         .filter(|f| {
             (f.len() == 32 && f.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -1205,12 +1213,16 @@ mod tests {
     fn s6_every_event_kind_has_a_category() {
         for (kind, payload, category) in [
             ("EngineStarted", "", "Session"),
-            ("EngineStopped", "shutdown=UNCLEAN", "Error"),
-            ("EngineStopped", "shutdown=CLEAN", "Session"),
+            ("EngineStopped", r#"{"shutdown":"UNCLEAN","v":1}"#, "Error"),
+            ("EngineStopped", r#"{"shutdown":"CLEAN","v":1}"#, "Session"),
             ("HumanDecision", "", "Approval"),
             ("ExternalActionAuthorized", "", "Approval"),
             ("ExternalActionIssued", "", "Git"),
-            ("ExternalActionObserved", "REJECTED", "Error"),
+            (
+                "ExternalActionObserved",
+                r#"{"status":"REJECTED","v":1}"#,
+                "Error",
+            ),
             ("CandidateAccepted", "", "Decision"),
             ("QuestionAnswered", "", "Decision"),
             ("ValidationEnded", "", "Validation"),

@@ -23,6 +23,7 @@ use crate::turns::{
 use crate::tx::Tx;
 use crate::{Admission, LocalRepository, ValidationState};
 use jojo_domain::identity::{ArtifactId, OpaqueId, RepositoryId, Revision};
+use jojo_domain::payload::Record;
 use jojo_domain::planner::{self, LeadReply, TurnKind, TurnSpec};
 use jojo_domain::project::{provider_name, provider_named};
 use jojo_domain::provider::{MAX_PROMPT_BYTES, ProviderFingerprint, ProviderKind, TerminalStatus};
@@ -341,12 +342,13 @@ impl Tx<'_> {
         let event = self.append_event(
             "PlanStepRepairDecided",
             None,
-            &format!(
-                "{plan}|{step}|{}|{}|{failed}|{}",
-                r.ordinal,
-                r.limit,
-                id_to_text(r.attempt)
-            ),
+            &Record::new()
+                .text("plan", plan.clone())
+                .text("step", step.clone())
+                .int("ordinal", i64::from(r.ordinal))
+                .int("limit", i64::from(r.limit))
+                .text("failed", failed.clone())
+                .id("attempt", r.attempt),
         )?;
         self.conn.execute(
             "INSERT INTO plan_step_repairs VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
@@ -402,7 +404,11 @@ impl Tx<'_> {
         let event = self.append_event(
             "PlanStepHeld",
             None,
-            &format!("{plan}|{step}|{attempt}|{reason}"),
+            &Record::new()
+                .text("plan", plan.clone())
+                .text("step", step.clone())
+                .text("attempt", attempt.clone())
+                .text("reason", reason.clone()),
         )?;
         self.conn.execute(
             "INSERT INTO plan_step_holds VALUES (?1,?2,?3,?4,?5,?6)",
@@ -459,11 +465,12 @@ impl Tx<'_> {
         let event = self.append_event(
             "StepReviewAccepted",
             None,
-            &format!(
-                "{review}|{plan}|{}|{attempt}|{}",
-                id_to_text(r.step),
-                provider_name(r.provider)
-            ),
+            &Record::new()
+                .text("review", review.clone())
+                .text("plan", plan.clone())
+                .id("step", r.step)
+                .text("attempt", attempt.clone())
+                .text("provider", provider_name(r.provider)),
         )?;
         self.conn.execute(
             "INSERT INTO step_reviews VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
@@ -494,7 +501,8 @@ impl Tx<'_> {
         }
         if !record.stop_requested {
             let t = tables_of(self.conn, &id_to_text(id))?.ok_or_else(|| deny("UnknownReview"))?;
-            let event = self.append_event(t.stop_requested, None, &id_to_text(id))?;
+            let event =
+                self.append_event(t.stop_requested, None, &Record::new().id("review", id))?;
             self.conn.execute(
                 &format!("INSERT INTO {} VALUES (?1,?2)", t.stops),
                 &[Value::Text(&id_to_text(id)), Value::Int(to_db(event.0)?)],
@@ -530,7 +538,9 @@ impl Tx<'_> {
         let event = self.append_event(
             t.finished,
             None,
-            &format!("{}|{}", id_to_text(id), outcome.name()),
+            &Record::new()
+                .id("review", id)
+                .text("outcome", outcome.name()),
         )?;
         let (notes, objection, reply) = match verdict {
             Some((raw, v)) => (v.notes.as_str(), v.objection.as_deref(), Some(raw)),

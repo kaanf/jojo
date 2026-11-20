@@ -21,6 +21,7 @@ use jojo_domain::dependency::NodeRef;
 use jojo_domain::identity::{ArtifactId, OpaqueId, RepositoryId, Revision};
 use jojo_domain::ipc::{identity, object, text};
 use jojo_domain::json::Json;
+use jojo_domain::payload::Record;
 use jojo_domain::project::{provider_name, provider_named};
 use jojo_domain::provider::{MAX_PROMPT_BYTES, ProviderKind};
 
@@ -414,11 +415,12 @@ impl Tx<'_> {
         let event = self.append_event(
             "AdvisoryReviewAccepted",
             None,
-            &format!(
-                "{review}|{subject}|{}|{}",
-                attempt.as_deref().or(document.as_deref()).unwrap_or("-"),
-                provider_name(r.provider)
-            ),
+            &Record::new()
+                .text("review", review.clone())
+                .text("subject", subject)
+                .optional("attempt", attempt.clone())
+                .optional("document", document.clone())
+                .text("provider", provider_name(r.provider)),
         )?;
         self.conn.execute(
             &format!(

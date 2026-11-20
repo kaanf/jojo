@@ -168,7 +168,7 @@ fn absent(report: &LaunchReport) -> bool {
 }
 
 fn text(payload: &str) -> String {
-    format!("{:?}", EventPayload::TextDelta(payload.into()))
+    jojo_domain::payload::provider_event(&EventPayload::TextDelta(payload.into())).encode()
 }
 
 #[test]
@@ -845,7 +845,7 @@ fn p2_01_stderr_flood_is_capped_drained_and_recorded() {
     assert!(
         c.observed("STREAM_CLOSED")
             .iter()
-            .any(|d| d == "STDERR durable=1048576 discarded=3145728")
+            .any(|d| d == r#"{"discarded":3145728,"durable":1048576,"stream":"STDERR","v":1}"#)
     );
     // Stdout stayed complete and separately accounted.
     assert!(!report.protocol_failed && !report.evidence_lost);

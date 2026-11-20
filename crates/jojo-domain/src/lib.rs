@@ -12,6 +12,7 @@ pub mod identity;
 pub mod json;
 pub mod outcome;
 pub mod paths;
+pub mod payload;
 pub mod planner;
 pub mod policy;
 pub mod prd;

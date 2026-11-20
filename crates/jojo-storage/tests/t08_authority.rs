@@ -36,7 +36,11 @@ fn t08_provider_success_cannot_seal_or_release_durable_ownership() {
         },
     };
     e.execute(request(&e, 2, "provider-observation", ""), move |tx| {
-        tx.append_event("ProviderTerminal", None, &format!("{event:?}"))?;
+        tx.append_event(
+            "ProviderTerminal",
+            None,
+            &jojo_domain::payload::provider_event(&event.payload),
+        )?;
         Ok("diagnostic recorded".into())
     })
     .unwrap();

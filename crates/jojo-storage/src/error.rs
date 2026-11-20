@@ -28,6 +28,14 @@ pub enum StorageError {
         found: u32,
         supported: u32,
     },
+    /// R-04: a database written before the typed payloads is never upgraded. The helper
+    /// names the file; the human moves it aside and Jojo starts a new one. It is never
+    /// deleted or changed here.
+    SchemaTooOld {
+        found: u32,
+        oldest: u32,
+        path: PathBuf,
+    },
     InvalidMigrationPlan(String),
     /// A migration step failed and was rolled back. The database is still at `from_version`
     /// and usable by a helper that supports it; `backup` is a verified copy taken before

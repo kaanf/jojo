@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -215,7 +216,28 @@ def run_gate(gate, skip, result, log):
                 run(f'GUI scenarios ({script})', ['/usr/bin/caffeinate', '-dimsu', sys.executable, script, '--app', app,
                                                   '--helper', helper, '--out', report], timeout=1800)
                 seen['gui'][script] = json.loads(report.read_text())
+        # R-04: nothing a check started may outlive the gate. On 2026-11-18 three fake `gh`
+        # processes of earlier gates were found still running hours later. A process running
+        # from this scratch directory is stopped and fails the gate.
+        leaked = left_running(temp)
+        if leaked:
+            raise RuntimeError(f'processes outlived the checks and were stopped: {leaked}')
     return seen
+
+
+def left_running(temp):
+    roots = {str(temp), str(temp.resolve())}
+    listing = subprocess.run(['/bin/ps', '-axo', 'pid=,command='], capture_output=True, text=True, check=True).stdout
+    leaked = []
+    for line in listing.splitlines():
+        pid, _, command = line.strip().partition(' ')
+        if pid.isdigit() and int(pid) != os.getpid() and any(root in command for root in roots):
+            leaked.append(command.strip()[:200])
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    return leaked
 
 
 def main():

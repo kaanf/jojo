@@ -84,7 +84,11 @@ pub fn create(engine: &Engine, id: u128, key: &AggregateKey) -> Receipt {
             request(engine, id, "create", &format!("{key:?}")),
             move |tx| {
                 let revision = tx.create_aggregate(&owned, "1")?;
-                tx.append_event("Created", Some((&owned, revision)), "1")?;
+                tx.append_event(
+                    "Created",
+                    Some((&owned, revision)),
+                    &jojo_domain::payload::Record::new().text("state", "1"),
+                )?;
                 Ok("created".into())
             },
         )
@@ -105,7 +109,11 @@ pub fn bump(
         move |tx| {
             let state = (expected.0 + 1).to_string();
             let revision = tx.update_aggregate(&owned, expected, &state)?;
-            tx.append_event("Bumped", Some((&owned, revision)), &state)?;
+            tx.append_event(
+                "Bumped",
+                Some((&owned, revision)),
+                &jojo_domain::payload::Record::new().text("state", state.clone()),
+            )?;
             Ok(state)
         },
     )

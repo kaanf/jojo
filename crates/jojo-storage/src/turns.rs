@@ -26,6 +26,7 @@ use jojo_domain::dependency::{
 use jojo_domain::identity::{ArtifactId, FeatureId, OpaqueId, QuestionId, RepositoryId, Revision};
 use jojo_domain::ipc::{identity, number, object, text};
 use jojo_domain::json::Json;
+use jojo_domain::payload::Record;
 use jojo_domain::planner::{
     self, Exchange, LeadReply, MAX_HUMAN_TEXT_BYTES, PlanDraft, TurnKind, TurnSpec,
     continued_prompt, discover_prompt, plan_prompt, with_repair_section,
@@ -839,7 +840,7 @@ impl Tx<'_> {
         self.append_event(
             "LeadTurnRepairAccepted",
             None,
-            &format!("{}|{}", id_to_text(turn), id_to_text(failed)),
+            &Record::new().id("turn", turn).id("failed", failed),
         )?;
         Ok(receipt)
     }
@@ -987,11 +988,11 @@ impl Tx<'_> {
         let event = self.append_event(
             "LeadTurnAccepted",
             None,
-            &format!(
-                "{id}|feature={feature}|{}|{}",
-                request.kind.name(),
-                provider_text(request.provider)
-            ),
+            &Record::new()
+                .text("turn", id.clone())
+                .text("feature", feature.clone())
+                .text("kind", request.kind.name())
+                .text("provider", provider_text(request.provider)),
         )?;
         self.conn.execute(
             "INSERT INTO lead_turns VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
@@ -1044,7 +1045,8 @@ impl Tx<'_> {
             return Err(deny("TurnFinished"));
         }
         if !record.stop_requested {
-            let event = self.append_event("LeadTurnStopRequested", None, &id_to_text(id))?;
+            let event =
+                self.append_event("LeadTurnStopRequested", None, &Record::new().id("turn", id))?;
             self.conn.execute(
                 "INSERT INTO lead_turn_stops VALUES (?1,?2)",
                 &[Value::Text(&id_to_text(id)), Value::Int(to_db(event.0)?)],
@@ -1224,7 +1226,7 @@ impl Tx<'_> {
                         let event = self.append_event(
                             "StepQuestionAsked",
                             Some((&key, revision)),
-                            &id_to_text(step),
+                            &Record::new().id("step", step),
                         )?;
                         self.conn.execute(
                             "INSERT INTO step_questions VALUES (?1,?2,?3,?4,?5,?6)",
@@ -1264,7 +1266,9 @@ impl Tx<'_> {
         let event = self.append_event(
             "LeadTurnFinished",
             None,
-            &format!("{text}|{}", outcome.as_db()),
+            &Record::new()
+                .text("turn", text.clone())
+                .text("outcome", outcome.as_db()),
         )?;
         let prd = created.map(|(prd, _)| id_to_text(prd.0));
         self.conn.execute(
@@ -1366,7 +1370,11 @@ impl Tx<'_> {
             ),
         };
         let revision = self.update_aggregate(&key, expected, &state)?;
-        let event = self.append_event(kind, Some((&key, revision)), &state)?;
+        let event = self.append_event(
+            kind,
+            Some((&key, revision)),
+            &Record::new().text("state", state.clone()),
+        )?;
         if let QuestionAction::Answer(body) = action {
             self.conn.execute(
                 "INSERT INTO step_answers
@@ -2021,13 +2029,11 @@ pub fn run_turn(
         }
     };
     let root = sup.root().clone();
-    let spawned = format!(
-        "{}|pid={}|pgid={}|start={}",
-        id_to_text(id),
-        root.pid,
-        root.pgid,
-        root.start
-    );
+    let spawned = Record::new()
+        .id("turn", id)
+        .count("pid", u64::from(root.pid))
+        .count("pgid", u64::from(root.pgid))
+        .text("start", root.start.clone());
     // The one record of the run before its result: which process this turn is.
     let recorded = command(ctx, "RecordLeadTurnSpawn", id, move |tx| {
         tx.append_event("LeadTurnSpawned", None, &spawned)?;

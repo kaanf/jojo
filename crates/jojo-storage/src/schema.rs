@@ -20,15 +20,21 @@ pub struct Migration {
     pub sql: &'static str,
 }
 
-/// An ordered list of steps whose versions are exactly `1..=latest`.
+/// The oldest existing database the production plan upgrades: R-04 stores every payload
+/// as a typed record from schema 20 on, and an older database is refused, not converted.
+pub const PAYLOAD_BASELINE: u32 = 20;
+
+/// An ordered list of steps whose versions are exactly `1..=latest`, and the oldest
+/// non-empty version it upgrades (0: any).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MigrationPlan(Vec<Migration>);
+pub struct MigrationPlan(Vec<Migration>, u32);
 
 impl MigrationPlan {
     /// The schema shipped with this build. Later tasks append steps; shipped steps are
-    /// never edited.
+    /// never edited. A new database runs every step; an existing one must be at
+    /// [`PAYLOAD_BASELINE`] or later.
     pub fn production() -> Self {
-        Self(vec![
+        let steps = vec![
             Migration {
                 version: 1,
                 name: "core writer tables",
@@ -124,7 +130,13 @@ impl MigrationPlan {
                 name: "question choices, lead turn sessions and repairs, advisory reviews",
                 sql: SCHEMA_V19,
             },
-        ])
+            Migration {
+                version: 20,
+                name: "typed payload records (R-04)",
+                sql: SCHEMA_V20,
+            },
+        ];
+        Self(steps, PAYLOAD_BASELINE)
     }
 
     /// A custom plan. Production code uses [`MigrationPlan::production`]; this constructor
@@ -142,7 +154,7 @@ impl MigrationPlan {
                 )));
             }
         }
-        Ok(Self(steps))
+        Ok(Self(steps, 0))
     }
 
     pub fn steps(&self) -> &[Migration] {
@@ -201,6 +213,13 @@ pub(crate) fn migrate(
     plan: &MigrationPlan,
 ) -> Result<MigrationReport, StorageError> {
     let from_version = recognise(connection, plan)?;
+    if from_version > 0 && from_version < plan.1 {
+        return Err(StorageError::SchemaTooOld {
+            found: from_version,
+            oldest: plan.1,
+            path: db_path.to_path_buf(),
+        });
+    }
     let latest = plan.latest();
     let mut report = MigrationReport {
         from_version,
@@ -1472,6 +1491,17 @@ CREATE TRIGGER advisory_review_executables_immutable BEFORE UPDATE ON advisory_r
 CREATE TRIGGER advisory_review_executables_keep BEFORE DELETE ON advisory_review_executables BEGIN SELECT RAISE(ABORT,'immutable history'); END;
 "#;
 
+/// R-04 step 1: every event and provider event payload is a versioned record
+/// (`jojo_domain::payload`). The rows written before it are not converted: the production
+/// plan refuses a database older than this version. These triggers refuse a payload that
+/// is not a record, so text formatted another way cannot be stored again.
+const SCHEMA_V20: &str = r#"
+CREATE TRIGGER events_payload_record BEFORE INSERT ON events
+WHEN NEW.payload NOT LIKE '{%"v":1%}' BEGIN SELECT RAISE(ABORT,'event payload is not a record'); END;
+CREATE TRIGGER provider_events_payload_record BEFORE INSERT ON provider_events
+WHEN NEW.payload NOT LIKE '{%"v":1%}' BEGIN SELECT RAISE(ABORT,'provider event payload is not a record'); END;
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Raw-SQL tests: the schema itself (not only the Rust API) refuses to rewrite history
@@ -1483,14 +1513,14 @@ mod tests {
         let conn = Connection::open(Path::new(":memory:"), OpenMode::Create).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
         let report = migrate(&conn, Path::new("unused"), &MigrationPlan::production()).unwrap();
-        assert_eq!((report.from_version, report.to_version), (0, 19));
+        assert_eq!((report.from_version, report.to_version), (0, 20));
         conn.execute_batch(
             "INSERT INTO engine_sessions VALUES (1, 0, 1, 1, 'CLOSED', 'RUNNING', NULL);
              INSERT INTO aggregates VALUES ('attempt', '00000000000000000000000000000001', 1, 's', 1);
              INSERT INTO commands VALUES ('00000000000000000000000000000009', 'k',
                  '0000000000000000000000000000000000000000000000000000000000000000', 1, 'r', 1, 0);
              INSERT INTO events (epoch, command_id, kind, payload, recorded_at_unix_ms)
-                 VALUES (1, '00000000000000000000000000000009', 'E', '', 0);
+                 VALUES (1, '00000000000000000000000000000009', 'E', char(123,34,118,34,58,49,125), 0);
              INSERT INTO resource_claims (resource_key, mode, holder_kind, holder_id, epoch, state,
                                           acquired_at_unix_ms)
                  VALUES ('worktree:1', 'EXCLUSIVE', 'attempt', '00000000000000000000000000000001',
@@ -1530,17 +1560,17 @@ mod tests {
         );
         refused(
             &c,
-            "INSERT INTO provider_events VALUES ('a1',1,'TextDelta','STDOUT',0,5,'x',1)",
+            "INSERT INTO provider_events VALUES ('a1',1,'TextDelta','STDOUT',0,5,char(123,34,118,34,58,49,125),1)",
         );
         c.execute_batch(
             "INSERT INTO stream_checkpoints VALUES ('a1','STDOUT',5,1);
-             INSERT INTO provider_events VALUES ('a1',1,'TextDelta','STDOUT',0,5,'x',1);
+             INSERT INTO provider_events VALUES ('a1',1,'TextDelta','STDOUT',0,5,char(123,34,118,34,58,49,125),1);
              INSERT INTO process_records VALUES ('a1',10,'start',10,1,'boot','ROOT',1);",
         )
         .unwrap();
         for sql in [
-            "INSERT INTO provider_events VALUES ('a1',3,'TextDelta','STDOUT',0,5,'x',1)",
-            "INSERT INTO provider_events VALUES ('a1',2,'TextDelta','STDOUT',5,6,'x',1)",
+            "INSERT INTO provider_events VALUES ('a1',3,'TextDelta','STDOUT',0,5,char(123,34,118,34,58,49,125),1)",
+            "INSERT INTO provider_events VALUES ('a1',2,'TextDelta','STDOUT',5,6,char(123,34,118,34,58,49,125),1)",
             "INSERT INTO stream_checkpoints VALUES ('a1','STDOUT',4,1)",
             "INSERT INTO process_records VALUES ('a1',11,'s',11,1,'boot','ROOT',1)",
             "UPDATE process_launches SET cwd='/elsewhere'",
@@ -1554,7 +1584,7 @@ mod tests {
         c.execute_batch(
             "INSERT INTO process_observations VALUES (1,'a1','STOP_UNCONFIRMED','escaped');
              INSERT INTO events (epoch, command_id, kind, payload, recorded_at_unix_ms)
-                 VALUES (1, '00000000000000000000000000000009', 'E', '', 0);",
+                 VALUES (1, '00000000000000000000000000000009', 'E', char(123,34,118,34,58,49,125), 0);",
         )
         .unwrap();
         refused(
@@ -1578,11 +1608,11 @@ mod tests {
              UPDATE outbox SET state='ISSUED_UNKNOWN' WHERE operation_key='scheduler-launch:a1';
              INSERT INTO process_launches VALUES ('a1',1,1,'ClaudeCode','p','/x','/w','/o','{zero}',1);
              INSERT INTO events (epoch, command_id, kind, payload, recorded_at_unix_ms)
-                 VALUES (2,'00000000000000000000000000000009','E','',0),
-                        (2,'00000000000000000000000000000009','E','',0),
-                        (2,'00000000000000000000000000000009','E','',0),
-                        (2,'00000000000000000000000000000009','E','',0),
-                        (2,'00000000000000000000000000000009','E','',0);
+                 VALUES (2,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (2,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (2,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (2,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (2,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0);
              INSERT INTO recovery_resolutions VALUES
                  (2,'a1',2,'{zero}','f','','HOLD','h'),
                  (3,'a1',2,'{zero}','f','live orphan','HOLD','h'),
@@ -1653,11 +1683,11 @@ mod tests {
         };
         c.execute_batch(&format!(
             "INSERT INTO events (epoch, command_id, kind, payload, recorded_at_unix_ms)
-                 VALUES (1,'00000000000000000000000000000009','E','',0),
-                        (1,'00000000000000000000000000000009','E','',0),
-                        (1,'00000000000000000000000000000009','E','',0),
-                        (1,'00000000000000000000000000000009','E','',0),
-                        (1,'00000000000000000000000000000009','E','',0);
+                 VALUES (1,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (1,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (1,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (1,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (1,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0);
              INSERT INTO approval_attempts VALUES ('a1','p','a','l','b','RESERVED');
              INSERT INTO outbox VALUES ('scheduler-launch:a1','t','p','{zero}','NOT_ISSUED',1,1);
              DROP TRIGGER scheduler_launch_issue_guard;
@@ -1738,9 +1768,9 @@ mod tests {
              UPDATE outbox SET state='ISSUED_UNKNOWN' WHERE operation_key='scheduler-launch:a1';
              INSERT INTO process_launches VALUES ('a1',1,1,'ClaudeCode','p','/x','/w','/o','{zero}',1);
              INSERT INTO events (epoch, command_id, kind, payload, recorded_at_unix_ms)
-                 VALUES (1,'00000000000000000000000000000009','E','',0),
-                        (1,'00000000000000000000000000000009','E','',0),
-                        (1,'00000000000000000000000000000009','E','',0);
+                 VALUES (1,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (1,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0),
+                        (1,'00000000000000000000000000000009','E',char(123,34,118,34,58,49,125),0);
              INSERT INTO evidence_blobs VALUES ('{zero}',5,1),('{one}',0,1);"
         ))
         .unwrap();
@@ -2138,13 +2168,13 @@ mod tests {
             &conn,
             "INSERT INTO events (epoch, kind, aggregate_kind, aggregate_id, aggregate_revision,
                                  payload, recorded_at_unix_ms)
-             VALUES (1, 'E', 'attempt', '000000000000000000000000000000ff', 1, '', 0)",
+             VALUES (1, 'E', 'attempt', '000000000000000000000000000000ff', 1, char(123,34,118,34,58,49,125), 0)",
         );
         // The causation key is deferred: the insert is accepted, the commit is not.
         conn.execute_batch(
             "BEGIN;
              INSERT INTO events (epoch, command_id, kind, payload, recorded_at_unix_ms)
-             VALUES (1, '000000000000000000000000000000aa', 'E', '', 0);",
+             VALUES (1, '000000000000000000000000000000aa', 'E', char(123,34,118,34,58,49,125), 0);",
         )
         .unwrap();
         refused(&conn, "COMMIT");

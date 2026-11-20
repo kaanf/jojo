@@ -29,7 +29,11 @@ const READY: &str = "JOJO-T02-CHILD-READY";
 fn reserve(tx: &mut Tx<'_>) -> Result<String, TxError> {
     let attempt = key("attempt", 1);
     let revision = tx.create_aggregate(&attempt, "RESERVED")?;
-    tx.append_event("AttemptReserved", Some((&attempt, revision)), "")?;
+    tx.append_event(
+        "AttemptReserved",
+        Some((&attempt, revision)),
+        &jojo_domain::payload::Record::new(),
+    )?;
     tx.acquire_claim("worktree:1", ClaimMode::Exclusive, &attempt)?;
     tx.enqueue_effect("launch:1", "process", "argv")?;
     tx.set_admission(Admission::Open)?;
@@ -40,7 +44,11 @@ fn reserve(tx: &mut Tx<'_>) -> Result<String, TxError> {
 fn start_second_attempt(tx: &mut Tx<'_>) -> Result<String, TxError> {
     let attempt = key("attempt", 2);
     let revision = tx.create_aggregate(&attempt, "RESERVED")?;
-    tx.append_event("AttemptReserved", Some((&attempt, revision)), "")?;
+    tx.append_event(
+        "AttemptReserved",
+        Some((&attempt, revision)),
+        &jojo_domain::payload::Record::new(),
+    )?;
     tx.update_aggregate(&key("attempt", 1), Revision(1), "STARTING")?;
     tx.acquire_claim("worktree:2", ClaimMode::Exclusive, &attempt)?;
     tx.enqueue_effect("launch:2", "process", "argv")?;

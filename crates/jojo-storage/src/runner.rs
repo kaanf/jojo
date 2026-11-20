@@ -15,6 +15,7 @@ use jojo_domain::dependency::NodeRef;
 use jojo_domain::identity::{ArtifactId, OpaqueId, RepositoryId, Revision};
 use jojo_domain::ipc::{identity, number, object, text};
 use jojo_domain::json::Json;
+use jojo_domain::payload::Record;
 use jojo_domain::planner::{self, LeadReply, TurnKind};
 use jojo_domain::provider::ProviderKind;
 use jojo_domain::repair::{Failure, MAX_REPAIRS};
@@ -1051,11 +1052,12 @@ impl Tx<'_> {
         let event = self.append_event(
             "PlanStepRetried",
             None,
-            &format!(
-                "{plan}|{step}|{}|{}|{attempt}",
-                r.action.name(),
-                held.as_deref().unwrap_or("")
-            ),
+            &Record::new()
+                .text("plan", plan.clone())
+                .text("step", step.clone())
+                .text("action", r.action.name())
+                .optional("held", held.clone())
+                .text("attempt", attempt.clone()),
         )?;
         self.conn.execute(
             "INSERT INTO plan_step_retries VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
@@ -1122,7 +1124,13 @@ impl Tx<'_> {
                 "RunRefused: this plan revision was already started; resume it instead",
             ));
         }
-        let event = self.append_event("PlanRunStarted", None, &format!("{plan_text}|{rev}"))?;
+        let event = self.append_event(
+            "PlanRunStarted",
+            None,
+            &Record::new()
+                .text("plan", plan_text.clone())
+                .int("revision", rev),
+        )?;
         self.conn.execute(
             "INSERT INTO plan_runs VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             &[
@@ -1151,7 +1159,11 @@ impl Tx<'_> {
         let event = self.append_event(
             "PlanRunControl",
             None,
-            &format!("{plan}|{revision}|{state}|{reason}"),
+            &Record::new()
+                .text("plan", plan)
+                .int("revision", revision)
+                .text("state", state)
+                .text("reason", reason),
         )?;
         self.conn.execute(
             "INSERT INTO plan_run_controls
@@ -1241,7 +1253,10 @@ impl Tx<'_> {
         let event = self.append_event(
             "PlanStepRefused",
             None,
-            &format!("{}|{}|{detail}", id_to_text(plan.0), id_to_text(step)),
+            &Record::new()
+                .id("plan", plan.0)
+                .id("step", step)
+                .text("detail", detail.clone()),
         )?;
         // M6: once the human retried the step, the refusal is that retry's.
         let retried = self.conn.query_optional(
@@ -1530,7 +1545,11 @@ impl Tx<'_> {
         let event = self.append_event(
             "PlanStepIntegrated",
             None,
-            &format!("{p}|{}|{name}|{}", id_to_text(step), commit.unwrap_or("-")),
+            &Record::new()
+                .text("plan", p.clone())
+                .id("step", step)
+                .text("outcome", name)
+                .optional("commit", commit),
         )?;
         self.conn.execute(
             "INSERT INTO plan_integrations

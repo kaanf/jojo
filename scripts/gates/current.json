@@ -1,9 +1,9 @@
 {
-  "artifact": "gate-f1",
-  "scope": "Tree after the follow-ups step (F1): integration worktrees removed after each integration and swept at helper start; sidebar counters for Execution Plan (steps waiting for the human) and Feature Chat (open questions); choice answers; session continuation of chat turns with a fresh fallback; the human's repair of a failed lead turn; advisory reviews by the other provider of a candidate started by hand and of a drafted document. Protocol 1.14 (RepairTurn, ReviewAttempt, ReviewDocument; Documents, FeatureChat, Document and AttemptDetail carry the new fields at 14), schema 19.",
+  "artifact": "gate-r04-1",
+  "scope": "Tree after Refactor R-04 step 1: every event and provider event payload is a versioned record (jojo_domain::payload); Tx::append_event takes a Record; the readers use named fields; schema 20 refuses a payload that is not a record and the production plan refuses an existing database older than 20; the gate fails on a process that outlives its checks. Protocol 1.14 unchanged in shape (three pinned frames carry records), schema 20.",
   "boundary_tests_min": 109,
   "rust": {
-    "passed_min": 516,
+    "passed_min": 520,
     "required": [
       "m1_golden_argv_is_byte_exact",
       "m1_prohibited_arguments_are_unrepresentable_and_refused_everywhere",
@@ -123,7 +123,13 @@
       "f1_a_chat_turn_keeps_its_session_and_the_next_one_resumes_it_exactly",
       "f1_a_continued_prompt_asks_to_read_again_only_what_is_needed_and_keeps_the_state",
       "f1_a_repaired_turn_is_told_why_the_failed_one_failed_before_its_instructions",
-      "f1_a_document_review_asks_for_the_step_review_verdict_and_cuts_a_long_document"
+      "f1_a_document_review_asks_for_the_step_review_verdict_and_cuts_a_long_document",
+      "payload::tests::records_encode_canonically_and_read_back",
+      "payload::tests::unversioned_or_debug_text_is_refused",
+      "payload::tests::every_provider_event_round_trips",
+      "payload::tests::a_terminal_status_outside_the_four_is_unknown",
+      "r04_a_database_written_before_typed_payloads_is_refused_untouched",
+      "recovery::tests::only_exact_round_tripping_session_payloads_parse"
     ],
     "ignored": [
       "child_fixture",

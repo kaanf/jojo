@@ -654,9 +654,13 @@ fn schema_three_upgrades_with_original_history_and_receipts_intact() {
     let e = Engine::start(cfg).unwrap();
     common::create(&e, 1, &common::key("counter", 1));
     e.shutdown().unwrap();
-    let e = common::start(&dir.db());
+    // R-04: the production plan refuses a database this old; a plan without that floor
+    // still exercises the upgrade.
+    let mut cfg = EngineConfig::new(dir.db(), Arc::new(FakeClock::new(now())));
+    cfg.migrations = MigrationPlan::new(MigrationPlan::production().steps().to_vec()).unwrap();
+    let e = Engine::start(cfg).unwrap();
     let report = &e.startup_report().migration;
-    assert_eq!((report.from_version, report.to_version), (3, 19));
+    assert_eq!((report.from_version, report.to_version), (3, 20));
     assert!(report.backup.as_ref().unwrap().exists());
     assert!(common::create(&e, 1, &common::key("counter", 1)).replayed);
 }

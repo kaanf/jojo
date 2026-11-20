@@ -164,17 +164,11 @@ impl Fixture {
             .rev()
             .find(|e| {
                 e.kind == "SchedulerReserved"
-                    && e.payload.contains(&format!("id: OpaqueId({step})"))
+                    && e.payload.contains(&format!("\"id\":\"{step:032x}\""))
             })
             .unwrap();
-        let first = event.payload.split('|').next().unwrap();
-        OpaqueId(
-            first
-                .trim_start_matches("OpaqueId(")
-                .trim_end_matches(')')
-                .parse()
-                .unwrap(),
-        )
+        let attempt = jojo_domain::payload::member(&event.payload, "attempt");
+        OpaqueId(u128::from_str_radix(&attempt, 16).unwrap())
     }
     fn retire(&self, step: u128) {
         let a = self.attempt(step);
@@ -978,9 +972,13 @@ fn t06_schema_four_upgrade_preserves_claims_and_command_receipts() {
     })
     .unwrap();
     drop(e);
-    let e = Engine::start(EngineConfig::new(dir.db(), clock)).unwrap();
+    // R-04: the production plan refuses a database this old; a plan without that floor
+    // still exercises the upgrade.
+    let mut cfg = EngineConfig::new(dir.db(), clock);
+    cfg.migrations = MigrationPlan::new(MigrationPlan::production().steps().to_vec()).unwrap();
+    let e = Engine::start(cfg).unwrap();
     let report = &e.startup_report().migration;
-    assert_eq!((report.from_version, report.to_version), (4, 19));
+    assert_eq!((report.from_version, report.to_version), (4, 20));
     assert!(report.backup.as_ref().unwrap().exists());
     let s = e.reader().unwrap().snapshot().unwrap();
     assert_eq!(s.live_claims.len(), 1);

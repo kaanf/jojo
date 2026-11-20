@@ -792,9 +792,13 @@ fn a_version_1_database_upgrades_with_a_backup_and_keeps_its_history() {
         create(&engine, 1, &counter);
         engine.shutdown().unwrap();
     }
-    let engine = start(&dir.db());
+    // R-04: the production plan refuses a database this old; a plan without that floor
+    // still exercises the upgrade.
+    let mut config = EngineConfig::new(dir.db(), clock());
+    config.migrations = MigrationPlan::new(MigrationPlan::production().steps().to_vec()).unwrap();
+    let engine = Engine::start(config).unwrap();
     let report = &engine.startup_report().migration;
-    assert_eq!((report.from_version, report.to_version), (1, 19));
+    assert_eq!((report.from_version, report.to_version), (1, 20));
     assert!(report.backup.as_ref().is_some_and(|backup| backup.exists()));
     assert_eq!(
         engine

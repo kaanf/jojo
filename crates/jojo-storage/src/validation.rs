@@ -18,6 +18,7 @@ use crate::{EventSeq, HumanOrigin, ReadView, StorageError, Tx, TxError, sha256_h
 use jojo_domain::dependency::NodeRef;
 use jojo_domain::ipc::{identity, number, object, text};
 use jojo_domain::json::Json;
+use jojo_domain::payload::{self, Record, identity_pattern};
 
 fn deny(s: impl Into<String>) -> TxError {
     TxError::Rejected(s.into())
@@ -152,7 +153,11 @@ impl Tx<'_> {
             |r| r.int(0),
         )?;
         if known.is_none() {
-            let e = self.append_event("ValidationPlanStored", None, &digest)?;
+            let e = self.append_event(
+                "ValidationPlanStored",
+                None,
+                &Record::new().text("digest", digest.clone()),
+            )?;
             self.conn.execute(
                 "INSERT INTO validation_plans VALUES (?1,?2,?3)",
                 &[
@@ -202,7 +207,11 @@ impl Tx<'_> {
         let event = self.append_event(
             "ValidationRecorded",
             None,
-            &format!("{id}|{candidate}|{digest}|{status}"),
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("candidate", candidate.clone())
+                .text("plan", digest.clone())
+                .text("status", status),
         )?;
         self.conn.execute(
             "INSERT INTO validation_receipts VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
@@ -268,7 +277,13 @@ impl Tx<'_> {
         if rejected(self.conn, &id)? {
             return Err(deny("CandidateDecided: the candidate was rejected"));
         }
-        let e = self.append_event("CandidateAccepted", None, &format!("{id}|{}", receipt.0))?;
+        let e = self.append_event(
+            "CandidateAccepted",
+            None,
+            &Record::new()
+                .text("attempt", id.clone())
+                .count("receipt", receipt.0),
+        )?;
         self.conn.execute(
             "INSERT INTO candidate_acceptances VALUES (?1,?2,?3,?4)",
             &[
@@ -308,30 +323,32 @@ pub struct ValidationRun {
 fn runs(c: &Connection, id: &str) -> Result<Vec<ValidationRun>, StorageError> {
     let rows = c.query(
         "SELECT kind,epoch,payload FROM events
-         WHERE kind IN ('ValidationRequested','ValidationEnded') AND substr(payload,1,33)=?1
+         WHERE kind IN ('ValidationRequested','ValidationEnded') AND payload LIKE ?1
          ORDER BY seq",
-        &[Value::Text(&format!("{id}|"))],
+        &[Value::Text(&identity_pattern("attempt", id))],
         |r| Ok((r.text(0)?, r.int(1)?, r.text(2)?)),
     )?;
     let mut out: Vec<ValidationRun> = Vec::new();
     for (kind, epoch, payload) in rows {
-        let mut f = payload.splitn(4, '|').skip(1);
         let bad = || StorageError::corrupt("malformed validation run event");
+        let f = payload::read(&payload).map_err(|_| bad())?;
+        if f.text("attempt") != Some(id) {
+            continue;
+        }
+        let run = id_from_text(f.text("run").ok_or_else(bad)?)?;
         if kind == "ValidationRequested" {
-            let candidate = f.next().ok_or_else(bad)?.to_owned();
             out.push(ValidationRun {
-                run: id_from_text(f.next().ok_or_else(bad)?)?,
-                candidate,
+                run,
+                candidate: f.text("candidate").ok_or_else(bad)?.to_owned(),
                 epoch: from_db(epoch)?,
                 ended: None,
             });
         } else {
-            let run = id_from_text(f.next().ok_or_else(bad)?)?;
-            let receipt = match f.next().ok_or_else(bad)? {
-                "-" => None,
-                n => Some(EventSeq(n.parse().map_err(|_| bad())?)),
+            let receipt = match f.get("receipt").ok_or_else(bad)? {
+                Json::Null => None,
+                _ => Some(EventSeq(f.count("receipt").ok_or_else(bad)?)),
             };
-            let detail = f.next().unwrap_or("").to_owned();
+            let detail = f.text("detail").unwrap_or("").to_owned();
             if let Some(r) = out.iter_mut().find(|r| r.run == run) {
                 r.ended = Some((receipt, detail));
             }
@@ -341,12 +358,14 @@ fn runs(c: &Connection, id: &str) -> Result<Vec<ValidationRun>, StorageError> {
 }
 
 pub(crate) fn rejected(c: &Connection, id: &str) -> Result<bool, StorageError> {
-    Ok(c.query_optional(
-        "SELECT 1 FROM events WHERE kind='CandidateRejected' AND substr(payload,1,33)=?1",
-        &[Value::Text(&format!("{id}|"))],
-        |r| r.int(0),
-    )?
-    .is_some())
+    let rows = c.query(
+        "SELECT payload FROM events WHERE kind='CandidateRejected' AND payload LIKE ?1",
+        &[Value::Text(&identity_pattern("attempt", id))],
+        |r| r.text(0),
+    )?;
+    Ok(rows
+        .iter()
+        .any(|p| payload::read(p).is_ok_and(|f| f.text("attempt") == Some(id))))
 }
 
 pub(crate) fn state(c: &Connection, id: &str) -> Result<ValidationState, StorageError> {
@@ -464,7 +483,10 @@ impl Tx<'_> {
         self.append_event(
             "ValidationRequested",
             None,
-            &format!("{id}|{candidate}|{}", id_to_text(run)),
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("candidate", candidate)
+                .id("run", run),
         )?;
         Ok(format!("validation requested attempt={id}"))
     }
@@ -488,12 +510,11 @@ impl Tx<'_> {
         self.append_event(
             "ValidationEnded",
             None,
-            &format!(
-                "{id}|{}|{}|{}",
-                id_to_text(run),
-                receipt.map_or("-".to_owned(), |e| e.0.to_string()),
-                one_line(detail)
-            ),
+            &Record::new()
+                .text("attempt", id.clone())
+                .id("run", run)
+                .with("receipt", receipt.map_or(Json::Null, |e| number(e.0)))
+                .text("detail", one_line(detail)),
         )?;
         Ok(())
     }
@@ -566,7 +587,11 @@ impl Tx<'_> {
         self.append_event(
             "CandidateRejected",
             None,
-            &format!("{id}|{candidate}|{origin:?}"),
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("candidate", candidate)
+                .text("origin", origin.word())
+                .text("actor", origin.actor()),
         )?;
         Ok(())
     }

@@ -590,11 +590,13 @@ fn t09_codex_failure_and_exit_zero_without_terminal_are_never_success() {
     );
     assert_eq!(r.terminal, Some(TerminalStatus::Error));
     assert_eq!(r.exit.unwrap().code, Some(1));
-    assert!(
-        f.events(102)
-            .iter()
-            .any(|e| e.payload == "ProviderError(\"synthetic failure\")")
-    );
+    assert!(f.events(102).iter().any(|e| {
+        e.payload
+            == jojo_domain::payload::provider_event(&EventPayload::ProviderError(
+                "synthetic failure".into(),
+            ))
+            .encode()
+    }));
     let r = f.run(
         &f.spec(0, CLAUDE_STREAM_JSON, "exit-zero-no-terminal"),
         BUDGETS,
@@ -651,11 +653,8 @@ fn t09_fragmented_utf8_ndjson_from_a_real_pipe_is_reassembled() {
     assert_eq!(r.terminal, Some(TerminalStatus::Success));
     let stdout = assert_raw_coverage(&f, 101, 0);
     assert!(std::str::from_utf8(&stdout).unwrap().contains("a🙂b"));
-    assert!(
-        f.events(101)
-            .iter()
-            .any(|e| e.payload == "TextDelta(\"a🙂b\")")
-    );
+    assert!(f.events(101).iter().any(|e| e.payload
+        == jojo_domain::payload::provider_event(&EventPayload::TextDelta("a🙂b".into())).encode()));
 }
 
 #[test]
@@ -789,10 +788,15 @@ fn t09_stderr_flood_is_capped_drained_and_cannot_block_stop() {
     );
     let closed = obs
         .iter()
-        .find(|(k, d)| k == "STREAM_CLOSED" && d.starts_with("STDERR"))
+        .find(|(k, d)| {
+            k == "STREAM_CLOSED" && jojo_domain::payload::member(d, "stream") == "STDERR"
+        })
         .unwrap();
+    let discarded = jojo_domain::payload::read(&closed.1)
+        .unwrap()
+        .count("discarded");
     assert!(
-        !closed.1.ends_with("discarded=0"),
+        discarded.is_some_and(|n| n > 0),
         "flood beyond the cap was drained: {}",
         closed.1
     );
@@ -1143,7 +1147,10 @@ fn t09_child_inherits_only_stdio_never_database_or_lock_descriptors() {
         .into_iter()
         .find(|e| e.kind == "TextDelta")
         .unwrap();
-    assert_eq!(text.payload, "TextDelta(\"fds=[]\")");
+    assert_eq!(
+        text.payload,
+        jojo_domain::payload::provider_event(&EventPayload::TextDelta("fds=[]".into())).encode()
+    );
 }
 
 #[test]

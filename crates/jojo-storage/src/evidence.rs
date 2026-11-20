@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::model::to_db;
 use crate::sqlite::Value;
 use crate::{Engine, ReadView, StorageError, Tx, TxError, sha256_hex};
+use jojo_domain::payload::Record;
 
 static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 
@@ -184,7 +185,13 @@ impl Tx<'_> {
             Some(s) if s == to_db(blob.size)? => Ok(()),
             Some(_) => Err(TxError::Rejected("blob size conflict".into())),
             None => {
-                let event = self.append_event("EvidenceBlobReferenced", None, &blob.digest)?;
+                let event = self.append_event(
+                    "EvidenceBlobReferenced",
+                    None,
+                    &Record::new()
+                        .text("digest", blob.digest.clone())
+                        .count("size", blob.size),
+                )?;
                 self.conn.execute(
                     "INSERT INTO evidence_blobs VALUES (?1,?2,?3)",
                     &[

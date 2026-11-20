@@ -262,9 +262,11 @@ impl ReadView<'_> {
         if limit == 0 || limit > 8 {
             return Err(bad("invalid event page"));
         }
-        let rows=self.conn.query("SELECT seq,epoch,kind,aggregate_kind,aggregate_id,aggregate_revision,substr(payload,1,512),length(payload)>512,recorded_at_unix_ms,command_id FROM events WHERE seq>?1 ORDER BY seq LIMIT ?2",&[Value::Int(to_db(after)?),Value::Int(i64::from(limit))],|r|Ok(((r.int(0)?,r.int(1)?,r.text(2)?,r.optional_text(3)?,r.optional_text(4)?,r.optional_int(5)?,r.text(6)?,r.int(7)?),(r.int(8)?,r.optional_text(9)?))))?;
+        // The whole payload is read so that a sentence can be derived from it; only its
+        // first 512 characters are sent.
+        let rows=self.conn.query("SELECT seq,epoch,kind,aggregate_kind,aggregate_id,aggregate_revision,payload,substr(payload,1,512),length(payload)>512,recorded_at_unix_ms,command_id FROM events WHERE seq>?1 ORDER BY seq LIMIT ?2",&[Value::Int(to_db(after)?),Value::Int(i64::from(limit))],|r|Ok(((r.int(0)?,r.int(1)?,r.text(2)?,r.optional_text(3)?,r.optional_text(4)?,r.optional_int(5)?,r.text(6)?,r.text(7)?,r.int(8)?),(r.int(9)?,r.optional_text(10)?))))?;
         let mut out = Vec::new();
-        for ((seq, epoch, kind, ak, ai, rev, payload, truncated), (at, command)) in rows {
+        for ((seq, epoch, kind, ak, ai, rev, payload, excerpt, truncated), (at, command)) in rows {
             let summary = if summarized {
                 Some(crate::features::event_summary(
                     self.conn,
@@ -307,7 +309,7 @@ impl ReadView<'_> {
                 ("aggregate_kind", ak.map_or(Json::Null, text)),
                 ("aggregate_id", ai.map_or(Json::Null, text)),
                 ("revision", rev.map_or(Json::Null, Json::Int)),
-                ("payload", text(payload)),
+                ("payload", text(excerpt)),
                 ("detail_complete", Json::Bool(truncated == 0)),
             ]) else {
                 unreachable!("an event is an object")

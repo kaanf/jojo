@@ -27,6 +27,7 @@
 use std::time::Duration;
 
 use jojo_domain::identity::{IdGenerator, OpaqueId};
+use jojo_domain::payload::Record;
 use jojo_domain::shutdown::{
     CloseOrigin, CloseResolution, CloseState, ShutdownOutcome, TargetFacts, TargetStop,
     close_state, verdict,
@@ -337,7 +338,13 @@ impl Tx<'_> {
             .collect::<Vec<_>>()
             .join("\n");
         let id = id_to_text(ticket);
-        let event = self.append_event("CloseTicketPrepared", None, &format!("{id}|{origin}"))?;
+        let event = self.append_event(
+            "CloseTicketPrepared",
+            None,
+            &Record::new()
+                .text("ticket", id.clone())
+                .text("origin", origin),
+        )?;
         self.conn.execute(
             "INSERT INTO close_tickets VALUES (?1,?2,?3,?4,?5,?6)",
             &[
@@ -360,8 +367,13 @@ impl Tx<'_> {
         actor: &str,
     ) -> Result<(), TxError> {
         let id = id_to_text(ticket);
-        let event =
-            self.append_event("CloseTicketResolved", None, &format!("{id}|{resolution}"))?;
+        let event = self.append_event(
+            "CloseTicketResolved",
+            None,
+            &Record::new()
+                .text("ticket", id.clone())
+                .text("resolution", resolution),
+        )?;
         self.conn.execute(
             "INSERT INTO close_resolutions VALUES (?1,?2,?3,?4,?5)",
             &[
@@ -395,7 +407,13 @@ impl Tx<'_> {
         let active = active_work(self.conn, self.epoch)?;
         for a in &active {
             let id = id_to_text(a.attempt);
-            let event = self.append_event("ShutdownTarget", None, &format!("{s}|{id}"))?;
+            let event = self.append_event(
+                "ShutdownTarget",
+                None,
+                &Record::new()
+                    .text("shutdown", s.clone())
+                    .text("attempt", id.clone()),
+            )?;
             self.conn.execute(
                 "INSERT INTO shutdown_targets VALUES (?1,?2,?3)",
                 &[
@@ -576,7 +594,13 @@ impl Tx<'_> {
             ShutdownOutcome::Failed => "FAILED",
             ShutdownOutcome::Emergency => "EMERGENCY",
         };
-        let event = self.append_event("ShutdownReceipt", None, &format!("{s}|{outcome}"))?;
+        let event = self.append_event(
+            "ShutdownReceipt",
+            None,
+            &Record::new()
+                .text("shutdown", s.clone())
+                .text("outcome", outcome),
+        )?;
         self.conn.execute(
             "INSERT INTO shutdown_receipts VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             &[
@@ -596,7 +620,11 @@ impl Tx<'_> {
                  WHERE epoch=?2 AND shutdown='RUNNING'",
                 &[Value::Int(self.now_unix_ms), Value::Int(to_db(self.epoch.0)?)],
             )?;
-            self.append_event("EngineStopped", None, "shutdown=CLEAN")?;
+            self.append_event(
+                "EngineStopped",
+                None,
+                &Record::new().text("shutdown", "CLEAN"),
+            )?;
         }
         Ok(outcome.into())
     }

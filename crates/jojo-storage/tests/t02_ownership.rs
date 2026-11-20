@@ -122,7 +122,7 @@ fn a_replacement_starts_a_new_epoch_with_admission_closed_and_quarantines_old_cl
     assert_eq!(started.len(), 2);
     assert_eq!(
         started[1].payload,
-        "previous_epoch=1;previous_shutdown=UNCLEAN;quarantined_claims=3"
+        r#"{"previous_epoch":1,"previous_shutdown":"UNCLEAN","quarantined_claims":3,"v":1}"#
     );
 
     // No amount of elapsed time frees a quarantined claim: jump the clock ten years.

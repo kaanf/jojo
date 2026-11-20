@@ -8,6 +8,7 @@ use crate::*;
 use jojo_domain::identity::{OpaqueId, RepositoryId};
 use jojo_domain::ipc::{identity, number, object};
 use jojo_domain::json::Json;
+use jojo_domain::payload::Record;
 use jojo_domain::project::{MAX_PROJECTS, ProjectRecord};
 
 fn deny(s: impl Into<String>) -> TxError {
@@ -119,7 +120,13 @@ impl Tx<'_> {
         }
         let next = current + 1;
         let body = record.canonical();
-        let event = self.append_event("ProjectSaved", None, &format!("{text_id}|{next}"))?;
+        let event = self.append_event(
+            "ProjectSaved",
+            None,
+            &Record::new()
+                .text("project", text_id.clone())
+                .count("revision", next),
+        )?;
         self.conn.execute(
             "INSERT INTO project_revisions VALUES (?1,?2,?3,?4,?5)",
             &[

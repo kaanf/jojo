@@ -18,6 +18,7 @@ use std::sync::{
 use std::time::Duration;
 
 use jojo_domain::identity::{ArtifactId, IdGenerator, OpaqueId};
+use jojo_domain::payload::{Record, provider_event};
 use jojo_domain::provider::{
     Capabilities, EventPayload, LaunchSpec, Stream, Support, TerminalStatus,
 };
@@ -182,7 +183,13 @@ impl Tx<'_> {
             &[Value::Text(&id)],
         )?;
         let digest = sha256_hex(&[format!("{spec:?}").as_bytes()]);
-        let event = self.append_event("ProcessLaunchIssued", None, &format!("{id}|{digest}"))?;
+        let event = self.append_event(
+            "ProcessLaunchIssued",
+            None,
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("spec", digest.clone()),
+        )?;
         self.conn.execute(
             "INSERT INTO process_launches VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             &[
@@ -273,7 +280,13 @@ impl Tx<'_> {
     ) -> Result<(), TxError> {
         self.launched(attempt)?;
         let id = id_to_text(attempt);
-        let event = self.append_event("ProcessObservation", None, &format!("{id}|{kind:?}"))?;
+        let event = self.append_event(
+            "ProcessObservation",
+            None,
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("observation", kind.as_db()),
+        )?;
         self.conn.execute(
             "INSERT INTO process_observations VALUES (?1,?2,?3,?4)",
             &[
@@ -321,7 +334,11 @@ impl Tx<'_> {
         let event = self.append_event(
             "ProcessIdentified",
             None,
-            &format!("{id}|{role}|{}|{}", p.pid, p.start),
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("role", role)
+                .count("pid", u64::from(p.pid))
+                .text("start", p.start.clone()),
         )?;
         self.conn.execute(
             "INSERT OR IGNORE INTO process_records VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -393,7 +410,11 @@ impl Tx<'_> {
         let event = self.append_event(
             "ProviderOutput",
             None,
-            &format!("{id}|{}|{durable}|{}", stream_db(stream), events.len()),
+            &Record::new()
+                .text("attempt", id.clone())
+                .text("stream", stream_db(stream))
+                .count("durable", durable)
+                .count("events", events.len() as u64),
         )?;
         let seq = Value::Int(to_db(event.0)?);
         self.conn.execute(
@@ -415,7 +436,7 @@ impl Tx<'_> {
                     Value::Text(stream_db(e.stream)),
                     Value::Int(to_db(e.start)?),
                     Value::Int(to_db(e.end)?),
-                    Value::Text(&format!("{:?}", e.payload)),
+                    Value::Text(&provider_event(&e.payload).encode()),
                     Value::Int(to_db(event.0)?),
                 ],
             )?;
@@ -948,10 +969,7 @@ fn supervise(
                 closed[usize::from(stream == Stream::Stderr)] = true;
                 run.observe(
                     ObservationKind::StreamClosed,
-                    format!(
-                        "{} durable={durable} discarded={discarded}",
-                        stream_db(stream)
-                    ),
+                    crate::outcomes::stream_closed_detail(stream_db(stream), durable, discarded),
                 );
             }
             Ok(ProcessMessage::SpoolFailed { stream, detail }) => {
@@ -983,7 +1001,7 @@ fn supervise(
                 run.report.exit = Some(exit);
                 run.observe(
                     ObservationKind::RootExited,
-                    format!("code={:?} signal={:?}", exit.code, exit.signal),
+                    crate::outcomes::exit_detail(exit.code, exit.signal),
                 );
             }
             Ok(ProcessMessage::Exited(_)) => {}
@@ -1026,7 +1044,7 @@ fn supervise(
             run.report.exit = Some(exit);
             run.observe(
                 ObservationKind::RootExited,
-                format!("code={:?} signal={:?}", exit.code, exit.signal),
+                crate::outcomes::exit_detail(exit.code, exit.signal),
             );
         }
         let exited = run.report.exit.is_some();

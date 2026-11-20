@@ -6,6 +6,7 @@
 //! and are never atomic with the commit.
 
 use jojo_domain::identity::Revision;
+pub use jojo_domain::payload::Record;
 
 use crate::digest::sha256_hex;
 use crate::error::{StorageError, TxError};
@@ -87,13 +88,14 @@ impl Tx<'_> {
 
     /// Appends one immutable event. When an aggregate is named, `revision` must be the
     /// revision that aggregate has right now in this transaction, so events cannot
-    /// misreport the state they describe.
+    /// misreport the state they describe. The payload is a typed record (R-04), never text.
     pub fn append_event(
         &mut self,
         kind: &str,
         aggregate: Option<(&AggregateKey, Revision)>,
-        payload: &str,
+        payload: &Record,
     ) -> Result<EventSeq, TxError> {
+        let payload = payload.encode();
         let aggregate_id = aggregate.map(|(key, _)| id_to_text(key.id));
         let (agg_kind, agg_id, agg_revision) = match (aggregate, &aggregate_id) {
             (Some((key, revision)), Some(id)) => {
@@ -124,7 +126,7 @@ impl Tx<'_> {
                 agg_kind,
                 agg_id,
                 agg_revision,
-                Value::Text(payload),
+                Value::Text(&payload),
                 Value::Int(self.now_unix_ms),
             ],
             |row| row.int(0),

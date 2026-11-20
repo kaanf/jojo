@@ -6,6 +6,8 @@ use crate::sqlite::{Connection, Value};
 use crate::{ReadView, StorageError, Tx, TxError, sha256_hex};
 use jojo_domain::dependency::*;
 use jojo_domain::identity::{ArtifactId, OpaqueId, Revision};
+use jojo_domain::json::Json;
+use jojo_domain::payload::Record;
 use jojo_domain::time::ClockReading;
 use std::collections::BTreeSet;
 
@@ -25,6 +27,27 @@ pub struct StoredExecutionPlan {
 }
 fn deny(s: impl Into<String>) -> TxError {
     TxError::Rejected(s.into())
+}
+/// The event of an attempt whose dependencies stopped holding: the verdict and each reason.
+fn invalidated(attempt: &str, result: &StepEvaluation) -> Record {
+    let truth = match result.truth {
+        Truth::Satisfied => "Satisfied",
+        Truth::Unsatisfied => "Unsatisfied",
+        Truth::Unknown => "Unknown",
+    };
+    Record::new()
+        .text("attempt", attempt)
+        .text("truth", truth)
+        .with(
+            "reasons",
+            Json::List(
+                result
+                    .reasons
+                    .iter()
+                    .map(|e| Json::Text(e.reason.clone()))
+                    .collect(),
+            ),
+        )
 }
 fn current_approval(
     c: &Connection,
@@ -229,7 +252,14 @@ impl Tx<'_> {
         let revision =
             self.put_review_document(id, expected, prd, Some(adr), &canonical, displayed)?;
         let digest = sha256_hex(&[canonical.as_bytes()]);
-        let event = self.append_event("ExecutionPlanCreated", None, &digest)?;
+        let event = self.append_event(
+            "ExecutionPlanCreated",
+            None,
+            &Record::new()
+                .id("plan", id.0)
+                .count("revision", revision.0)
+                .text("digest", digest.clone()),
+        )?;
         self.conn.execute(
             "INSERT INTO execution_plans VALUES (?1,?2,?3,?4,?5)",
             &[
@@ -307,7 +337,9 @@ impl Tx<'_> {
         let event = self.append_event(
             "DependencyObservationRecorded",
             None,
-            &format!("{}@{}", o.id, o.revision.0),
+            &Record::new()
+                .text("observation", o.id.clone())
+                .count("revision", o.revision.0),
         )?;
         self.conn.execute(
             "INSERT INTO dependency_observations VALUES (?1,?2,?3,?4,?5)",
@@ -379,7 +411,9 @@ impl Tx<'_> {
         self.append_event(
             "DependencyInputsBound",
             None,
-            &format!("{attempt:?}|{sources:?}"),
+            &Record::new()
+                .id("attempt", attempt)
+                .text("sources", sources.canonical()),
         )?;
         Ok(())
     }
@@ -428,7 +462,7 @@ impl Tx<'_> {
             self.append_event(
                 "DependencyInvalidated",
                 None,
-                &format!("{attempt:?}|{result:?}"),
+                &invalidated(&id_to_text(attempt), &result),
             )?;
             self.stop_approval_attempt(
                 &id_to_text(attempt),
@@ -457,7 +491,7 @@ impl Tx<'_> {
                 self.append_event(
                     "DependencyInvalidated",
                     None,
-                    &format!("{attempt}|{result:?}"),
+                    &invalidated(&attempt, &result),
                 )?;
                 self.stop_approval_attempt(
                     &attempt,
