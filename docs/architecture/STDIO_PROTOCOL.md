@@ -515,3 +515,7 @@ At minor ≥ 14:
 Session continuation (no frame of its own): a chat turn keeps its provider session (Claude Code without `--no-session-persistence`, Codex without `--ephemeral`). The next chat turn of the feature on the same provider, after a turn that replied and reported its session, is accepted with a continuation prompt (`planner::continued_prompt`) and runs first with `--resume <session>` (Claude Code) or `resume <thread> -` after the options (Codex). A continuation that ends on its own without a reply is followed in the same worker by the fresh run of the stored prompt (`Fallback`); a stop, an unconfirmed stop or lost evidence is settled as it is. Review and brief turns stay unsaved.
 
 The macOS client sends `Documents`, `FeatureChat`, `Document` and `AttemptDetail` at 14, `RepairTurn` only from Feature Chat after a confirmation, `ReviewAttempt` from Verification & Evidence and `ReviewDocument` from Specifications and the Approval Inbox.
+
+## Payload records (R-04 step 1, schema 20; protocol still 1.14)
+
+No request or answer changes shape. The `payload` an event carries (`Events`, `EventDetail`) and the payload of a provider event (`Log`) is a versioned record since schema 20: a JSON object with its keys in order and `"v":1`, for example `{"attempt":"…","outcome":"SUCCEEDED","reason":"…","v":1}`. Before, it was text the core formatted in its own way (`a|b|c`, or a Rust `Debug` rendering). A client shows the text as it is and parses nothing from it; the sentence, category and project of an event stay the core's own fields.
